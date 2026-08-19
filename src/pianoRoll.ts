@@ -1,10 +1,15 @@
 import type { Score } from './score';
 import { getBeatMarkers } from './score';
 
-const PIXELS_PER_BEAT = 70;
-const PLAYHEAD_X_RATIO = 0.22;
+export const BASE_PIXELS_PER_BEAT = 70;
+const KEYBOARD_WIDTH = 34;
+const PLAYHEAD_X_RATIO = 0.2;
 const ROW_PADDING_SEMITONES = 2;
+const BLACK_KEY_PITCH_CLASSES = new Set([1, 3, 6, 8, 10]);
+const DIMMED_ALPHA = 0.5;
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+export type PartMixState = 'normal' | 'muted' | 'solo';
 
 function midiName(midi: number): string {
   const name = NOTE_NAMES[((midi % 12) + 12) % 12];
@@ -19,8 +24,10 @@ export class PianoRoll {
   private ctx2d: CanvasRenderingContext2D;
   private minMidi: number;
   private maxMidi: number;
-  private visibleParts: Set<string>;
   private transpose = 0;
+  private pixelsPerBeat = BASE_PIXELS_PER_BEAT;
+  private hiddenParts = new Set<string>();
+  private dimmedParts = new Set<string>();
   private beatMarkers: ReturnType<typeof getBeatMarkers>;
 
   constructor(canvas: HTMLCanvasElement, score: Score, partColor: (partId: string) => string) {
@@ -31,7 +38,6 @@ export class PianoRoll {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 2D context unavailable');
     this.ctx2d = ctx;
-    this.visibleParts = new Set(score.parts.map((p) => p.id));
     this.beatMarkers = getBeatMarkers(score);
 
     const pitches = score.notes.map((n) => n.midi);
@@ -39,12 +45,27 @@ export class PianoRoll {
     this.maxMidi = (pitches.length ? Math.max(...pitches) : 72) + ROW_PADDING_SEMITONES;
   }
 
-  setVisibleParts(ids: Set<string>) {
-    this.visibleParts = ids;
+  /** Mute hides a part entirely; when any part is soloed, every non-soloed (and non-muted) part is dimmed. */
+  setPartMix(mix: Map<string, PartMixState>) {
+    this.hiddenParts = new Set();
+    this.dimmedParts = new Set();
+    const anySolo = Array.from(mix.values()).some((s) => s === 'solo');
+    for (const [partId, state] of mix) {
+      if (state === 'muted') this.hiddenParts.add(partId);
+      else if (anySolo && state !== 'solo') this.dimmedParts.add(partId);
+    }
   }
 
   setTranspose(semitones: number) {
     this.transpose = semitones;
+  }
+
+  setZoom(factor: number) {
+    this.pixelsPerBeat = BASE_PIXELS_PER_BEAT * factor;
+  }
+
+  getPixelsPerBeat() {
+    return this.pixelsPerBeat;
   }
 
   resize() {
@@ -66,29 +87,32 @@ export class PianoRoll {
     const width = rect.width;
     const height = rect.height;
     const ctx = this.ctx2d;
-    const playheadX = width * PLAYHEAD_X_RATIO;
+    const contentWidth = Math.max(1, width - KEYBOARD_WIDTH);
+    const playheadX = KEYBOARD_WIDTH + contentWidth * PLAYHEAD_X_RATIO;
     const rowHeight = height / (this.maxMidi - this.minMidi);
 
-    const beatToX = (beat: number) => playheadX + (beat - currentBeat) * PIXELS_PER_BEAT;
+    const beatToX = (beat: number) => playheadX + (beat - currentBeat) * this.pixelsPerBeat;
 
     ctx.fillStyle = '#12141c';
     ctx.fillRect(0, 0, width, height);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(KEYBOARD_WIDTH, 0, contentWidth, height);
+    ctx.clip();
 
     // octave row shading (C rows) for a visual anchor
     for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
       if (((midi % 12) + 12) % 12 !== 0) continue;
       const y = this.rowY(midi, height) - rowHeight;
       ctx.fillStyle = 'rgba(255,255,255,0.03)';
-      ctx.fillRect(0, y, width, rowHeight);
-      ctx.fillStyle = 'rgba(255,255,255,0.25)';
-      ctx.font = '10px system-ui, sans-serif';
-      ctx.fillText(midiName(midi), 4, y + rowHeight - 2);
+      ctx.fillRect(KEYBOARD_WIDTH, y, contentWidth, rowHeight);
     }
 
     // beat / measure gridlines
     for (const marker of this.beatMarkers) {
       const x = beatToX(marker.beat);
-      if (x < -20 || x > width + 20) continue;
+      if (x < KEYBOARD_WIDTH - 20 || x > width + 20) continue;
       ctx.strokeStyle = marker.isDownbeat ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.1)';
       ctx.lineWidth = marker.isDownbeat ? 1.5 : 1;
       ctx.beginPath();
@@ -104,15 +128,17 @@ export class PianoRoll {
 
     // notes
     for (const note of this.score.notes) {
-      if (!this.visibleParts.has(note.partId)) continue;
+      if (this.hiddenParts.has(note.partId)) continue;
       const midi = note.midi + this.transpose;
       const x = beatToX(note.startBeat);
-      const w = note.durationBeats * PIXELS_PER_BEAT;
-      if (x + w < -10 || x > width + 10) continue;
+      const w = note.durationBeats * this.pixelsPerBeat;
+      if (x + w < KEYBOARD_WIDTH - 10 || x > width + 10) continue;
       const y = this.rowY(midi, height) - rowHeight;
 
-      const color = this.partColor(note.partId);
-      ctx.fillStyle = color;
+      const dimmed = this.dimmedParts.has(note.partId);
+      ctx.globalAlpha = dimmed ? DIMMED_ALPHA : 1;
+
+      ctx.fillStyle = this.partColor(note.partId);
       const barH = Math.max(rowHeight - 2, 4);
       const barPad = (rowHeight - barH) / 2;
       roundRect(ctx, x, y + barPad, Math.max(w - 2, 3), barH, 3);
@@ -125,6 +151,8 @@ export class PianoRoll {
         ctx.fillText(note.lyric, x + w / 2, y + rowHeight + 11);
         ctx.textAlign = 'left';
       }
+
+      ctx.globalAlpha = 1;
     }
 
     // playhead
@@ -133,6 +161,38 @@ export class PianoRoll {
     ctx.beginPath();
     ctx.moveTo(playheadX, 0);
     ctx.lineTo(playheadX, height);
+    ctx.stroke();
+
+    ctx.restore();
+
+    this.drawKeyboard(ctx, height, rowHeight);
+  }
+
+  /** Fixed left-side piano keyboard, always on screen regardless of horizontal scroll/zoom. */
+  private drawKeyboard(ctx: CanvasRenderingContext2D, height: number, rowHeight: number) {
+    ctx.fillStyle = '#1a1c24';
+    ctx.fillRect(0, 0, KEYBOARD_WIDTH, height);
+
+    for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
+      const pc = ((midi % 12) + 12) % 12;
+      const isBlack = BLACK_KEY_PITCH_CLASSES.has(pc);
+      const y = this.rowY(midi, height) - rowHeight;
+      const keyWidth = isBlack ? KEYBOARD_WIDTH * 0.62 : KEYBOARD_WIDTH;
+      ctx.fillStyle = isBlack ? '#0c0d12' : '#dcdde3';
+      ctx.fillRect(0, y, keyWidth, Math.max(rowHeight - 1, 1));
+
+      if (pc === 0) {
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.font = '9px system-ui, sans-serif';
+        ctx.fillText(midiName(midi), 2, y + rowHeight - 2);
+      }
+    }
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(KEYBOARD_WIDTH, 0);
+    ctx.lineTo(KEYBOARD_WIDTH, height);
     ctx.stroke();
   }
 }

@@ -120,10 +120,6 @@ body {
 }
 
 .part-name {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  cursor: pointer;
   white-space: nowrap;
 }
 
@@ -219,7 +215,9 @@ body {
 
 .bpm-btn,
 #transpose-down,
-#transpose-up {
+#transpose-up,
+#zoom-out,
+#zoom-in {
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: transparent;
   color: #eef0f5;
@@ -235,18 +233,30 @@ body {
   border-color: #4fa8ff;
 }
 
-#transpose-value {
+#transpose-value,
+#zoom-value {
   min-width: 24px;
   text-align: center;
   font-variant-numeric: tabular-nums;
   font-size: 14px;
 }
 
+#zoom-value {
+  min-width: 40px;
+}
+
 #roll {
   flex: 1;
   width: 100%;
   display: block;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
   min-height: 0;
+}
+
+#roll.dragging {
+  cursor: grabbing;
 }
 
 @media (max-width: 720px) {

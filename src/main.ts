@@ -16,6 +16,10 @@ const SONGS: SongRef[] = [{ id: 'sample-satb', title: 'Alleluia (Demo SATB)', ur
 const BPM_PRESETS = [50, 80, 100, 120, 140];
 const MIN_TRANSPOSE = -7;
 const MAX_TRANSPOSE = 7;
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 3;
+const ZOOM_STEP = 1.25;
+const VIEW_EDGE_SLACK_BEATS = 2;
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
@@ -43,6 +47,12 @@ app.innerHTML = `
         <span id="transpose-value">0</span>
         <button id="transpose-up">&plus;</button>
       </div>
+      <div class="transport-group" id="zoom-group">
+        <span class="transport-label">Zoom</span>
+        <button id="zoom-out">&minus;</button>
+        <span id="zoom-value">100%</span>
+        <button id="zoom-in">&plus;</button>
+      </div>
     </div>
     <canvas id="roll"></canvas>
   </main>
@@ -57,6 +67,9 @@ const metronomeBtn = document.querySelector<HTMLButtonElement>('#metronome-btn')
 const transposeValueEl = document.querySelector<HTMLSpanElement>('#transpose-value')!;
 const transposeDownBtn = document.querySelector<HTMLButtonElement>('#transpose-down')!;
 const transposeUpBtn = document.querySelector<HTMLButtonElement>('#transpose-up')!;
+const zoomValueEl = document.querySelector<HTMLSpanElement>('#zoom-value')!;
+const zoomOutBtn = document.querySelector<HTMLButtonElement>('#zoom-out')!;
+const zoomInBtn = document.querySelector<HTMLButtonElement>('#zoom-in')!;
 const canvas = document.querySelector<HTMLCanvasElement>('#roll')!;
 
 let currentScore: Score | null = null;
@@ -64,8 +77,9 @@ let audioEngine: AudioEngine | null = null;
 let pianoRoll: PianoRoll | null = null;
 let bpm = 100;
 let transpose = 0;
+let zoom = 1;
+let viewOffsetBeats = 0;
 let metronomeOn = false;
-let partVisible = new Map<string, boolean>();
 let partMix = new Map<string, PartMixState>();
 let rafId: number | null = null;
 
@@ -85,6 +99,9 @@ async function loadSong(song: SongRef) {
   currentScore = score;
   transpose = 0;
   transposeValueEl.textContent = '0';
+  zoom = 1;
+  zoomValueEl.textContent = '100%';
+  viewOffsetBeats = 0;
 
   audioEngine = new AudioEngine(score);
   pianoRoll = new PianoRoll(canvas, score, (partId) => {
@@ -92,8 +109,8 @@ async function loadSong(song: SongRef) {
     return colorForPartIndex(idx);
   });
 
-  partVisible = new Map(score.parts.map((p) => [p.id, true]));
   partMix = new Map(score.parts.map((p) => [p.id, 'normal' as PartMixState]));
+  pianoRoll.setPartMix(partMix);
 
   songTitleEl.textContent = score.title;
   playBtn.disabled = false;
@@ -101,7 +118,6 @@ async function loadSong(song: SongRef) {
   buildPartsPanel(score);
   pianoRoll.resize();
   renderNow();
-  updatePositionDisplay(0);
 }
 
 function buildPartsPanel(score: Score) {
@@ -111,10 +127,7 @@ function buildPartsPanel(score: Score) {
       return `
       <div class="part-row" data-part="${p.id}">
         <span class="swatch" style="background:${color}"></span>
-        <label class="part-name">
-          <input type="checkbox" class="visible-toggle" checked />
-          ${p.name}
-        </label>
+        <span class="part-name">${p.name}</span>
         <button class="mix-btn mute-btn" data-action="muted">M</button>
         <button class="mix-btn solo-btn" data-action="solo">S</button>
       </div>`;
@@ -125,7 +138,7 @@ function buildPartsPanel(score: Score) {
 partsPanelEl.addEventListener('click', (e) => {
   const target = e.target as HTMLElement;
   const row = target.closest<HTMLElement>('.part-row');
-  if (!row || !audioEngine) return;
+  if (!row || !audioEngine || !pianoRoll) return;
   const partId = row.getAttribute('data-part')!;
   const action = target.getAttribute('data-action') as PartMixState | null;
   if (!action) return;
@@ -133,22 +146,14 @@ partsPanelEl.addEventListener('click', (e) => {
   const next: PartMixState = current === action ? 'normal' : action;
   partMix.set(partId, next);
   audioEngine.setPartMixState(partId, next);
+  pianoRoll.setPartMix(partMix);
   row.classList.toggle('is-muted', next === 'muted');
   row.classList.toggle('is-solo', next === 'solo');
-});
-
-partsPanelEl.addEventListener('change', (e) => {
-  const target = e.target as HTMLInputElement;
-  if (!target.classList.contains('visible-toggle') || !pianoRoll) return;
-  const row = target.closest<HTMLElement>('.part-row')!;
-  const partId = row.getAttribute('data-part')!;
-  partVisible.set(partId, target.checked);
-  pianoRoll.setVisibleParts(new Set(Array.from(partVisible.entries()).filter(([, v]) => v).map(([id]) => id)));
   renderNow();
 });
 
-playBtn.addEventListener('click', () => {
-  if (!audioEngine || !currentScore) return;
+function togglePlay() {
+  if (!audioEngine || !currentScore || playBtn.disabled) return;
   if (audioEngine.isPlaying()) {
     audioEngine.pause();
     playBtn.innerHTML = '&#9658;';
@@ -156,10 +161,20 @@ playBtn.addEventListener('click', () => {
   } else {
     let fromBeat = audioEngine.getPausedBeat();
     if (fromBeat >= currentScore.totalBeats) fromBeat = 0;
+    viewOffsetBeats = 0;
     audioEngine.play(fromBeat, bpm, transpose);
     playBtn.innerHTML = '&#10074;&#10074;';
     startRenderLoop();
   }
+}
+playBtn.addEventListener('click', togglePlay);
+
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space') return;
+  const tag = (document.activeElement as HTMLElement | null)?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  e.preventDefault();
+  togglePlay();
 });
 
 metronomeBtn.addEventListener('click', () => {
@@ -194,6 +209,71 @@ function applyTranspose(delta: number) {
 transposeDownBtn.addEventListener('click', () => applyTranspose(-1));
 transposeUpBtn.addEventListener('click', () => applyTranspose(1));
 
+function applyZoom(factor: number) {
+  if (!pianoRoll) return;
+  zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor));
+  pianoRoll.setZoom(zoom);
+  zoomValueEl.textContent = `${Math.round(zoom * 100)}%`;
+  clampViewOffset();
+  renderNow();
+}
+zoomOutBtn.addEventListener('click', () => applyZoom(1 / ZOOM_STEP));
+zoomInBtn.addEventListener('click', () => applyZoom(ZOOM_STEP));
+
+function engineBeat(): number {
+  if (!audioEngine) return 0;
+  return audioEngine.isPlaying() ? audioEngine.getCurrentBeat() : audioEngine.getPausedBeat();
+}
+
+function clampViewOffset() {
+  if (!currentScore) return;
+  const base = engineBeat();
+  const display = base + viewOffsetBeats;
+  const clamped = Math.max(-VIEW_EDGE_SLACK_BEATS, Math.min(currentScore.totalBeats + VIEW_EDGE_SLACK_BEATS, display));
+  viewOffsetBeats = clamped - base;
+}
+
+function panByBeats(deltaBeats: number) {
+  if (!pianoRoll) return;
+  viewOffsetBeats += deltaBeats;
+  clampViewOffset();
+  renderNow();
+}
+
+canvas.addEventListener(
+  'wheel',
+  (e) => {
+    if (!pianoRoll) return;
+    e.preventDefault();
+    const delta = e.deltaX !== 0 ? e.deltaX : e.shiftKey ? e.deltaY : 0;
+    if (delta === 0) return;
+    panByBeats(delta / pianoRoll.getPixelsPerBeat());
+  },
+  { passive: false },
+);
+
+let dragPointerId: number | null = null;
+let dragLastX = 0;
+canvas.addEventListener('pointerdown', (e) => {
+  dragPointerId = e.pointerId;
+  dragLastX = e.clientX;
+  canvas.setPointerCapture(e.pointerId);
+  canvas.classList.add('dragging');
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (dragPointerId !== e.pointerId || !pianoRoll) return;
+  const dx = e.clientX - dragLastX;
+  dragLastX = e.clientX;
+  panByBeats(-dx / pianoRoll.getPixelsPerBeat());
+});
+function endDrag(e: PointerEvent) {
+  if (dragPointerId !== e.pointerId) return;
+  dragPointerId = null;
+  canvas.classList.remove('dragging');
+}
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+
 function updatePositionDisplay(beat: number) {
   if (!currentScore) return;
   const measure = measureAtBeat(currentScore, beat);
@@ -208,7 +288,7 @@ function updatePositionDisplay(beat: number) {
 
 function renderNow() {
   if (!pianoRoll || !audioEngine) return;
-  const beat = audioEngine.isPlaying() ? audioEngine.getCurrentBeat() : audioEngine.getPausedBeat();
+  const beat = engineBeat() + viewOffsetBeats;
   pianoRoll.render(beat);
   updatePositionDisplay(beat);
 }
@@ -224,8 +304,8 @@ function renderLoop() {
     rafId = null;
     return;
   }
-  pianoRoll.render(beat);
-  updatePositionDisplay(beat);
+  pianoRoll.render(beat + viewOffsetBeats);
+  updatePositionDisplay(beat + viewOffsetBeats);
   rafId = requestAnimationFrame(renderLoop);
 }
 function startRenderLoop() {
