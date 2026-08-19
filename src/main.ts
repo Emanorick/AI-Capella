@@ -11,7 +11,10 @@ interface SongRef {
   url: string;
 }
 
-const SONGS: SongRef[] = [{ id: 'sample-satb', title: 'Alleluia (Demo SATB)', url: '/sample-satb.musicxml' }];
+const SONGS: SongRef[] = [
+  { id: 'sample-satb', title: 'Alleluia (Demo SATB)', url: '/sample-satb.musicxml' },
+  { id: 'evening-rise', title: 'Evening Rise', url: '/evening-rise.musicxml' },
+];
 
 const BPM_PRESETS = [50, 80, 100, 120, 140];
 const MIN_TRANSPOSE = -7;
