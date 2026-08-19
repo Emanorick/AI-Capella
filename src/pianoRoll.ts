@@ -5,12 +5,17 @@ export const BASE_PIXELS_PER_BEAT = 70;
 const KEYBOARD_WIDTH = 34;
 const PLAYHEAD_X_RATIO = 0.2;
 const ROW_PADDING_SEMITONES = 2;
+const ROW_HEIGHT_PX = 16; // fixed row height in css px -- pitch axis scrolls instead of squeezing to fit
 const BLACK_KEY_PITCH_CLASSES = new Set([1, 3, 6, 8, 10]);
 const DIMMED_ALPHA = 0.5;
 const MAX_DPR = 2; // native Retina density; only caps 3x phones, doesn't soften a normal laptop screen
 const BUFFER_SPAN_MULTIPLIER = 3; // scrolling-content buffer covers this many viewport-widths of beats
 const BUFFER_REBUILD_MARGIN = 0.25; // rebuild once the playhead gets within this fraction of a viewport-width of the buffer's edge
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+function clamp(v: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, v));
+}
 
 export type PartMixState = 'normal' | 'muted' | 'solo';
 export interface LoopRegion {
@@ -47,6 +52,8 @@ export class PianoRoll {
   private lyricMeasureCtx: CanvasRenderingContext2D | null = null;
   private cssWidth = 0;
   private cssHeight = 0;
+  private scrollY = 0; // content-space px scrolled down from the top of the pitch range
+  private scrollYInitialized = false;
 
   // Scrolling-content buffer: gridlines/notes/slurs pre-rendered into a wide offscreen strip.
   // During playback only the scroll offset changes each frame -- nothing about notes' positions
@@ -111,6 +118,19 @@ export class PianoRoll {
     return this.pixelsPerBeat;
   }
 
+  private contentHeightPx(): number {
+    return (this.maxMidi - this.minMidi) * ROW_HEIGHT_PX;
+  }
+
+  private maxScrollY(): number {
+    return Math.max(0, this.contentHeightPx() - this.cssHeight);
+  }
+
+  /** Pans the pitch axis by a delta in css px; positive scrolls down toward lower pitches. */
+  scrollByPixels(dy: number) {
+    this.scrollY = clamp(this.scrollY + dy, 0, this.maxScrollY());
+  }
+
   setLoopRegion(region: LoopRegion | null) {
     this.loopRegion = region;
   }
@@ -132,11 +152,21 @@ export class PianoRoll {
     this.keyboardCacheDirty = true;
     this.contentBufferDirty = true;
     this.lyricBitmaps.clear(); // cached bitmaps are baked at the old dpr
+
+    if (!this.scrollYInitialized) {
+      // Center the view on first layout rather than starting pinned to the top of the range.
+      this.scrollY = this.maxScrollY() / 2;
+      this.scrollYInitialized = true;
+    } else {
+      this.scrollY = clamp(this.scrollY, 0, this.maxScrollY());
+    }
   }
 
-  private rowY(midi: number, height: number): number {
+  /** Content-space (unscrolled) y of a pitch row's bottom edge, within the fixed full pitch range. */
+  private rowY(midi: number): number {
     const range = this.maxMidi - this.minMidi;
     const t = (midi - this.minMidi) / range;
+    const height = this.contentHeightPx();
     return height - t * height;
   }
 
@@ -159,7 +189,8 @@ export class PianoRoll {
     const ctx = this.ctx2d;
     const contentWidth = Math.max(1, width - KEYBOARD_WIDTH);
     const playheadX = this.playheadX(width);
-    const rowHeight = height / (this.maxMidi - this.minMidi);
+    const rowHeight = ROW_HEIGHT_PX;
+    const contentH = this.contentHeightPx();
 
     const beatToX = (beat: number) => playheadX + (beat - currentBeat) * this.pixelsPerBeat;
 
@@ -170,14 +201,6 @@ export class PianoRoll {
     ctx.beginPath();
     ctx.rect(KEYBOARD_WIDTH, 0, contentWidth, height);
     ctx.clip();
-
-    // octave row shading (C rows): scroll-independent, cheap enough to draw directly each frame
-    for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
-      if (((midi % 12) + 12) % 12 !== 0) continue;
-      const y = this.rowY(midi, height) - rowHeight;
-      ctx.fillStyle = 'rgba(255,255,255,0.03)';
-      ctx.fillRect(KEYBOARD_WIDTH, y, contentWidth, rowHeight);
-    }
 
     // loop region highlight
     // Thin vertical markers below are drawn as fillRect, not stroke(): a 1-2px straight line is
@@ -217,24 +240,25 @@ export class PianoRoll {
     // that actually lands in the visible content area is blitted -- the buffer itself spans
     // several viewport-widths so it doesn't need rebuilding every frame, but drawing all of that
     // every frame (most of which the clip would throw away anyway) defeats the point.
-    this.ensureContentBuffer(currentBeat, contentWidth, height, rowHeight);
+    this.ensureContentBuffer(currentBeat, contentWidth, rowHeight);
     if (this.contentBuffer) {
       const destX = playheadX - (currentBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
       const bufferCssWidth = this.contentBufferBeatsSpan * this.pixelsPerBeat;
       const srcStartCss = Math.max(0, KEYBOARD_WIDTH - destX);
       const srcEndCss = Math.min(bufferCssWidth, width - destX);
       const srcWidthCss = srcEndCss - srcStartCss;
-      if (srcWidthCss > 0) {
+      const srcHeightCss = Math.min(height, contentH - this.scrollY);
+      if (srcWidthCss > 0 && srcHeightCss > 0) {
         ctx.drawImage(
           this.contentBuffer,
           srcStartCss * this.dpr,
-          0,
+          this.scrollY * this.dpr,
           srcWidthCss * this.dpr,
-          this.contentBuffer.height,
+          srcHeightCss * this.dpr,
           destX + srcStartCss,
           0,
           srcWidthCss,
-          height,
+          srcHeightCss,
         );
       }
     }
@@ -246,20 +270,34 @@ export class PianoRoll {
     ctx.restore();
 
     if (this.keyboardCacheDirty || !this.keyboardCache) {
-      this.rebuildKeyboardCache(height, rowHeight);
+      this.rebuildKeyboardCache(rowHeight);
       this.keyboardCacheDirty = false;
     }
-    // Blit the cached keyboard bitmap 1:1 in device pixels: the gutter never changes except on
-    // resize, so re-drawing 20-40 key rects and labels every frame was pure waste.
+    // Blit the cached keyboard bitmap, cropped to the current vertical scroll position: the
+    // gutter's content never changes except on resize, so re-drawing every key/label every frame
+    // was pure waste.
     if (this.keyboardCache) {
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.drawImage(this.keyboardCache, 0, 0);
-      ctx.restore();
+      const kcSrcHeightCss = Math.min(height, contentH - this.scrollY);
+      if (kcSrcHeightCss > 0) {
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(
+          this.keyboardCache,
+          0,
+          this.scrollY * this.dpr,
+          this.keyboardCache.width,
+          kcSrcHeightCss * this.dpr,
+          0,
+          0,
+          KEYBOARD_WIDTH,
+          kcSrcHeightCss,
+        );
+        ctx.restore();
+      }
     }
   }
 
-  private ensureContentBuffer(currentBeat: number, contentWidth: number, height: number, rowHeight: number) {
+  private ensureContentBuffer(currentBeat: number, contentWidth: number, rowHeight: number) {
     const visibleBeatsSpan = Math.max(1, contentWidth / this.pixelsPerBeat);
     const margin = visibleBeatsSpan * BUFFER_REBUILD_MARGIN;
     const needsRebuild =
@@ -275,22 +313,31 @@ export class PianoRoll {
     this.contentBufferOriginBeat = originBeat;
     this.contentBufferBeatsSpan = beatsSpan;
 
+    const contentH = this.contentHeightPx();
     const bufCssWidth = Math.max(1, beatsSpan * this.pixelsPerBeat);
     const buf = this.contentBuffer ?? document.createElement('canvas');
     buf.width = Math.max(1, Math.round(bufCssWidth * this.dpr));
-    buf.height = Math.max(1, Math.round(height * this.dpr));
+    buf.height = Math.max(1, Math.round(contentH * this.dpr));
     const bctx = buf.getContext('2d');
     if (!bctx) return;
     bctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    this.paintContent(bctx, originBeat, bufCssWidth, height, rowHeight);
+    this.paintContent(bctx, originBeat, bufCssWidth, contentH, rowHeight);
     this.contentBuffer = buf;
     this.contentBufferDirty = false;
   }
 
-  /** Paints gridlines, notes, and slurs into a buffer strip using buffer-local (not screen) x coordinates. */
+  /** Paints gridlines, notes, and slurs into a buffer strip spanning the full pitch range, using buffer-local (not screen) coordinates. */
   private paintContent(ctx: CanvasRenderingContext2D, originBeat: number, widthCss: number, heightCss: number, rowHeight: number) {
     const localBeatToX = (beat: number) => (beat - originBeat) * this.pixelsPerBeat;
     ctx.clearRect(0, 0, widthCss, heightCss);
+
+    // octave row shading (C rows)
+    for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
+      if (((midi % 12) + 12) % 12 !== 0) continue;
+      const y = this.rowY(midi) - rowHeight;
+      ctx.fillStyle = 'rgba(255,255,255,0.03)';
+      ctx.fillRect(0, y, widthCss, rowHeight);
+    }
 
     // beat / measure gridlines, batched into one stroke() per tier instead of one per line
     let thinPath: Path2D | null = null;
@@ -336,7 +383,7 @@ export class PianoRoll {
         const x = localBeatToX(note.startBeat);
         const w = note.durationBeats * this.pixelsPerBeat;
         if (x + w < -10 || x > widthCss + 10) continue;
-        const y = this.rowY(midi, heightCss) - rowHeight;
+        const y = this.rowY(midi) - rowHeight;
         addRoundRectSubpath(path, x, y + barPad, Math.max(w - 2, 3), barH, 3);
         if (!dimmed && note.lyric && w > 14) lyricNotes.push(note);
       }
@@ -351,7 +398,7 @@ export class PianoRoll {
         const midi = note.midi + this.transpose;
         const x = localBeatToX(note.startBeat);
         const w = note.durationBeats * this.pixelsPerBeat;
-        const y = this.rowY(midi, heightCss) - rowHeight;
+        const y = this.rowY(midi) - rowHeight;
         const bmp = this.getLyricBitmap(note.lyric!);
         const baselineY = y + rowHeight + 11;
         ctx.drawImage(bmp.canvas, x + w / 2 - bmp.cssWidth / 2, baselineY - (bmp.cssHeight - 3), bmp.cssWidth, bmp.cssHeight);
@@ -373,8 +420,8 @@ export class PianoRoll {
         const x1 = localBeatToX(slur.startBeat) + 2;
         const x2 = localBeatToX(slur.endBeat) + 2;
         if (x2 < -10 || x1 > widthCss + 10) continue;
-        const y1 = this.rowY(startMidi, heightCss) - rowHeight + barPad;
-        const y2 = this.rowY(endMidi, heightCss) - rowHeight + barPad;
+        const y1 = this.rowY(startMidi) - rowHeight + barPad;
+        const y2 = this.rowY(endMidi) - rowHeight + barPad;
         const arcLift = Math.min(18, 6 + Math.abs(x2 - x1) * 0.08);
         const midX = (x1 + x2) / 2;
         const topY = Math.min(y1, y2) - arcLift;
@@ -417,7 +464,8 @@ export class PianoRoll {
     return entry;
   }
 
-  private rebuildKeyboardCache(heightCss: number, rowHeight: number) {
+  private rebuildKeyboardCache(rowHeight: number) {
+    const heightCss = this.contentHeightPx();
     const kc = this.keyboardCache ?? document.createElement('canvas');
     kc.width = Math.max(1, Math.round(KEYBOARD_WIDTH * this.dpr));
     kc.height = Math.max(1, Math.round(heightCss * this.dpr));
@@ -428,7 +476,7 @@ export class PianoRoll {
     this.keyboardCache = kc;
   }
 
-  /** Fixed left-side piano keyboard; rendered once into a cached bitmap by rebuildKeyboardCache. */
+  /** Fixed left-side piano keyboard spanning the full pitch range; rendered once into a cached bitmap. */
   private drawKeyboard(ctx: CanvasRenderingContext2D, height: number, rowHeight: number) {
     ctx.fillStyle = '#1a1c24';
     ctx.fillRect(0, 0, KEYBOARD_WIDTH, height);
@@ -436,7 +484,7 @@ export class PianoRoll {
     for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
       const pc = ((midi % 12) + 12) % 12;
       const isBlack = BLACK_KEY_PITCH_CLASSES.has(pc);
-      const y = this.rowY(midi, height) - rowHeight;
+      const y = this.rowY(midi) - rowHeight;
       const keyWidth = isBlack ? KEYBOARD_WIDTH * 0.62 : KEYBOARD_WIDTH;
       ctx.fillStyle = isBlack ? '#0c0d12' : '#dcdde3';
       ctx.fillRect(0, y, keyWidth, Math.max(rowHeight - 1, 1));

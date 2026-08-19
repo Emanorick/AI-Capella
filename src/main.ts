@@ -48,28 +48,33 @@ app.innerHTML = `
   <main id="workspace">
     <header id="song-header">
       <h2 id="song-title">Choose a song</h2>
-      <div id="position-display">—</div>
+      <div id="header-right">
+        <div id="position-display">—</div>
+        <button id="settings-toggle" title="Hide settings" aria-expanded="true">&#9662;</button>
+      </div>
     </header>
-    <div id="parts-panel"></div>
-    <div id="transport">
-      <button id="play-btn" disabled>&#9658;</button>
-      <button id="metronome-btn" disabled>Metronome</button>
-      <button id="loop-btn" disabled title="Shift+drag on the roll to set a loop">Loop</button>
-      <div class="transport-group" id="bpm-group">
-        <span class="transport-label">BPM</span>
-        ${BPM_PRESETS.map((b) => `<button class="bpm-btn" data-bpm="${b}">${b}</button>`).join('')}
-      </div>
-      <div class="transport-group" id="transpose-group">
-        <span class="transport-label">Transpose</span>
-        <button id="transpose-down">&minus;</button>
-        <span id="transpose-value">0</span>
-        <button id="transpose-up">&plus;</button>
-      </div>
-      <div class="transport-group" id="zoom-group">
-        <span class="transport-label">Zoom</span>
-        <button id="zoom-out">&minus;</button>
-        <span id="zoom-value">100%</span>
-        <button id="zoom-in">&plus;</button>
+    <div id="settings-panel">
+      <div id="parts-panel"></div>
+      <div id="transport">
+        <button id="play-btn" disabled>&#9658;</button>
+        <button id="metronome-btn" disabled>Metronome</button>
+        <button id="loop-btn" disabled title="Shift+drag on the roll to set a loop">Loop</button>
+        <div class="transport-group" id="bpm-group">
+          <span class="transport-label">BPM</span>
+          ${BPM_PRESETS.map((b) => `<button class="bpm-btn" data-bpm="${b}">${b}</button>`).join('')}
+        </div>
+        <div class="transport-group" id="transpose-group">
+          <span class="transport-label">Transpose</span>
+          <button id="transpose-down">&minus;</button>
+          <span id="transpose-value">0</span>
+          <button id="transpose-up">&plus;</button>
+        </div>
+        <div class="transport-group" id="zoom-group">
+          <span class="transport-label">Zoom</span>
+          <button id="zoom-out">&minus;</button>
+          <span id="zoom-value">100%</span>
+          <button id="zoom-in">&plus;</button>
+        </div>
       </div>
     </div>
     <canvas id="roll"></canvas>
@@ -83,6 +88,8 @@ const importStatusEl = document.querySelector<HTMLDivElement>('#import-status')!
 const libraryEl = document.querySelector<HTMLElement>('#library')!;
 const songTitleEl = document.querySelector<HTMLHeadingElement>('#song-title')!;
 const positionEl = document.querySelector<HTMLDivElement>('#position-display')!;
+const settingsPanelEl = document.querySelector<HTMLDivElement>('#settings-panel')!;
+const settingsToggleBtn = document.querySelector<HTMLButtonElement>('#settings-toggle')!;
 const partsPanelEl = document.querySelector<HTMLDivElement>('#parts-panel')!;
 const playBtn = document.querySelector<HTMLButtonElement>('#play-btn')!;
 const metronomeBtn = document.querySelector<HTMLButtonElement>('#metronome-btn')!;
@@ -114,6 +121,17 @@ function updateCanvasRect() {
   canvasLeft = canvas.getBoundingClientRect().left;
 }
 updateCanvasRect();
+
+settingsToggleBtn.addEventListener('click', () => {
+  const collapsed = settingsPanelEl.classList.toggle('collapsed');
+  settingsToggleBtn.innerHTML = collapsed ? '&#9656;' : '&#9662;';
+  settingsToggleBtn.title = collapsed ? 'Show settings' : 'Hide settings';
+  settingsToggleBtn.setAttribute('aria-expanded', String(!collapsed));
+  // Collapsing/expanding changes how much vertical space the canvas has.
+  pianoRoll?.resize();
+  updateCanvasRect();
+  renderNow();
+});
 
 /**
  * Coalesces render requests to at most one per animation frame. Wheel/trackpad events and
@@ -449,16 +467,23 @@ canvas.addEventListener(
   (e) => {
     if (!pianoRoll) return;
     e.preventDefault();
-    const delta = e.deltaX !== 0 ? e.deltaX : e.shiftKey ? e.deltaY : 0;
-    if (delta === 0) return;
-    panByBeats(delta / pianoRoll.getPixelsPerBeat());
+    if (e.deltaX !== 0) {
+      panByBeats(e.deltaX / pianoRoll.getPixelsPerBeat());
+    } else if (e.shiftKey) {
+      panByBeats(e.deltaY / pianoRoll.getPixelsPerBeat());
+    } else if (e.deltaY !== 0) {
+      pianoRoll.scrollByPixels(e.deltaY);
+      scheduleRender();
+    }
   },
   { passive: false },
 );
 
 let dragPointerId: number | null = null;
 let dragStartX = 0;
+let dragStartY = 0;
 let dragLastX = 0;
+let dragLastY = 0;
 let dragMoved = false;
 let loopSelectStartBeat: number | null = null;
 
@@ -470,7 +495,9 @@ canvas.addEventListener('pointerdown', (e) => {
   if (!pianoRoll || !currentScore) return;
   dragPointerId = e.pointerId;
   dragStartX = e.clientX;
+  dragStartY = e.clientY;
   dragLastX = e.clientX;
+  dragLastY = e.clientY;
   dragMoved = false;
   canvas.setPointerCapture(e.pointerId);
 
@@ -483,7 +510,7 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 canvas.addEventListener('pointermove', (e) => {
   if (dragPointerId !== e.pointerId || !pianoRoll) return;
-  if (Math.abs(e.clientX - dragStartX) > CLICK_DRAG_THRESHOLD_PX) dragMoved = true;
+  if (Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) > CLICK_DRAG_THRESHOLD_PX) dragMoved = true;
 
   if (loopSelectStartBeat != null) {
     const endBeat = clientXToBeat(e.clientX);
@@ -494,9 +521,13 @@ canvas.addEventListener('pointermove', (e) => {
     scheduleRender();
   } else {
     const dx = e.clientX - dragLastX;
+    const dy = e.clientY - dragLastY;
     panByBeats(-dx / pianoRoll.getPixelsPerBeat());
+    pianoRoll.scrollByPixels(-dy);
+    scheduleRender();
   }
   dragLastX = e.clientX;
+  dragLastY = e.clientY;
 });
 function endDrag(e: PointerEvent) {
   if (dragPointerId !== e.pointerId) return;

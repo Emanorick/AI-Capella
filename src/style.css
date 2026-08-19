@@ -148,10 +148,37 @@ body {
   font-size: 16px;
 }
 
+#header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 #position-display {
   font-variant-numeric: tabular-nums;
   color: rgba(255, 255, 255, 0.6);
   font-size: 13px;
+}
+
+#settings-toggle {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+
+#settings-toggle:hover {
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #eef0f5;
+}
+
+#settings-panel.collapsed {
+  display: none;
 }
 
 #parts-panel {
