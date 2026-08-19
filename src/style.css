@@ -178,7 +178,8 @@ body {
   cursor: default;
 }
 
-#metronome-btn {
+#metronome-btn,
+#loop-btn {
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: transparent;
   color: #eef0f5;
@@ -194,7 +195,14 @@ body {
   border-color: #4fd6c4;
 }
 
-#metronome-btn:disabled {
+#loop-btn.active {
+  background: #4fa8ff;
+  color: #06070a;
+  border-color: #4fa8ff;
+}
+
+#metronome-btn:disabled,
+#loop-btn:disabled {
   opacity: 0.4;
   cursor: default;
 }

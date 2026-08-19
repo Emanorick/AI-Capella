@@ -1,7 +1,7 @@
 import './style.css';
 import { parseMusicXML } from './musicxml';
 import { AudioEngine, type PartMixState } from './audioEngine';
-import { PianoRoll } from './pianoRoll';
+import { PianoRoll, type LoopRegion } from './pianoRoll';
 import { colorForPartIndex } from './palette';
 import { measureAtBeat, type Score } from './score';
 
@@ -23,6 +23,8 @@ const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 3;
 const ZOOM_STEP = 1.25;
 const VIEW_EDGE_SLACK_BEATS = 2;
+const CLICK_DRAG_THRESHOLD_PX = 5;
+const MIN_LOOP_BEATS = 0.5;
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
@@ -40,6 +42,7 @@ app.innerHTML = `
     <div id="transport">
       <button id="play-btn" disabled>&#9658;</button>
       <button id="metronome-btn" disabled>Metronome</button>
+      <button id="loop-btn" disabled title="Shift+drag on the roll to set a loop">Loop</button>
       <div class="transport-group" id="bpm-group">
         <span class="transport-label">BPM</span>
         ${BPM_PRESETS.map((b) => `<button class="bpm-btn" data-bpm="${b}">${b}</button>`).join('')}
@@ -67,6 +70,7 @@ const positionEl = document.querySelector<HTMLDivElement>('#position-display')!;
 const partsPanelEl = document.querySelector<HTMLDivElement>('#parts-panel')!;
 const playBtn = document.querySelector<HTMLButtonElement>('#play-btn')!;
 const metronomeBtn = document.querySelector<HTMLButtonElement>('#metronome-btn')!;
+const loopBtn = document.querySelector<HTMLButtonElement>('#loop-btn')!;
 const transposeValueEl = document.querySelector<HTMLSpanElement>('#transpose-value')!;
 const transposeDownBtn = document.querySelector<HTMLButtonElement>('#transpose-down')!;
 const transposeUpBtn = document.querySelector<HTMLButtonElement>('#transpose-up')!;
@@ -84,6 +88,8 @@ let zoom = 1;
 let viewOffsetBeats = 0;
 let metronomeOn = false;
 let partMix = new Map<string, PartMixState>();
+let loopRegion: LoopRegion | null = null;
+let loopEnabled = false;
 let rafId: number | null = null;
 
 songListEl.innerHTML = SONGS.map((s) => `<li data-id="${s.id}"><button class="song-btn">${s.title}</button></li>`).join('');
@@ -105,12 +111,15 @@ async function loadSong(song: SongRef) {
   zoom = 1;
   zoomValueEl.textContent = '100%';
   viewOffsetBeats = 0;
+  loopRegion = null;
+  loopEnabled = false;
 
   audioEngine = new AudioEngine(score);
   pianoRoll = new PianoRoll(canvas, score, (partId) => {
     const idx = score.parts.findIndex((p) => p.id === partId);
     return colorForPartIndex(idx);
   });
+  pianoRoll.setLoopRegion(null);
 
   partMix = new Map(score.parts.map((p) => [p.id, 'normal' as PartMixState]));
   pianoRoll.setPartMix(partMix);
@@ -118,6 +127,8 @@ async function loadSong(song: SongRef) {
   songTitleEl.textContent = score.title;
   playBtn.disabled = false;
   metronomeBtn.disabled = false;
+  loopBtn.disabled = false;
+  updateLoopButton();
   buildPartsPanel(score);
   pianoRoll.resize();
   renderNow();
@@ -163,7 +174,11 @@ function togglePlay() {
     stopRenderLoop();
   } else {
     let fromBeat = audioEngine.getPausedBeat();
-    if (fromBeat >= currentScore.totalBeats) fromBeat = 0;
+    if (loopEnabled && loopRegion) {
+      fromBeat = loopRegion.start;
+    } else if (fromBeat >= currentScore.totalBeats) {
+      fromBeat = 0;
+    }
     viewOffsetBeats = 0;
     audioEngine.play(fromBeat, bpm, transpose);
     playBtn.innerHTML = '&#10074;&#10074;';
@@ -185,6 +200,20 @@ metronomeBtn.addEventListener('click', () => {
   metronomeOn = !metronomeOn;
   audioEngine.setMetronomeEnabled(metronomeOn);
   metronomeBtn.classList.toggle('active', metronomeOn);
+});
+
+function updateLoopButton() {
+  loopBtn.classList.toggle('active', loopEnabled && !!loopRegion);
+  if (loopRegion) {
+    loopBtn.title = `Loop ${loopRegion.start.toFixed(1)}–${loopRegion.end.toFixed(1)} (shift+drag to redefine)`;
+  } else {
+    loopBtn.title = 'Shift+drag on the roll to set a loop';
+  }
+}
+loopBtn.addEventListener('click', () => {
+  if (!loopRegion) return;
+  loopEnabled = !loopEnabled;
+  updateLoopButton();
 });
 
 document.querySelectorAll<HTMLButtonElement>('.bpm-btn').forEach((btn) => {
@@ -228,6 +257,10 @@ function engineBeat(): number {
   return audioEngine.isPlaying() ? audioEngine.getCurrentBeat() : audioEngine.getPausedBeat();
 }
 
+function displayBeat(): number {
+  return engineBeat() + viewOffsetBeats;
+}
+
 function clampViewOffset() {
   if (!currentScore) return;
   const base = engineBeat();
@@ -240,6 +273,34 @@ function panByBeats(deltaBeats: number) {
   if (!pianoRoll) return;
   viewOffsetBeats += deltaBeats;
   clampViewOffset();
+  renderNow();
+}
+
+function seekToBeat(beat: number) {
+  if (!audioEngine || !currentScore || !pianoRoll) return;
+  const clamped = Math.max(0, Math.min(currentScore.totalBeats, beat));
+  viewOffsetBeats = 0;
+  if (audioEngine.isPlaying()) {
+    audioEngine.play(clamped, bpm, transpose);
+  } else {
+    audioEngine.setPausedBeat(clamped);
+    renderNow();
+  }
+}
+
+function finalizeLoopSelection(beatA: number, beatB: number) {
+  if (!currentScore || !pianoRoll) return;
+  const start = Math.max(0, Math.min(beatA, beatB));
+  const end = Math.min(currentScore.totalBeats, Math.max(beatA, beatB));
+  if (end - start < MIN_LOOP_BEATS) {
+    loopRegion = null;
+    loopEnabled = false;
+  } else {
+    loopRegion = { start, end };
+    loopEnabled = true;
+  }
+  pianoRoll.setLoopRegion(loopRegion);
+  updateLoopButton();
   renderNow();
 }
 
@@ -256,26 +317,66 @@ canvas.addEventListener(
 );
 
 let dragPointerId: number | null = null;
+let dragStartX = 0;
 let dragLastX = 0;
+let dragMoved = false;
+let loopSelectStartBeat: number | null = null;
+
+function clientXToBeat(clientX: number): number {
+  const rect = canvas.getBoundingClientRect();
+  return pianoRoll!.xToBeat(clientX - rect.left, displayBeat());
+}
+
 canvas.addEventListener('pointerdown', (e) => {
+  if (!pianoRoll || !currentScore) return;
   dragPointerId = e.pointerId;
+  dragStartX = e.clientX;
   dragLastX = e.clientX;
+  dragMoved = false;
   canvas.setPointerCapture(e.pointerId);
-  canvas.classList.add('dragging');
+
+  if (e.shiftKey) {
+    loopSelectStartBeat = clientXToBeat(e.clientX);
+  } else {
+    loopSelectStartBeat = null;
+    canvas.classList.add('dragging');
+  }
 });
 canvas.addEventListener('pointermove', (e) => {
   if (dragPointerId !== e.pointerId || !pianoRoll) return;
-  const dx = e.clientX - dragLastX;
+  if (Math.abs(e.clientX - dragStartX) > CLICK_DRAG_THRESHOLD_PX) dragMoved = true;
+
+  if (loopSelectStartBeat != null) {
+    const endBeat = clientXToBeat(e.clientX);
+    pianoRoll.setLoopRegion({
+      start: Math.min(loopSelectStartBeat, endBeat),
+      end: Math.max(loopSelectStartBeat, endBeat),
+    });
+    renderNow();
+  } else {
+    const dx = e.clientX - dragLastX;
+    panByBeats(-dx / pianoRoll.getPixelsPerBeat());
+  }
   dragLastX = e.clientX;
-  panByBeats(-dx / pianoRoll.getPixelsPerBeat());
 });
 function endDrag(e: PointerEvent) {
   if (dragPointerId !== e.pointerId) return;
   dragPointerId = null;
   canvas.classList.remove('dragging');
+
+  if (loopSelectStartBeat != null) {
+    finalizeLoopSelection(loopSelectStartBeat, clientXToBeat(e.clientX));
+    loopSelectStartBeat = null;
+  } else if (!dragMoved && currentScore) {
+    seekToBeat(clientXToBeat(e.clientX));
+  }
 }
 canvas.addEventListener('pointerup', endDrag);
-canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('pointercancel', () => {
+  dragPointerId = null;
+  loopSelectStartBeat = null;
+  canvas.classList.remove('dragging');
+});
 
 function updatePositionDisplay(beat: number) {
   if (!currentScore) return;
@@ -291,7 +392,7 @@ function updatePositionDisplay(beat: number) {
 
 function renderNow() {
   if (!pianoRoll || !audioEngine) return;
-  const beat = engineBeat() + viewOffsetBeats;
+  const beat = displayBeat();
   pianoRoll.render(beat);
   updatePositionDisplay(beat);
 }
@@ -299,14 +400,23 @@ function renderNow() {
 function renderLoop() {
   if (!audioEngine || !pianoRoll || !currentScore) return;
   const beat = audioEngine.getCurrentBeat();
+
+  if (loopEnabled && loopRegion && beat >= loopRegion.end) {
+    audioEngine.play(loopRegion.start, bpm, transpose);
+    rafId = requestAnimationFrame(renderLoop);
+    return;
+  }
+
   if (beat >= currentScore.totalBeats) {
     audioEngine.stop();
+    viewOffsetBeats = 0;
     playBtn.innerHTML = '&#9658;';
-    pianoRoll.render(currentScore.totalBeats);
-    updatePositionDisplay(currentScore.totalBeats);
+    pianoRoll.render(0);
+    updatePositionDisplay(0);
     rafId = null;
     return;
   }
+
   pianoRoll.render(beat + viewOffsetBeats);
   updatePositionDisplay(beat + viewOffsetBeats);
   rafId = requestAnimationFrame(renderLoop);

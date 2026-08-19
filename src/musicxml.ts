@@ -1,4 +1,4 @@
-import type { MeasureInfo, NoteEvent, PartInfo, Score } from './score';
+import type { MeasureInfo, NoteEvent, PartInfo, Score, SlurArc } from './score';
 
 const STEP_SEMITONES: Record<string, number> = {
   C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11,
@@ -32,6 +32,7 @@ export function parseMusicXML(xmlText: string): Score {
 
   const notes: NoteEvent[] = [];
   const measures: MeasureInfo[] = [];
+  const slurs: SlurArc[] = [];
   let totalBeats = 0;
   let measuresBuilt = false;
 
@@ -45,6 +46,7 @@ export function parseMusicXML(xmlText: string): Score {
     let measureStartBeat = 0;
     let cursor = 0;
     let lastNoteStart = 0;
+    const openSlurs = new Map<number, { beat: number; midi: number }>();
 
     const measureEls = Array.from(partEl.querySelectorAll('measure'));
     for (const measureEl of measureEls) {
@@ -80,15 +82,30 @@ export function parseMusicXML(xmlText: string): Score {
                 const step = pitchEl.querySelector('step')?.textContent || 'C';
                 const alter = parseFloat(pitchEl.querySelector('alter')?.textContent || '0');
                 const octave = parseInt(pitchEl.querySelector('octave')?.textContent || '4', 10);
+                const midi = pitchToMidi(step, alter, octave);
                 const lyric = child.querySelector(':scope > lyric > text')?.textContent?.trim();
                 notes.push({
                   partId,
-                  midi: pitchToMidi(step, alter, octave),
+                  midi,
                   startBeat,
                   durationBeats,
                   lyric: lyric || undefined,
                   measureNumber,
                 });
+
+                for (const slurEl of Array.from(child.querySelectorAll(':scope > notations > slur'))) {
+                  const num = parseInt(slurEl.getAttribute('number') || '1', 10);
+                  const type = slurEl.getAttribute('type');
+                  if (type === 'start') {
+                    openSlurs.set(num, { beat: startBeat, midi });
+                  } else if (type === 'stop') {
+                    const open = openSlurs.get(num);
+                    if (open) {
+                      slurs.push({ partId, startBeat: open.beat, startMidi: open.midi, endBeat: startBeat, endMidi: midi });
+                      openSlurs.delete(num);
+                    }
+                  }
+                }
               }
             }
 
@@ -126,5 +143,5 @@ export function parseMusicXML(xmlText: string): Score {
 
   notes.sort((a, b) => a.startBeat - b.startBeat);
 
-  return { title, parts, notes, measures, totalBeats };
+  return { title, parts, notes, measures, slurs, totalBeats };
 }

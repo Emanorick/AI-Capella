@@ -35,7 +35,7 @@ function playPianoNote(
 
   const ampGain = ctx.createGain();
   const attack = 0.006;
-  const peak = 0.5;
+  const peak = 0.36;
   const decayTarget = Math.max(peak * 0.35, 0.001);
   const noteOffTime = startTime + duration;
 
@@ -78,6 +78,7 @@ export type PartMixState = 'normal' | 'muted' | 'solo';
 export class AudioEngine {
   private ctx = new AudioContext();
   private masterGain: GainNode;
+  private compressor: DynamicsCompressorNode;
   private metronomeGain: GainNode;
   private partGains = new Map<string, GainNode>();
   private scheduledNodes: OscillatorNode[] = [];
@@ -94,7 +95,16 @@ export class AudioEngine {
     this.score = score;
     this.masterGain = this.ctx.createGain();
     this.masterGain.gain.value = 0.9;
-    this.masterGain.connect(this.ctx.destination);
+
+    // Doubled/unison voices (common in choir arrangements) stack gain and can clip; compress the bus instead.
+    this.compressor = this.ctx.createDynamicsCompressor();
+    this.compressor.threshold.value = -20;
+    this.compressor.knee.value = 24;
+    this.compressor.ratio.value = 8;
+    this.compressor.attack.value = 0.003;
+    this.compressor.release.value = 0.15;
+    this.masterGain.connect(this.compressor);
+    this.compressor.connect(this.ctx.destination);
 
     this.metronomeGain = this.ctx.createGain();
     this.metronomeGain.connect(this.masterGain);
@@ -199,6 +209,10 @@ export class AudioEngine {
 
   getPausedBeat() {
     return this.pausedBeat;
+  }
+
+  setPausedBeat(beat: number) {
+    this.pausedBeat = Math.max(0, Math.min(this.score.totalBeats, beat));
   }
 
   getCurrentBeat(): number {

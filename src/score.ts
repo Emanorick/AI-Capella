@@ -19,11 +19,20 @@ export interface MeasureInfo {
   beatType: number; // time signature denominator
 }
 
+export interface SlurArc {
+  partId: string;
+  startBeat: number;
+  startMidi: number;
+  endBeat: number;
+  endMidi: number;
+}
+
 export interface Score {
   title: string;
   parts: PartInfo[];
   notes: NoteEvent[];
   measures: MeasureInfo[];
+  slurs: SlurArc[];
   totalBeats: number;
 }
 

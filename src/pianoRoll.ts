@@ -10,6 +10,10 @@ const DIMMED_ALPHA = 0.5;
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
 export type PartMixState = 'normal' | 'muted' | 'solo';
+export interface LoopRegion {
+  start: number;
+  end: number;
+}
 
 function midiName(midi: number): string {
   const name = NOTE_NAMES[((midi % 12) + 12) % 12];
@@ -28,6 +32,7 @@ export class PianoRoll {
   private pixelsPerBeat = BASE_PIXELS_PER_BEAT;
   private hiddenParts = new Set<string>();
   private dimmedParts = new Set<string>();
+  private loopRegion: LoopRegion | null = null;
   private beatMarkers: ReturnType<typeof getBeatMarkers>;
 
   constructor(canvas: HTMLCanvasElement, score: Score, partColor: (partId: string) => string) {
@@ -68,6 +73,10 @@ export class PianoRoll {
     return this.pixelsPerBeat;
   }
 
+  setLoopRegion(region: LoopRegion | null) {
+    this.loopRegion = region;
+  }
+
   resize() {
     const dpr = window.devicePixelRatio || 1;
     const rect = this.canvas.getBoundingClientRect();
@@ -82,13 +91,24 @@ export class PianoRoll {
     return height - t * height;
   }
 
+  private playheadX(width: number): number {
+    const contentWidth = Math.max(1, width - KEYBOARD_WIDTH);
+    return KEYBOARD_WIDTH + contentWidth * PLAYHEAD_X_RATIO;
+  }
+
+  /** Inverse of the render-time beat->x mapping: canvas-local x (from getBoundingClientRect) -> beat. */
+  xToBeat(x: number, displayBeat: number): number {
+    const width = this.canvas.getBoundingClientRect().width;
+    return displayBeat + (x - this.playheadX(width)) / this.pixelsPerBeat;
+  }
+
   render(currentBeat: number) {
     const rect = this.canvas.getBoundingClientRect();
     const width = rect.width;
     const height = rect.height;
     const ctx = this.ctx2d;
     const contentWidth = Math.max(1, width - KEYBOARD_WIDTH);
-    const playheadX = KEYBOARD_WIDTH + contentWidth * PLAYHEAD_X_RATIO;
+    const playheadX = this.playheadX(width);
     const rowHeight = height / (this.maxMidi - this.minMidi);
 
     const beatToX = (beat: number) => playheadX + (beat - currentBeat) * this.pixelsPerBeat;
@@ -109,6 +129,22 @@ export class PianoRoll {
       ctx.fillRect(KEYBOARD_WIDTH, y, contentWidth, rowHeight);
     }
 
+    // loop region highlight
+    if (this.loopRegion) {
+      const x1 = beatToX(this.loopRegion.start);
+      const x2 = beatToX(this.loopRegion.end);
+      ctx.fillStyle = 'rgba(79,168,255,0.14)';
+      ctx.fillRect(x1, 0, x2 - x1, height);
+      ctx.strokeStyle = 'rgba(79,168,255,0.7)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x1, 0);
+      ctx.lineTo(x1, height);
+      ctx.moveTo(x2, 0);
+      ctx.lineTo(x2, height);
+      ctx.stroke();
+    }
+
     // beat / measure gridlines
     for (const marker of this.beatMarkers) {
       const x = beatToX(marker.beat);
@@ -126,17 +162,18 @@ export class PianoRoll {
       }
     }
 
-    // notes
-    for (const note of this.score.notes) {
-      if (this.hiddenParts.has(note.partId)) continue;
+    // notes: dimmed (non-soloed) parts first, then normal/soloed parts on top so a soloed
+    // voice's color is never partially covered by an overlapping dimmed bar at the same pitch/time.
+    const dimmedNotes = this.score.notes.filter((n) => !this.hiddenParts.has(n.partId) && this.dimmedParts.has(n.partId));
+    const topNotes = this.score.notes.filter((n) => !this.hiddenParts.has(n.partId) && !this.dimmedParts.has(n.partId));
+    for (const note of [...dimmedNotes, ...topNotes]) {
       const midi = note.midi + this.transpose;
       const x = beatToX(note.startBeat);
       const w = note.durationBeats * this.pixelsPerBeat;
       if (x + w < KEYBOARD_WIDTH - 10 || x > width + 10) continue;
       const y = this.rowY(midi, height) - rowHeight;
 
-      const dimmed = this.dimmedParts.has(note.partId);
-      ctx.globalAlpha = dimmed ? DIMMED_ALPHA : 1;
+      ctx.globalAlpha = this.dimmedParts.has(note.partId) ? DIMMED_ALPHA : 1;
 
       ctx.fillStyle = this.partColor(note.partId);
       const barH = Math.max(rowHeight - 2, 4);
@@ -152,6 +189,31 @@ export class PianoRoll {
         ctx.textAlign = 'left';
       }
 
+      ctx.globalAlpha = 1;
+    }
+
+    // slurs, drawn in each voice's color above its notes
+    for (const slur of this.score.slurs) {
+      if (this.hiddenParts.has(slur.partId)) continue;
+      const startMidi = slur.startMidi + this.transpose;
+      const endMidi = slur.endMidi + this.transpose;
+      const x1 = beatToX(slur.startBeat) + 2;
+      const x2 = beatToX(slur.endBeat) + 2;
+      if (x2 < KEYBOARD_WIDTH - 10 || x1 > width + 10) continue;
+      const barH = Math.max(rowHeight - 2, 4);
+      const y1 = this.rowY(startMidi, height) - rowHeight + (rowHeight - barH) / 2;
+      const y2 = this.rowY(endMidi, height) - rowHeight + (rowHeight - barH) / 2;
+      const arcLift = Math.min(18, 6 + Math.abs(x2 - x1) * 0.08);
+      const midX = (x1 + x2) / 2;
+      const topY = Math.min(y1, y2) - arcLift;
+
+      ctx.globalAlpha = this.dimmedParts.has(slur.partId) ? DIMMED_ALPHA : 0.9;
+      ctx.strokeStyle = this.partColor(slur.partId);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.quadraticCurveTo(midX, topY, x2, y2);
+      ctx.stroke();
       ctx.globalAlpha = 1;
     }
 
