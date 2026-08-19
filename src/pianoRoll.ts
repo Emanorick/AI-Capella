@@ -33,6 +33,7 @@ export class PianoRoll {
   private hiddenParts = new Set<string>();
   private dimmedParts = new Set<string>();
   private loopRegion: LoopRegion | null = null;
+  private seekMarkerBeat: number | null = null;
   private beatMarkers: ReturnType<typeof getBeatMarkers>;
 
   constructor(canvas: HTMLCanvasElement, score: Score, partColor: (partId: string) => string) {
@@ -75,6 +76,11 @@ export class PianoRoll {
 
   setLoopRegion(region: LoopRegion | null) {
     this.loopRegion = region;
+  }
+
+  /** The beat a click-to-seek set as the next playback start point, shown independent of the playhead. */
+  setSeekMarker(beat: number | null) {
+    this.seekMarkerBeat = beat;
   }
 
   resize() {
@@ -145,6 +151,28 @@ export class PianoRoll {
       ctx.stroke();
     }
 
+    // seek marker: where the next Play will start from, independent of the current scroll position
+    if (this.seekMarkerBeat != null) {
+      const x = beatToX(this.seekMarkerBeat);
+      if (x >= KEYBOARD_WIDTH - 6 && x <= width + 6) {
+        ctx.strokeStyle = 'rgba(255,209,102,0.85)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#ffd166';
+        ctx.beginPath();
+        ctx.moveTo(x - 5, 0);
+        ctx.lineTo(x + 5, 0);
+        ctx.lineTo(x, 8);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
     // beat / measure gridlines
     for (const marker of this.beatMarkers) {
       const x = beatToX(marker.beat);
@@ -181,7 +209,7 @@ export class PianoRoll {
       roundRect(ctx, x, y + barPad, Math.max(w - 2, 3), barH, 3);
       ctx.fill();
 
-      if (note.lyric && w > 14) {
+      if (note.lyric && w > 14 && !this.dimmedParts.has(note.partId)) {
         ctx.fillStyle = 'rgba(255,255,255,0.9)';
         ctx.font = '11px system-ui, sans-serif';
         ctx.textAlign = 'center';

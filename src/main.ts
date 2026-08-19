@@ -174,7 +174,7 @@ function togglePlay() {
     stopRenderLoop();
   } else {
     let fromBeat = audioEngine.getPausedBeat();
-    if (loopEnabled && loopRegion) {
+    if (loopRegion) {
       fromBeat = loopRegion.start;
     } else if (fromBeat >= currentScore.totalBeats) {
       fromBeat = 0;
@@ -203,15 +203,19 @@ metronomeBtn.addEventListener('click', () => {
 });
 
 function updateLoopButton() {
-  loopBtn.classList.toggle('active', loopEnabled && !!loopRegion);
+  loopBtn.classList.toggle('active', loopEnabled);
   if (loopRegion) {
-    loopBtn.title = `Loop ${loopRegion.start.toFixed(1)}–${loopRegion.end.toFixed(1)} (shift+drag to redefine)`;
+    loopBtn.title = loopEnabled
+      ? `Looping ${loopRegion.start.toFixed(1)}–${loopRegion.end.toFixed(1)} (click to stop there instead)`
+      : `Loop region set, off — click to loop it (shift+drag to redefine)`;
   } else {
-    loopBtn.title = 'Shift+drag on the roll to set a loop';
+    loopBtn.title = loopEnabled
+      ? 'Looping the whole piece (shift+drag the roll to loop a region instead)'
+      : 'Click to loop the whole piece, or shift+drag the roll to loop a region';
   }
 }
 loopBtn.addEventListener('click', () => {
-  if (!loopRegion) return;
+  if (!currentScore) return;
   loopEnabled = !loopEnabled;
   updateLoopButton();
 });
@@ -276,16 +280,30 @@ function panByBeats(deltaBeats: number) {
   renderNow();
 }
 
+/**
+ * Sets where the next Play (or an already-playing transport) should be, without moving the
+ * view: the beat under the click stays under the same screen x, so scrolling never jumps.
+ */
 function seekToBeat(beat: number) {
   if (!audioEngine || !currentScore || !pianoRoll) return;
   const clamped = Math.max(0, Math.min(currentScore.totalBeats, beat));
-  viewOffsetBeats = 0;
+  const oldEngineBeat = engineBeat();
   if (audioEngine.isPlaying()) {
     audioEngine.play(clamped, bpm, transpose);
   } else {
     audioEngine.setPausedBeat(clamped);
-    renderNow();
   }
+  viewOffsetBeats += oldEngineBeat - clamped;
+  clampViewOffset();
+  pianoRoll.setSeekMarker(clamped);
+  renderNow();
+}
+
+function clearLoopRegion() {
+  if (!loopRegion) return;
+  loopRegion = null;
+  pianoRoll?.setLoopRegion(null);
+  updateLoopButton();
 }
 
 function finalizeLoopSelection(beatA: number, beatB: number) {
@@ -294,10 +312,10 @@ function finalizeLoopSelection(beatA: number, beatB: number) {
   const end = Math.min(currentScore.totalBeats, Math.max(beatA, beatB));
   if (end - start < MIN_LOOP_BEATS) {
     loopRegion = null;
-    loopEnabled = false;
   } else {
     loopRegion = { start, end };
     loopEnabled = true;
+    pianoRoll.setSeekMarker(null);
   }
   pianoRoll.setLoopRegion(loopRegion);
   updateLoopButton();
@@ -368,6 +386,7 @@ function endDrag(e: PointerEvent) {
     finalizeLoopSelection(loopSelectStartBeat, clientXToBeat(e.clientX));
     loopSelectStartBeat = null;
   } else if (!dragMoved && currentScore) {
+    clearLoopRegion();
     seekToBeat(clientXToBeat(e.clientX));
   }
 }
@@ -400,19 +419,25 @@ function renderNow() {
 function renderLoop() {
   if (!audioEngine || !pianoRoll || !currentScore) return;
   const beat = audioEngine.getCurrentBeat();
+  // A loop region, once marked, bounds playback; the Loop button decides whether hitting that
+  // bound (or the end of the piece, when no region is marked) wraps around or stops there.
+  const boundary = loopRegion ? loopRegion.end : currentScore.totalBeats;
 
-  if (loopEnabled && loopRegion && beat >= loopRegion.end) {
-    audioEngine.play(loopRegion.start, bpm, transpose);
-    rafId = requestAnimationFrame(renderLoop);
-    return;
-  }
+  if (beat >= boundary) {
+    if (loopEnabled) {
+      const loopStart = loopRegion ? loopRegion.start : 0;
+      audioEngine.play(loopStart, bpm, transpose);
+      rafId = requestAnimationFrame(renderLoop);
+      return;
+    }
 
-  if (beat >= currentScore.totalBeats) {
+    const resetBeat = loopRegion ? loopRegion.start : 0;
     audioEngine.stop();
+    audioEngine.setPausedBeat(resetBeat);
     viewOffsetBeats = 0;
     playBtn.innerHTML = '&#9658;';
-    pianoRoll.render(0);
-    updatePositionDisplay(0);
+    pianoRoll.render(resetBeat);
+    updatePositionDisplay(resetBeat);
     rafId = null;
     return;
   }
