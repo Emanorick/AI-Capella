@@ -4,12 +4,12 @@
 //
 // Fill these in from: Firebase Console -> Project settings -> General -> "Your apps" -> Web app.
 export const firebaseConfig = {
-  apiKey: 'REPLACE_ME',
-  authDomain: 'REPLACE_ME.firebaseapp.com',
-  projectId: 'REPLACE_ME',
-  storageBucket: 'REPLACE_ME.appspot.com',
-  messagingSenderId: 'REPLACE_ME',
-  appId: 'REPLACE_ME',
+  apiKey: 'AIzaSyBYyWMKrQvYllFSdA09gq5LQ3cmgLDPVtI',
+  authDomain: 'ai-capella.firebaseapp.com',
+  projectId: 'ai-capella',
+  storageBucket: 'ai-capella.firebasestorage.app',
+  messagingSenderId: '267121953500',
+  appId: '1:267121953500:web:7e8878617e49b35cee8219',
 };
 
 export const isFirebaseConfigured = firebaseConfig.apiKey !== 'REPLACE_ME';

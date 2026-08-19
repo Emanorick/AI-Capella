@@ -1,6 +1,6 @@
 import { initializeApp, type FirebaseApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, type Auth } from 'firebase/auth';
-import { getFirestore, type Firestore } from 'firebase/firestore';
+import { initializeFirestore, type Firestore } from 'firebase/firestore';
 import { firebaseConfig, isFirebaseConfigured } from './firebaseConfig';
 
 let app: FirebaseApp | null = null;
@@ -10,7 +10,10 @@ let db: Firestore | null = null;
 if (isFirebaseConfigured) {
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
-  db = getFirestore(app);
+  // Firestore's default streaming (WebChannel) transport can stall indefinitely behind some
+  // proxies, VPNs, and restrictive school/office networks -- auto-detect and fall back to plain
+  // long-polling in those cases, per Firebase's own documented workaround for this exact symptom.
+  db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
 }
 
 export { db, isFirebaseConfigured };

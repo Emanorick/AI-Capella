@@ -603,8 +603,10 @@ window.addEventListener('resize', () => {
   }
 
   try {
-    await ensureAccess(); // PIN gate; resolves immediately if already granted on this device
+    // Sign in first: verifyPin (inside ensureAccess) reads Firestore, and the security rules
+    // require request.auth != null, so an unsigned-in read would just hang/get rejected.
     await ensureSignedIn();
+    await ensureAccess(); // PIN gate; resolves immediately if already granted on this device
     subscribeToSongs(
       (songs) => {
         importedSongs = songs.map((s) => ({ id: s.id, title: s.title, xml: s.xml, imported: true }));
