@@ -33,6 +33,7 @@ export function parseMusicXML(xmlText: string): Score {
   const notes: NoteEvent[] = [];
   const measures: MeasureInfo[] = [];
   const slurs: SlurArc[] = [];
+  const ties: SlurArc[] = [];
   let totalBeats = 0;
   let measuresBuilt = false;
 
@@ -47,6 +48,9 @@ export function parseMusicXML(xmlText: string): Score {
     let cursor = 0;
     let lastNoteStart = 0;
     const openSlurs = new Map<number, { beat: number; midi: number }>();
+    // Ties (same-pitch notes sustained across a boundary, most commonly a barline) are a separate
+    // MusicXML element from slurs -- keyed by pitch since a part only has one open tie per pitch.
+    const openTies = new Map<number, number>();
 
     const measureEls = Array.from(partEl.querySelectorAll('measure'));
     for (const measureEl of measureEls) {
@@ -106,6 +110,21 @@ export function parseMusicXML(xmlText: string): Score {
                     }
                   }
                 }
+
+                for (const tieEl of Array.from(child.querySelectorAll(':scope > tie'))) {
+                  const type = tieEl.getAttribute('type');
+                  if (type === 'start') {
+                    // The line should bridge the gap between the two note bars, so anchor it to
+                    // this note's END (not its start) -- the next tied note picks up from there.
+                    openTies.set(midi, startBeat + durationBeats);
+                  } else if (type === 'stop') {
+                    const openBeat = openTies.get(midi);
+                    if (openBeat !== undefined) {
+                      ties.push({ partId, startBeat: openBeat, startMidi: midi, endBeat: startBeat, endMidi: midi });
+                      openTies.delete(midi);
+                    }
+                  }
+                }
               }
             }
 
@@ -143,5 +162,5 @@ export function parseMusicXML(xmlText: string): Score {
 
   notes.sort((a, b) => a.startBeat - b.startBeat);
 
-  return { title, parts, notes, measures, slurs, totalBeats };
+  return { title, parts, notes, measures, slurs, ties, totalBeats };
 }

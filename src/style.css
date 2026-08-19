@@ -314,6 +314,7 @@ body {
 }
 
 .bpm-btn,
+.duck-btn,
 #transpose-down,
 #transpose-up,
 #zoom-out,
@@ -327,7 +328,8 @@ body {
   font-size: 13px;
 }
 
-.bpm-btn.active {
+.bpm-btn.active,
+.duck-btn.active {
   background: #4fa8ff;
   color: #06070a;
   border-color: #4fa8ff;

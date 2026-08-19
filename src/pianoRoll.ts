@@ -5,7 +5,14 @@ export const BASE_PIXELS_PER_BEAT = 70;
 const KEYBOARD_WIDTH = 34;
 const PLAYHEAD_X_RATIO = 0.2;
 const ROW_PADDING_SEMITONES = 2;
-const ROW_HEIGHT_PX = 16; // fixed row height in css px -- pitch axis scrolls instead of squeezing to fit
+// Fixed row height in css px -- pitch axis scrolls instead of squeezing to fit. Tall enough for a
+// note bar plus its lyric syllable drawn below it, both fully inside the row: a bar-only row was
+// tried but even a small overlap between the lyric and the bar of an adjacent voice on the next
+// semitone (common in close choral harmony) reads as broken/misaligned, and it's less readable
+// than text sitting clearly below its note.
+const ROW_HEIGHT_PX = 30;
+const BAR_PAD_PX = 2; // gap from the top of the row to the note bar
+const BAR_HEIGHT_PX = 13; // note bar height, leaving room below it for the lyric within the same row
 const BLACK_KEY_PITCH_CLASSES = new Set([1, 3, 6, 8, 10]);
 const DIMMED_ALPHA = 0.5;
 const MAX_DPR = 2; // native Retina density; only caps 3x phones, doesn't soften a normal laptop screen
@@ -45,6 +52,7 @@ export class PianoRoll {
   private beatMarkers: ReturnType<typeof getBeatMarkers>;
   private notesByPart: Map<string, NoteEvent[]>;
   private slursByPart: Map<string, SlurArc[]>;
+  private tiesByPart: Map<string, SlurArc[]>;
   private dpr = 1;
   private keyboardCache: HTMLCanvasElement | null = null;
   private keyboardCacheDirty = true;
@@ -85,6 +93,12 @@ export class PianoRoll {
       const list = this.slursByPart.get(slur.partId);
       if (list) list.push(slur);
       else this.slursByPart.set(slur.partId, [slur]);
+    }
+    this.tiesByPart = new Map();
+    for (const tie of score.ties) {
+      const list = this.tiesByPart.get(tie.partId);
+      if (list) list.push(tie);
+      else this.tiesByPart.set(tie.partId, [tie]);
     }
 
     const pitches = score.notes.map((n) => n.midi);
@@ -370,8 +384,8 @@ export class PianoRoll {
     // notes: dimmed (non-soloed) parts first, then normal/soloed parts on top so a soloed voice's
     // color is never partially covered by an overlapping dimmed bar at the same pitch/time.
     // Batched into one fill() per part rather than per note.
-    const barH = Math.max(rowHeight - 2, 4);
-    const barPad = (rowHeight - barH) / 2;
+    const barH = BAR_HEIGHT_PX;
+    const barPad = BAR_PAD_PX;
     const drawPart = (partId: string) => {
       const notes = this.notesByPart.get(partId);
       if (!notes || !notes.length) return;
@@ -393,17 +407,16 @@ export class PianoRoll {
       ctx.globalAlpha = 1;
 
       // Draw each syllable from a cached bitmap instead of fillText: re-shaping/rasterizing text
-      // for every note on every buffer rebuild adds up fast. Drawn centered inside the note's own
-      // bar (not below it): with a fixed, small row height a voice singing the adjacent pitch at
-      // the same beat is common in close harmony, and text placed below the bar would bleed into
-      // that neighboring row instead of staying inside this note's row.
+      // for every note on every buffer rebuild adds up fast. Drawn below the bar, but still fully
+      // inside this note's own row (the row is sized to fit bar + text) so it never reaches into
+      // the neighboring pitch row's territory.
       for (const note of lyricNotes) {
         const midi = note.midi + this.transpose;
         const x = localBeatToX(note.startBeat);
         const w = note.durationBeats * this.pixelsPerBeat;
         const y = this.rowY(midi) - rowHeight;
         const bmp = this.getLyricBitmap(note.lyric!);
-        const textY = y + barPad + (barH - bmp.cssHeight) / 2;
+        const textY = y + barPad + barH + 1;
         ctx.drawImage(bmp.canvas, x + w / 2 - bmp.cssWidth / 2, textY, bmp.cssWidth, bmp.cssHeight);
       }
     };
@@ -436,6 +449,32 @@ export class PianoRoll {
       ctx.globalAlpha = this.dimmedParts.has(part.id) ? DIMMED_ALPHA : 0.9;
       ctx.strokeStyle = this.partColor(part.id);
       ctx.lineWidth = 1.5;
+      ctx.stroke(path);
+      ctx.globalAlpha = 1;
+    }
+
+    // ties (same-pitch notes sustained across a boundary, most commonly a barline): drawn as a
+    // straight line rather than an arched slur, bridging the gap between the two note bars.
+    for (const part of this.score.parts) {
+      if (this.hiddenParts.has(part.id)) continue;
+      const ties = this.tiesByPart.get(part.id);
+      if (!ties || !ties.length) continue;
+      const path = new Path2D();
+      let any = false;
+      for (const tie of ties) {
+        const midi = tie.startMidi + this.transpose;
+        const x1 = localBeatToX(tie.startBeat);
+        const x2 = localBeatToX(tie.endBeat);
+        if (x2 < -10 || x1 > widthCss + 10) continue;
+        const y = this.rowY(midi) - rowHeight + barPad + barH / 2;
+        path.moveTo(x1, y);
+        path.lineTo(x2, y);
+        any = true;
+      }
+      if (!any) continue;
+      ctx.globalAlpha = this.dimmedParts.has(part.id) ? DIMMED_ALPHA : 0.9;
+      ctx.strokeStyle = this.partColor(part.id);
+      ctx.lineWidth = 2;
       ctx.stroke(path);
       ctx.globalAlpha = 1;
     }

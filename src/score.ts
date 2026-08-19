@@ -33,6 +33,7 @@ export interface Score {
   notes: NoteEvent[];
   measures: MeasureInfo[];
   slurs: SlurArc[];
+  ties: SlurArc[]; // same shape as a slur (startMidi === endMidi); drawn as a straight line, not an arc
   totalBeats: number;
 }
 

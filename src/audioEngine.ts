@@ -1,7 +1,7 @@
 import type { Score } from './score';
 import { getBeatMarkers } from './score';
 
-const DUCKED_VOLUME = 0.28; // level for non-soloed parts when at least one part is soloed
+const DEFAULT_DUCKED_VOLUME = 0.25; // default level for non-soloed parts when at least one part is soloed
 const RELEASE_TIME = 0.25;
 
 function midiToFreq(midi: number): number {
@@ -89,6 +89,7 @@ export class AudioEngine {
   private pausedBeat = 0;
   private mixState = new Map<string, PartMixState>();
   private metronomeEnabled = false;
+  private duckedVolume = DEFAULT_DUCKED_VOLUME;
   private score: Score;
 
   constructor(score: Score) {
@@ -128,6 +129,12 @@ export class AudioEngine {
     if (this.playing) this.play(this.getCurrentBeat(), 60 / this.secPerBeat, this.lastTranspose);
   }
 
+  /** Volume (0-1) for non-soloed parts while at least one part has its Solo button active. */
+  setDuckedVolume(level: number) {
+    this.duckedVolume = level;
+    this.applyMix();
+  }
+
   getBpm() {
     return 60 / this.secPerBeat;
   }
@@ -139,7 +146,7 @@ export class AudioEngine {
       const state = this.mixState.get(partId) ?? 'normal';
       let level = 1;
       if (state === 'muted') level = 0;
-      else if (anySolo && state !== 'solo') level = DUCKED_VOLUME;
+      else if (anySolo && state !== 'solo') level = this.duckedVolume;
       gain.gain.setTargetAtTime(level, now, 0.03);
     }
   }

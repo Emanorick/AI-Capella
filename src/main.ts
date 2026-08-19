@@ -26,6 +26,7 @@ let importedSongs: SongEntry[] = [];
 const ACCEPTED_EXTENSIONS = ['.musicxml', '.xml', '.mxl'];
 
 const BPM_PRESETS = [50, 80, 100, 120, 140];
+const DUCK_VOLUME_PRESETS = [0.25, 0.5, 0.75];
 const MIN_TRANSPOSE = -7;
 const MAX_TRANSPOSE = 7;
 const MIN_ZOOM = 0.25;
@@ -75,6 +76,10 @@ app.innerHTML = `
           <span id="zoom-value">100%</span>
           <button id="zoom-in">&plus;</button>
         </div>
+        <div class="transport-group" id="duck-volume-group" title="Volume of the other voices while one is soloed">
+          <span class="transport-label">Solo Volume</span>
+          ${DUCK_VOLUME_PRESETS.map((v) => `<button class="duck-btn" data-duck="${v}">${Math.round(v * 100)}%</button>`).join('')}
+        </div>
       </div>
     </div>
     <canvas id="roll"></canvas>
@@ -106,6 +111,7 @@ let currentScore: Score | null = null;
 let audioEngine: AudioEngine | null = null;
 let pianoRoll: PianoRoll | null = null;
 let bpm = 100;
+let duckVolume = 0.25;
 let transpose = 0;
 let zoom = 1;
 let viewOffsetBeats = 0;
@@ -253,6 +259,7 @@ async function loadSong(song: SongEntry) {
   loopEnabled = false;
 
   audioEngine = new AudioEngine(score);
+  audioEngine.setDuckedVolume(duckVolume);
   pianoRoll = new PianoRoll(canvas, score, (partId) => {
     const idx = score.parts.findIndex((p) => p.id === partId);
     return colorForPartIndex(idx);
@@ -288,21 +295,51 @@ function buildPartsPanel(score: Score) {
     .join('');
 }
 
+function syncPartRowClasses() {
+  partsPanelEl.querySelectorAll<HTMLElement>('.part-row').forEach((row) => {
+    const partId = row.getAttribute('data-part')!;
+    const state = partMix.get(partId) ?? 'normal';
+    row.classList.toggle('is-muted', state === 'muted');
+    row.classList.toggle('is-solo', state === 'solo');
+  });
+}
+
+/**
+ * "True solo": mutes AND hides every other voice so only this one is visible/audible (unlike the
+ * Solo button, which just ducks/dims the others). Clicking the same voice again restores everyone.
+ */
+function toggleTrueSolo(partId: string) {
+  if (!audioEngine || !pianoRoll || !currentScore) return;
+  const alreadyIsolated =
+    partMix.get(partId) !== 'muted' && currentScore.parts.every((p) => p.id === partId || partMix.get(p.id) === 'muted');
+  for (const p of currentScore.parts) {
+    const next: PartMixState = alreadyIsolated || p.id === partId ? 'normal' : 'muted';
+    partMix.set(p.id, next);
+    audioEngine.setPartMixState(p.id, next);
+  }
+  pianoRoll.setPartMix(partMix);
+  syncPartRowClasses();
+  renderNow();
+}
+
 partsPanelEl.addEventListener('click', (e) => {
   const target = e.target as HTMLElement;
   const row = target.closest<HTMLElement>('.part-row');
   if (!row || !audioEngine || !pianoRoll) return;
   const partId = row.getAttribute('data-part')!;
-  // Clicking anywhere in the row that isn't the Mute button solos that voice (mutes/unmutes
-  // every other voice), same as pressing its Solo button.
-  const action = (target.getAttribute('data-action') as PartMixState | null) ?? 'solo';
+  const action = target.getAttribute('data-action') as PartMixState | null;
+
+  if (!action) {
+    toggleTrueSolo(partId);
+    return;
+  }
+
   const current = partMix.get(partId) ?? 'normal';
   const next: PartMixState = current === action ? 'normal' : action;
   partMix.set(partId, next);
   audioEngine.setPartMixState(partId, next);
   pianoRoll.setPartMix(partMix);
-  row.classList.toggle('is-muted', next === 'muted');
-  row.classList.toggle('is-solo', next === 'solo');
+  syncPartRowClasses();
   renderNow();
 });
 
@@ -371,6 +408,15 @@ document.querySelectorAll<HTMLButtonElement>('.bpm-btn').forEach((btn) => {
   });
 });
 document.querySelector(`.bpm-btn[data-bpm="${bpm}"]`)?.classList.add('active');
+
+document.querySelectorAll<HTMLButtonElement>('.duck-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    duckVolume = parseFloat(btn.getAttribute('data-duck')!);
+    document.querySelectorAll('.duck-btn').forEach((b) => b.classList.toggle('active', b === btn));
+    audioEngine?.setDuckedVolume(duckVolume);
+  });
+});
+document.querySelector(`.duck-btn[data-duck="${duckVolume}"]`)?.classList.add('active');
 
 function applyTranspose(delta: number) {
   if (!audioEngine || !pianoRoll) return;
