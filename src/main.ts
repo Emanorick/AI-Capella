@@ -26,7 +26,7 @@ let importedSongs: SongEntry[] = [];
 const ACCEPTED_EXTENSIONS = ['.musicxml', '.xml', '.mxl'];
 
 const BPM_PRESETS = [50, 80, 100, 120, 140];
-const DUCK_VOLUME_PRESETS = [0.25, 0.5, 0.75];
+const DUCK_VOLUME_PRESETS = [0.1, 0.25, 0.5, 0.75];
 const MIN_TRANSPOSE = -7;
 const MAX_TRANSPOSE = 7;
 const MIN_ZOOM = 0.25;

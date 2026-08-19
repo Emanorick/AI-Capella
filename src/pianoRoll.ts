@@ -353,6 +353,18 @@ export class PianoRoll {
       ctx.fillRect(0, y, widthCss, rowHeight);
     }
 
+    // semitone gridlines: a barely-visible line at every pitch row boundary, just enough to give
+    // a sense of interval distance at a glance without competing with the beat/measure gridlines.
+    const semitonePath = new Path2D();
+    for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
+      const y = this.rowY(midi);
+      semitonePath.moveTo(0, y);
+      semitonePath.lineTo(widthCss, y);
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.045)';
+    ctx.lineWidth = 1;
+    ctx.stroke(semitonePath);
+
     // beat / measure gridlines, batched into one stroke() per tier instead of one per line
     let thinPath: Path2D | null = null;
     let thickPath: Path2D | null = null;

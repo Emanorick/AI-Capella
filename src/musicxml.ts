@@ -111,7 +111,13 @@ export function parseMusicXML(xmlText: string): Score {
                   }
                 }
 
-                for (const tieEl of Array.from(child.querySelectorAll(':scope > tie'))) {
+                // Tools vary in which element they emit for a tie: <tie> is the sound-level
+                // element, <notations><tied> is the notation/visual-level one. Real-world files
+                // (especially OMR/scan-derived ones) sometimes carry only one of the two, so check
+                // both -- a note with both for the same tie is harmless (the second match is a
+                // no-op: 'start' overwrites with the same value, 'stop' finds nothing left to close).
+                const tieEls = child.querySelectorAll(':scope > tie, :scope > notations > tied');
+                for (const tieEl of Array.from(tieEls)) {
                   const type = tieEl.getAttribute('type');
                   if (type === 'start') {
                     // The line should bridge the gap between the two note bars, so anchor it to
