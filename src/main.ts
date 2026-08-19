@@ -19,7 +19,6 @@ interface SongEntry {
 // import.meta.env.BASE_URL (not a bare "/...") since the app is served from a subpath on
 // GitHub Pages (https://<user>.github.io/AI-Capella/) as well as from "/" in local dev.
 const BUILTIN_SONGS: SongEntry[] = [
-  { id: 'sample-satb', title: 'Alleluia (Demo SATB)', url: `${import.meta.env.BASE_URL}sample-satb.musicxml` },
   { id: 'evening-rise', title: 'Evening Rise', url: `${import.meta.env.BASE_URL}evening-rise.musicxml` },
 ];
 let importedSongs: SongEntry[] = [];
@@ -48,7 +47,10 @@ app.innerHTML = `
   </aside>
   <main id="workspace">
     <header id="song-header">
-      <h2 id="song-title">Choose a song</h2>
+      <div id="header-left">
+        <button id="library-back-btn" title="Back to library">&#8592; Library</button>
+        <h2 id="song-title">Choose a song</h2>
+      </div>
       <div id="header-right">
         <div id="position-display">—</div>
         <button id="settings-toggle" title="Hide settings" aria-expanded="true">&#9662;</button>
@@ -91,6 +93,7 @@ const importBtn = document.querySelector<HTMLButtonElement>('#import-btn')!;
 const importInput = document.querySelector<HTMLInputElement>('#import-input')!;
 const importStatusEl = document.querySelector<HTMLDivElement>('#import-status')!;
 const libraryEl = document.querySelector<HTMLElement>('#library')!;
+const libraryBackBtn = document.querySelector<HTMLButtonElement>('#library-back-btn')!;
 const songTitleEl = document.querySelector<HTMLHeadingElement>('#song-title')!;
 const positionEl = document.querySelector<HTMLDivElement>('#position-display')!;
 const settingsPanelEl = document.querySelector<HTMLDivElement>('#settings-panel')!;
@@ -127,6 +130,21 @@ function updateCanvasRect() {
   canvasLeft = canvas.getBoundingClientRect().left;
 }
 updateCanvasRect();
+
+/** The app opens on the library so you can browse/import scores; picking one switches to the player. */
+function setViewMode(mode: 'library' | 'player') {
+  app.classList.toggle('mode-library', mode === 'library');
+  app.classList.toggle('mode-player', mode === 'player');
+  if (mode === 'player') {
+    // The canvas was hidden (display:none) while in library mode, so its layout size wasn't
+    // knowable until now.
+    pianoRoll?.resize();
+    updateCanvasRect();
+    renderNow();
+  }
+}
+setViewMode('library');
+libraryBackBtn.addEventListener('click', () => setViewMode('library'));
 
 settingsToggleBtn.addEventListener('click', () => {
   const collapsed = settingsPanelEl.classList.toggle('collapsed');
@@ -275,9 +293,7 @@ async function loadSong(song: SongEntry) {
   loopBtn.disabled = false;
   updateLoopButton();
   buildPartsPanel(score);
-  pianoRoll.resize();
-  updateCanvasRect();
-  renderNow();
+  setViewMode('player');
 }
 
 function buildPartsPanel(score: Score) {
@@ -672,8 +688,7 @@ window.addEventListener('resize', () => {
 });
 
 (async () => {
-  loadSong(BUILTIN_SONGS[0]); // don't block on the shared library for the app to be usable
-
+  // The app opens on the library view (see setViewMode above); no song is auto-loaded.
   if (!isFirebaseConfigured) {
     importBtn.disabled = true;
     importBtn.title = 'Shared library not configured yet';

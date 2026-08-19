@@ -21,6 +21,45 @@ body {
   width: 100vw;
 }
 
+/* Library view: the app opens here, full-screen, so you can browse/import scores before picking
+   one. Player view (below) is what the split sidebar+canvas layout looks like once you have. */
+#app.mode-library {
+  align-items: center;
+  justify-content: center;
+}
+
+#app.mode-library #workspace {
+  display: none;
+}
+
+#app.mode-library #library {
+  width: 100%;
+  max-width: 640px;
+  max-height: 80vh;
+  border-right: none;
+  border-radius: 16px;
+  padding: 40px;
+}
+
+#app.mode-library #library h1 {
+  font-size: 28px;
+  margin-bottom: 24px;
+}
+
+#app.mode-library .song-btn {
+  font-size: 15px;
+  padding: 12px 14px;
+}
+
+#app.mode-library #import-btn {
+  margin-top: 16px;
+  padding: 12px 14px;
+}
+
+#app.mode-player #library {
+  display: none;
+}
+
 #library {
   width: 220px;
   flex-shrink: 0;
@@ -143,9 +182,30 @@ body {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+#header-left {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+
 #song-header h2 {
   margin: 0;
   font-size: 16px;
+}
+
+#library-back-btn {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#library-back-btn:hover {
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #eef0f5;
 }
 
 #header-right {
@@ -376,6 +436,11 @@ body {
     border-right: none;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     max-height: 130px;
+  }
+
+  #app.mode-library #library {
+    max-height: none;
+    padding: 32px 20px;
   }
 
   #transport {
