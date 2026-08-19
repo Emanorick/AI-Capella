@@ -5,14 +5,18 @@ export const BASE_PIXELS_PER_BEAT = 70;
 const KEYBOARD_WIDTH = 34;
 const PLAYHEAD_X_RATIO = 0.2;
 const ROW_PADDING_SEMITONES = 2;
-// Fixed row height in css px -- pitch axis scrolls instead of squeezing to fit. Tall enough for a
-// note bar plus its lyric syllable drawn below it, both fully inside the row: a bar-only row was
-// tried but even a small overlap between the lyric and the bar of an adjacent voice on the next
-// semitone (common in close choral harmony) reads as broken/misaligned, and it's less readable
-// than text sitting clearly below its note.
-const ROW_HEIGHT_PX = 30;
+// Row height in css px is the larger of MIN_ROW_HEIGHT_PX and "stretch to fill the viewport": a
+// piece whose full pitch range fits within the canvas at a comfortable size gets rows that stretch
+// to use all the available vertical space (no dead space below the lowest note, no scrolling
+// needed -- the pre-scrolling behavior). A piece with too wide a range to fit falls back to the
+// minimum and scrolls for the rest. Either way, MIN_ROW_HEIGHT_PX is tall enough for a note bar
+// plus its lyric syllable drawn below it, both fully inside the row: a bar-only row was tried but
+// even a small overlap between the lyric and the bar of an adjacent voice on the next semitone
+// (common in close choral harmony) reads as broken/misaligned, and it's less readable than text
+// sitting clearly below its note.
+const MIN_ROW_HEIGHT_PX = 30;
 const BAR_PAD_PX = 2; // gap from the top of the row to the note bar
-const BAR_HEIGHT_PX = 13; // note bar height, leaving room below it for the lyric within the same row
+const LYRIC_AREA_PX = 15; // space reserved below the bar for its lyric, within the same row
 const BLACK_KEY_PITCH_CLASSES = new Set([1, 3, 6, 8, 10]);
 const DIMMED_ALPHA = 0.5;
 const MAX_DPR = 2; // native Retina density; only caps 3x phones, doesn't soften a normal laptop screen
@@ -60,6 +64,7 @@ export class PianoRoll {
   private lyricMeasureCtx: CanvasRenderingContext2D | null = null;
   private cssWidth = 0;
   private cssHeight = 0;
+  private rowHeightPx = MIN_ROW_HEIGHT_PX;
   private scrollY = 0; // content-space px scrolled down from the top of the pitch range
   private scrollYInitialized = false;
 
@@ -133,7 +138,7 @@ export class PianoRoll {
   }
 
   private contentHeightPx(): number {
-    return (this.maxMidi - this.minMidi) * ROW_HEIGHT_PX;
+    return (this.maxMidi - this.minMidi) * this.rowHeightPx;
   }
 
   private maxScrollY(): number {
@@ -166,6 +171,9 @@ export class PianoRoll {
     this.keyboardCacheDirty = true;
     this.contentBufferDirty = true;
     this.lyricBitmaps.clear(); // cached bitmaps are baked at the old dpr
+
+    const totalRows = Math.max(1, this.maxMidi - this.minMidi);
+    this.rowHeightPx = Math.max(MIN_ROW_HEIGHT_PX, this.cssHeight / totalRows);
 
     if (!this.scrollYInitialized) {
       // Center the view on first layout rather than starting pinned to the top of the range.
@@ -203,7 +211,7 @@ export class PianoRoll {
     const ctx = this.ctx2d;
     const contentWidth = Math.max(1, width - KEYBOARD_WIDTH);
     const playheadX = this.playheadX(width);
-    const rowHeight = ROW_HEIGHT_PX;
+    const rowHeight = this.rowHeightPx;
     const contentH = this.contentHeightPx();
 
     const beatToX = (beat: number) => playheadX + (beat - currentBeat) * this.pixelsPerBeat;
@@ -396,8 +404,11 @@ export class PianoRoll {
     // notes: dimmed (non-soloed) parts first, then normal/soloed parts on top so a soloed voice's
     // color is never partially covered by an overlapping dimmed bar at the same pitch/time.
     // Batched into one fill() per part rather than per note.
-    const barH = BAR_HEIGHT_PX;
+    // The bar fills the row down to where the lyric area starts: when rows stretch to fill a tall
+    // viewport (few enough distinct pitches that the whole range fits), the bar grows with them
+    // instead of staying a thin sliver in a comparatively tall row.
     const barPad = BAR_PAD_PX;
+    const barH = Math.max(4, rowHeight - barPad * 2 - LYRIC_AREA_PX);
     const drawPart = (partId: string) => {
       const notes = this.notesByPart.get(partId);
       if (!notes || !notes.length) return;
