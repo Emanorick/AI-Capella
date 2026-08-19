@@ -1,6 +1,7 @@
-import { unzipSync, strFromU8 } from 'fflate';
+import { unzipSync, strFromU8, strToU8, gzipSync, gunzipSync } from 'fflate';
 import {
   addDoc,
+  Bytes,
   collection,
   deleteDoc,
   doc,
@@ -12,6 +13,10 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './firebase';
+
+// Firestore caps a document at 1 MiB (1,048,576 bytes) total, including field names and every
+// other field on the doc -- leave headroom below that rather than cutting it exactly at the limit.
+const MAX_COMPRESSED_XML_BYTES = 900_000;
 
 export interface StoredSong {
   id: string;
@@ -35,10 +40,13 @@ export function subscribeToSongs(callback: (songs: StoredSong[]) => void, onErro
     (snapshot) => {
       const songs: StoredSong[] = snapshot.docs.map((d) => {
         const data = d.data();
+        // xmlGz (gzip-compressed bytes) is the current format; xml (raw string) is a fallback for
+        // documents written before compression was added.
+        const xml = data.xmlGz ? strFromU8(gunzipSync((data.xmlGz as Bytes).toUint8Array())) : ((data.xml as string) ?? '');
         return {
           id: d.id,
           title: data.title as string,
-          xml: data.xml as string,
+          xml,
           importedAt: (data.importedAt as number) ?? 0,
         };
       });
@@ -51,9 +59,15 @@ export function subscribeToSongs(callback: (songs: StoredSong[]) => void, onErro
 /** Returns the new song's id (available immediately from Firestore's optimistic local write). */
 export async function saveImportedSong(song: { title: string; xml: string }): Promise<string> {
   if (!db) throw new Error('Firebase is not configured');
+  const compressed = gzipSync(strToU8(song.xml));
+  if (compressed.byteLength > MAX_COMPRESSED_XML_BYTES) {
+    throw new Error(
+      `This score is too large (${Math.round(compressed.byteLength / 1024)} KB compressed) -- Firestore caps documents at 1 MB.`,
+    );
+  }
   const docRef = await addDoc(collection(db, SONGS_COLLECTION), {
     title: song.title,
-    xml: song.xml,
+    xmlGz: Bytes.fromUint8Array(compressed),
     importedAt: Date.now(),
     createdAt: serverTimestamp(),
   });

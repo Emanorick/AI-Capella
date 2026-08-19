@@ -393,15 +393,18 @@ export class PianoRoll {
       ctx.globalAlpha = 1;
 
       // Draw each syllable from a cached bitmap instead of fillText: re-shaping/rasterizing text
-      // for every note on every buffer rebuild adds up fast.
+      // for every note on every buffer rebuild adds up fast. Drawn centered inside the note's own
+      // bar (not below it): with a fixed, small row height a voice singing the adjacent pitch at
+      // the same beat is common in close harmony, and text placed below the bar would bleed into
+      // that neighboring row instead of staying inside this note's row.
       for (const note of lyricNotes) {
         const midi = note.midi + this.transpose;
         const x = localBeatToX(note.startBeat);
         const w = note.durationBeats * this.pixelsPerBeat;
         const y = this.rowY(midi) - rowHeight;
         const bmp = this.getLyricBitmap(note.lyric!);
-        const baselineY = y + rowHeight + 11;
-        ctx.drawImage(bmp.canvas, x + w / 2 - bmp.cssWidth / 2, baselineY - (bmp.cssHeight - 3), bmp.cssWidth, bmp.cssHeight);
+        const textY = y + barPad + (barH - bmp.cssHeight) / 2;
+        ctx.drawImage(bmp.canvas, x + w / 2 - bmp.cssWidth / 2, textY, bmp.cssWidth, bmp.cssHeight);
       }
     };
     for (const part of this.score.parts) if (!this.hiddenParts.has(part.id) && this.dimmedParts.has(part.id)) drawPart(part.id);

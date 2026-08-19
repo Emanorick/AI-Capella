@@ -215,7 +215,7 @@ async function importFiles(files: FileList | File[]) {
       lastImported = { id, title, xml, imported: true };
       setImportStatus(`Imported "${title}" -- now available on every device.`);
     } catch (err) {
-      setImportStatus(`Couldn't read ${file.name}: ${err instanceof Error ? err.message : 'invalid file'}`, true);
+      setImportStatus(`Couldn't import ${file.name}: ${err instanceof Error ? err.message : 'invalid file'}`, true);
     }
   }
   // The onSnapshot listener will render the confirmed list; load the new song immediately
@@ -293,8 +293,9 @@ partsPanelEl.addEventListener('click', (e) => {
   const row = target.closest<HTMLElement>('.part-row');
   if (!row || !audioEngine || !pianoRoll) return;
   const partId = row.getAttribute('data-part')!;
-  const action = target.getAttribute('data-action') as PartMixState | null;
-  if (!action) return;
+  // Clicking anywhere in the row that isn't the Mute button solos that voice (mutes/unmutes
+  // every other voice), same as pressing its Solo button.
+  const action = (target.getAttribute('data-action') as PartMixState | null) ?? 'solo';
   const current = partMix.get(partId) ?? 'normal';
   const next: PartMixState = current === action ? 'normal' : action;
   partMix.set(partId, next);
