@@ -1,0 +1,268 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #0b0c11;
+  color: #eef0f5;
+}
+
+#app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+#library {
+  width: 220px;
+  flex-shrink: 0;
+  background: #14161e;
+  padding: 16px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  overflow-y: auto;
+}
+
+#library h1 {
+  font-size: 18px;
+  margin: 0 0 16px;
+}
+
+#library h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.5);
+  margin: 0 0 8px;
+}
+
+#song-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.song-btn {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: #eef0f5;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.song-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+#song-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+#song-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+#position-display {
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
+}
+
+#parts-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.part-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.part-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mix-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.mix-btn:hover {
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.part-row.is-muted .mute-btn {
+  background: #ff3b57;
+  color: #fff;
+  border-color: #ff3b57;
+}
+
+.part-row.is-solo .solo-btn {
+  background: #ffd166;
+  color: #14161e;
+  border-color: #ffd166;
+}
+
+#transport {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 10px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+#play-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: #4fa8ff;
+  color: #06070a;
+  font-size: 15px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+#play-btn:disabled {
+  background: rgba(255, 255, 255, 0.15);
+  cursor: default;
+}
+
+#metronome-btn {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: transparent;
+  color: #eef0f5;
+  padding: 7px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+#metronome-btn.active {
+  background: #4fd6c4;
+  color: #06070a;
+  border-color: #4fd6c4;
+}
+
+#metronome-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.transport-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.transport-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.45);
+  margin-right: 4px;
+}
+
+.bpm-btn,
+#transpose-down,
+#transpose-up {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: transparent;
+  color: #eef0f5;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.bpm-btn.active {
+  background: #4fa8ff;
+  color: #06070a;
+  border-color: #4fa8ff;
+}
+
+#transpose-value {
+  min-width: 24px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+}
+
+#roll {
+  flex: 1;
+  width: 100%;
+  display: block;
+  min-height: 0;
+}
+
+@media (max-width: 720px) {
+  #app {
+    flex-direction: column;
+    height: 100dvh;
+  }
+
+  #library {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    max-height: 130px;
+  }
+
+  #transport {
+    gap: 12px;
+  }
+}
