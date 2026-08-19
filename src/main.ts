@@ -203,6 +203,7 @@ function togglePlay() {
       fromBeat = 0;
     }
     viewOffsetBeats = 0;
+    pianoRoll?.setSeekMarker(null); // consumed once playback starts; stop drawing it every frame
     audioEngine.play(fromBeat, bpm, transpose);
     playBtn.innerHTML = '&#10074;&#10074;';
     startRenderLoop();
@@ -419,16 +420,26 @@ canvas.addEventListener('pointercancel', () => {
   canvas.classList.remove('dragging');
 });
 
+let lastPositionText = '';
+function setPositionText(text: string) {
+  // During playback this runs every animation frame; writing textContent unconditionally forces
+  // a style/layout invalidation even when the displayed string hasn't actually changed (which is
+  // most frames, since it only changes once per beat).
+  if (text === lastPositionText) return;
+  lastPositionText = text;
+  positionEl.textContent = text;
+}
+
 function updatePositionDisplay(beat: number) {
   if (!currentScore) return;
   const measure = measureAtBeat(currentScore, beat);
   if (!measure) {
-    positionEl.textContent = '—';
+    setPositionText('—');
     return;
   }
   const pulseBeats = 4 / measure.beatType;
   const beatInMeasure = Math.floor((beat - measure.startBeat) / pulseBeats) + 1;
-  positionEl.textContent = `Measure ${measure.number} · Beat ${Math.min(beatInMeasure, measure.beats)}/${measure.beats}`;
+  setPositionText(`Measure ${measure.number} · Beat ${Math.min(beatInMeasure, measure.beats)}/${measure.beats}`);
 }
 
 function renderNow() {

@@ -261,6 +261,10 @@ body {
   cursor: grab;
   user-select: none;
   min-height: 0;
+  /* Promote to its own compositor layer so repainting it during playback doesn't force the
+     browser to recomposite the rest of the page (sidebar, transport bar, etc.) every frame. */
+  will-change: transform;
+  transform: translateZ(0);
 }
 
 #roll.dragging {

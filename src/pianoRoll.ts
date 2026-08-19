@@ -7,8 +7,9 @@ const PLAYHEAD_X_RATIO = 0.2;
 const ROW_PADDING_SEMITONES = 2;
 const BLACK_KEY_PITCH_CLASSES = new Set([1, 3, 6, 8, 10]);
 const DIMMED_ALPHA = 0.5;
-const MAX_DPR = 2; // never render above this density, even on 3x phones
-const MAX_BACKING_PIXELS = 4_000_000; // total canvas budget; scales dpr down further on big low-density screens too
+const MAX_DPR = 2; // native Retina density; only caps 3x phones, doesn't soften a normal laptop screen
+const BUFFER_SPAN_MULTIPLIER = 3; // scrolling-content buffer covers this many viewport-widths of beats
+const BUFFER_REBUILD_MARGIN = 0.25; // rebuild once the playhead gets within this fraction of a viewport-width of the buffer's edge
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
 export type PartMixState = 'normal' | 'muted' | 'solo';
@@ -47,6 +48,15 @@ export class PianoRoll {
   private cssWidth = 0;
   private cssHeight = 0;
 
+  // Scrolling-content buffer: gridlines/notes/slurs pre-rendered into a wide offscreen strip.
+  // During playback only the scroll offset changes each frame -- nothing about notes' positions
+  // relative to each other -- so re-rasterizing hundreds of shapes/text every frame was wasted
+  // work. Rebuilt only when structural state changes or the playhead nears the buffered edge.
+  private contentBuffer: HTMLCanvasElement | null = null;
+  private contentBufferOriginBeat = 0;
+  private contentBufferBeatsSpan = 0;
+  private contentBufferDirty = true;
+
   constructor(canvas: HTMLCanvasElement, score: Score, partColor: (partId: string) => string) {
     this.canvas = canvas;
     this.score = score;
@@ -84,14 +94,17 @@ export class PianoRoll {
       if (state === 'muted') this.hiddenParts.add(partId);
       else if (anySolo && state !== 'solo') this.dimmedParts.add(partId);
     }
+    this.contentBufferDirty = true;
   }
 
   setTranspose(semitones: number) {
     this.transpose = semitones;
+    this.contentBufferDirty = true;
   }
 
   setZoom(factor: number) {
     this.pixelsPerBeat = BASE_PIXELS_PER_BEAT * factor;
+    this.contentBufferDirty = true;
   }
 
   getPixelsPerBeat() {
@@ -111,16 +124,13 @@ export class PianoRoll {
     const rect = this.canvas.getBoundingClientRect();
     this.cssWidth = rect.width;
     this.cssHeight = rect.height;
-
-    const desiredDpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
-    const rawPixels = rect.width * rect.height * desiredDpr * desiredDpr;
-    const budgetScale = rawPixels > MAX_BACKING_PIXELS ? Math.sqrt(MAX_BACKING_PIXELS / rawPixels) : 1;
-    this.dpr = desiredDpr * budgetScale;
+    this.dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
 
     this.canvas.width = Math.max(1, Math.round(rect.width * this.dpr));
     this.canvas.height = Math.max(1, Math.round(rect.height * this.dpr));
     this.ctx2d.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.keyboardCacheDirty = true;
+    this.contentBufferDirty = true;
     this.lyricBitmaps.clear(); // cached bitmaps are baked at the old dpr
   }
 
@@ -161,7 +171,7 @@ export class PianoRoll {
     ctx.rect(KEYBOARD_WIDTH, 0, contentWidth, height);
     ctx.clip();
 
-    // octave row shading (C rows) for a visual anchor
+    // octave row shading (C rows): scroll-independent, cheap enough to draw directly each frame
     for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
       if (((midi % 12) + 12) % 12 !== 0) continue;
       const y = this.rowY(midi, height) - rowHeight;
@@ -170,33 +180,28 @@ export class PianoRoll {
     }
 
     // loop region highlight
+    // Thin vertical markers below are drawn as fillRect, not stroke(): a 1-2px straight line is
+    // exactly representable as a filled rectangle, and stroked paths go through a much heavier
+    // rasterization path than plain rect fills in most renderers -- this was the single biggest
+    // per-frame cost during playback (a stroked 2-point playhead line, redrawn every frame).
     if (this.loopRegion) {
       const x1 = beatToX(this.loopRegion.start);
       const x2 = beatToX(this.loopRegion.end);
       ctx.fillStyle = 'rgba(79,168,255,0.14)';
       ctx.fillRect(x1, 0, x2 - x1, height);
-      ctx.strokeStyle = 'rgba(79,168,255,0.7)';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(x1, 0);
-      ctx.lineTo(x1, height);
-      ctx.moveTo(x2, 0);
-      ctx.lineTo(x2, height);
-      ctx.stroke();
+      ctx.fillStyle = 'rgba(79,168,255,0.7)';
+      ctx.fillRect(x1 - 0.75, 0, 1.5, height);
+      ctx.fillRect(x2 - 0.75, 0, 1.5, height);
     }
 
     // seek marker: where the next Play will start from, independent of the current scroll position
     if (this.seekMarkerBeat != null) {
       const x = beatToX(this.seekMarkerBeat);
       if (x >= KEYBOARD_WIDTH - 6 && x <= width + 6) {
-        ctx.strokeStyle = 'rgba(255,209,102,0.85)';
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([4, 3]);
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, height);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(255,209,102,0.85)';
+        for (let dashY = 0; dashY < height; dashY += 7) {
+          ctx.fillRect(x - 0.75, dashY, 1.5, 4);
+        }
         ctx.fillStyle = '#ffd166';
         ctx.beginPath();
         ctx.moveTo(x - 5, 0);
@@ -207,16 +212,96 @@ export class PianoRoll {
       }
     }
 
+    // Scrolling content (gridlines, notes, slurs): rebuilt only occasionally; every frame is a
+    // single cheap blit of the pre-rendered buffer at the correct scroll offset. Only the slice
+    // that actually lands in the visible content area is blitted -- the buffer itself spans
+    // several viewport-widths so it doesn't need rebuilding every frame, but drawing all of that
+    // every frame (most of which the clip would throw away anyway) defeats the point.
+    this.ensureContentBuffer(currentBeat, contentWidth, height, rowHeight);
+    if (this.contentBuffer) {
+      const destX = playheadX - (currentBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
+      const bufferCssWidth = this.contentBufferBeatsSpan * this.pixelsPerBeat;
+      const srcStartCss = Math.max(0, KEYBOARD_WIDTH - destX);
+      const srcEndCss = Math.min(bufferCssWidth, width - destX);
+      const srcWidthCss = srcEndCss - srcStartCss;
+      if (srcWidthCss > 0) {
+        ctx.drawImage(
+          this.contentBuffer,
+          srcStartCss * this.dpr,
+          0,
+          srcWidthCss * this.dpr,
+          this.contentBuffer.height,
+          destX + srcStartCss,
+          0,
+          srcWidthCss,
+          height,
+        );
+      }
+    }
+
+    // playhead
+    ctx.fillStyle = '#ff3b57';
+    ctx.fillRect(playheadX - 1, 0, 2, height);
+
+    ctx.restore();
+
+    if (this.keyboardCacheDirty || !this.keyboardCache) {
+      this.rebuildKeyboardCache(height, rowHeight);
+      this.keyboardCacheDirty = false;
+    }
+    // Blit the cached keyboard bitmap 1:1 in device pixels: the gutter never changes except on
+    // resize, so re-drawing 20-40 key rects and labels every frame was pure waste.
+    if (this.keyboardCache) {
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(this.keyboardCache, 0, 0);
+      ctx.restore();
+    }
+  }
+
+  private ensureContentBuffer(currentBeat: number, contentWidth: number, height: number, rowHeight: number) {
+    const visibleBeatsSpan = Math.max(1, contentWidth / this.pixelsPerBeat);
+    const margin = visibleBeatsSpan * BUFFER_REBUILD_MARGIN;
+    const needsRebuild =
+      this.contentBufferDirty ||
+      !this.contentBuffer ||
+      currentBeat - margin < this.contentBufferOriginBeat ||
+      currentBeat + margin > this.contentBufferOriginBeat + this.contentBufferBeatsSpan;
+    if (!needsRebuild) return;
+
+    const halfSpan = (visibleBeatsSpan * BUFFER_SPAN_MULTIPLIER) / 2;
+    const originBeat = currentBeat - halfSpan;
+    const beatsSpan = halfSpan * 2;
+    this.contentBufferOriginBeat = originBeat;
+    this.contentBufferBeatsSpan = beatsSpan;
+
+    const bufCssWidth = Math.max(1, beatsSpan * this.pixelsPerBeat);
+    const buf = this.contentBuffer ?? document.createElement('canvas');
+    buf.width = Math.max(1, Math.round(bufCssWidth * this.dpr));
+    buf.height = Math.max(1, Math.round(height * this.dpr));
+    const bctx = buf.getContext('2d');
+    if (!bctx) return;
+    bctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.paintContent(bctx, originBeat, bufCssWidth, height, rowHeight);
+    this.contentBuffer = buf;
+    this.contentBufferDirty = false;
+  }
+
+  /** Paints gridlines, notes, and slurs into a buffer strip using buffer-local (not screen) x coordinates. */
+  private paintContent(ctx: CanvasRenderingContext2D, originBeat: number, widthCss: number, heightCss: number, rowHeight: number) {
+    const localBeatToX = (beat: number) => (beat - originBeat) * this.pixelsPerBeat;
+    ctx.clearRect(0, 0, widthCss, heightCss);
+
     // beat / measure gridlines, batched into one stroke() per tier instead of one per line
     let thinPath: Path2D | null = null;
     let thickPath: Path2D | null = null;
     const measureLabels: { x: number; number: number }[] = [];
     for (const marker of this.beatMarkers) {
-      const x = beatToX(marker.beat);
-      if (x < KEYBOARD_WIDTH - 20 || x > width + 20) continue;
+      const x = localBeatToX(marker.beat);
+      if (x < -20 || x > widthCss + 20) continue;
       const path = marker.isDownbeat ? (thickPath ??= new Path2D()) : (thinPath ??= new Path2D());
       path.moveTo(x, 0);
-      path.lineTo(x, height);
+      path.lineTo(x, heightCss);
       if (marker.isDownbeat) measureLabels.push({ x, number: marker.measureNumber });
     }
     if (thinPath) {
@@ -237,7 +322,7 @@ export class PianoRoll {
 
     // notes: dimmed (non-soloed) parts first, then normal/soloed parts on top so a soloed voice's
     // color is never partially covered by an overlapping dimmed bar at the same pitch/time.
-    // Batched into one fill() (and one fillText pass) per part rather than per note.
+    // Batched into one fill() per part rather than per note.
     const barH = Math.max(rowHeight - 2, 4);
     const barPad = (rowHeight - barH) / 2;
     const drawPart = (partId: string) => {
@@ -248,10 +333,10 @@ export class PianoRoll {
       const lyricNotes: NoteEvent[] = [];
       for (const note of notes) {
         const midi = note.midi + this.transpose;
-        const x = beatToX(note.startBeat);
+        const x = localBeatToX(note.startBeat);
         const w = note.durationBeats * this.pixelsPerBeat;
-        if (x + w < KEYBOARD_WIDTH - 10 || x > width + 10) continue;
-        const y = this.rowY(midi, height) - rowHeight;
+        if (x + w < -10 || x > widthCss + 10) continue;
+        const y = this.rowY(midi, heightCss) - rowHeight;
         addRoundRectSubpath(path, x, y + barPad, Math.max(w - 2, 3), barH, 3);
         if (!dimmed && note.lyric && w > 14) lyricNotes.push(note);
       }
@@ -261,12 +346,12 @@ export class PianoRoll {
       ctx.globalAlpha = 1;
 
       // Draw each syllable from a cached bitmap instead of fillText: re-shaping/rasterizing text
-      // every frame for every visible note was the single biggest cost during playback.
+      // for every note on every buffer rebuild adds up fast.
       for (const note of lyricNotes) {
         const midi = note.midi + this.transpose;
-        const x = beatToX(note.startBeat);
+        const x = localBeatToX(note.startBeat);
         const w = note.durationBeats * this.pixelsPerBeat;
-        const y = this.rowY(midi, height) - rowHeight;
+        const y = this.rowY(midi, heightCss) - rowHeight;
         const bmp = this.getLyricBitmap(note.lyric!);
         const baselineY = y + rowHeight + 11;
         ctx.drawImage(bmp.canvas, x + w / 2 - bmp.cssWidth / 2, baselineY - (bmp.cssHeight - 3), bmp.cssWidth, bmp.cssHeight);
@@ -285,11 +370,11 @@ export class PianoRoll {
       for (const slur of slurs) {
         const startMidi = slur.startMidi + this.transpose;
         const endMidi = slur.endMidi + this.transpose;
-        const x1 = beatToX(slur.startBeat) + 2;
-        const x2 = beatToX(slur.endBeat) + 2;
-        if (x2 < KEYBOARD_WIDTH - 10 || x1 > width + 10) continue;
-        const y1 = this.rowY(startMidi, height) - rowHeight + barPad;
-        const y2 = this.rowY(endMidi, height) - rowHeight + barPad;
+        const x1 = localBeatToX(slur.startBeat) + 2;
+        const x2 = localBeatToX(slur.endBeat) + 2;
+        if (x2 < -10 || x1 > widthCss + 10) continue;
+        const y1 = this.rowY(startMidi, heightCss) - rowHeight + barPad;
+        const y2 = this.rowY(endMidi, heightCss) - rowHeight + barPad;
         const arcLift = Math.min(18, 6 + Math.abs(x2 - x1) * 0.08);
         const midX = (x1 + x2) / 2;
         const topY = Math.min(y1, y2) - arcLift;
@@ -303,29 +388,6 @@ export class PianoRoll {
       ctx.lineWidth = 1.5;
       ctx.stroke(path);
       ctx.globalAlpha = 1;
-    }
-
-    // playhead
-    ctx.strokeStyle = '#ff3b57';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(playheadX, 0);
-    ctx.lineTo(playheadX, height);
-    ctx.stroke();
-
-    ctx.restore();
-
-    if (this.keyboardCacheDirty || !this.keyboardCache) {
-      this.rebuildKeyboardCache(height, rowHeight);
-      this.keyboardCacheDirty = false;
-    }
-    // Blit the cached keyboard bitmap 1:1 in device pixels: the gutter never changes except on
-    // resize, so re-drawing 20-40 key rects and labels every frame was pure waste.
-    if (this.keyboardCache) {
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.drawImage(this.keyboardCache, 0, 0);
-      ctx.restore();
     }
   }
 
