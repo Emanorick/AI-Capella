@@ -22,19 +22,25 @@ export { db, isFirebaseConfigured };
 export function ensureSignedIn(): Promise<void> {
   if (!auth) return Promise.reject(new Error('Firebase is not configured'));
   const authInstance = auth;
+  if (authInstance.currentUser) return Promise.resolve();
   return new Promise((resolve, reject) => {
+    // Wait for the FIRST auth state callback before deciding whether to sign in: Auth's session
+    // restore from persisted storage is asynchronous, so authInstance.currentUser reads null for
+    // a moment even when a previously-signed-in anonymous user is about to be restored. Calling
+    // signInAnonymously() before that restore lands (as this used to do, by checking currentUser
+    // synchronously) creates a brand-new anonymous account on every single page load instead of
+    // reusing the persisted one.
     const unsubscribe = onAuthStateChanged(
       authInstance,
       (user) => {
+        unsubscribe();
         if (user) {
-          unsubscribe();
           resolve();
+        } else {
+          signInAnonymously(authInstance).then(() => resolve()).catch(reject);
         }
       },
       reject,
     );
-    if (!authInstance.currentUser) {
-      signInAnonymously(authInstance).catch(reject);
-    }
   });
 }
