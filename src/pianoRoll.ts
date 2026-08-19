@@ -2,7 +2,6 @@ import type { NoteEvent, Score, SlurArc } from './score';
 import { getBeatMarkers } from './score';
 
 export const BASE_PIXELS_PER_BEAT = 70;
-const KEYBOARD_WIDTH = 34;
 const PLAYHEAD_X_RATIO = 0.2;
 const ROW_PADDING_SEMITONES = 2;
 // Row height in css px is the larger of MIN_ROW_HEIGHT_PX and "stretch to fill the viewport": a
@@ -17,7 +16,6 @@ const ROW_PADDING_SEMITONES = 2;
 const MIN_ROW_HEIGHT_PX = 30;
 const BAR_PAD_PX = 2; // gap from the top of the row to the note bar
 const LYRIC_AREA_PX = 15; // space reserved below the bar for its lyric, within the same row
-const BLACK_KEY_PITCH_CLASSES = new Set([1, 3, 6, 8, 10]);
 const DIMMED_ALPHA = 0.5;
 const MAX_DPR = 2; // native Retina density; only caps 3x phones, doesn't soften a normal laptop screen
 const BUFFER_SPAN_MULTIPLIER = 3; // scrolling-content buffer covers this many viewport-widths of beats
@@ -58,8 +56,7 @@ export class PianoRoll {
   private slursByPart: Map<string, SlurArc[]>;
   private tiesByPart: Map<string, SlurArc[]>;
   private dpr = 1;
-  private keyboardCache: HTMLCanvasElement | null = null;
-  private keyboardCacheDirty = true;
+  private previewNote: { startBeat: number; midi: number } | null = null;
   private lyricBitmaps = new Map<string, { canvas: HTMLCanvasElement; cssWidth: number; cssHeight: number }>();
   private lyricMeasureCtx: CanvasRenderingContext2D | null = null;
   private cssWidth = 0;
@@ -159,6 +156,11 @@ export class PianoRoll {
     this.seekMarkerBeat = beat;
   }
 
+  /** Shows the pitch name label at a clicked note's position (or clears it, if null). */
+  setPreviewNote(note: { startBeat: number; midi: number } | null) {
+    this.previewNote = note;
+  }
+
   resize() {
     const rect = this.canvas.getBoundingClientRect();
     this.cssWidth = rect.width;
@@ -168,7 +170,6 @@ export class PianoRoll {
     this.canvas.width = Math.max(1, Math.round(rect.width * this.dpr));
     this.canvas.height = Math.max(1, Math.round(rect.height * this.dpr));
     this.ctx2d.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    this.keyboardCacheDirty = true;
     this.contentBufferDirty = true;
     this.lyricBitmaps.clear(); // cached bitmaps are baked at the old dpr
 
@@ -193,13 +194,40 @@ export class PianoRoll {
   }
 
   private playheadX(width: number): number {
-    const contentWidth = Math.max(1, width - KEYBOARD_WIDTH);
-    return KEYBOARD_WIDTH + contentWidth * PLAYHEAD_X_RATIO;
+    return width * PLAYHEAD_X_RATIO;
   }
 
   /** Inverse of the render-time beat->x mapping: canvas-local x (from the cached canvas rect) -> beat. */
   xToBeat(x: number, displayBeat: number): number {
     return displayBeat + (x - this.playheadX(this.cssWidth)) / this.pixelsPerBeat;
+  }
+
+  /** Inverse of rowY(): canvas-local y (accounting for the current vertical scroll) -> midi. */
+  private yToMidi(y: number): number {
+    const contentY = y + this.scrollY;
+    const height = this.contentHeightPx();
+    return this.minMidi + Math.floor((height - contentY) / this.rowHeightPx);
+  }
+
+  /**
+   * Finds the note (if any, among currently-visible parts) at a canvas-local point, accounting
+   * for the current transpose -- so the returned midi is the pitch that would actually sound.
+   */
+  hitTestNote(x: number, y: number, displayBeat: number): { partId: string; startBeat: number; midi: number } | null {
+    const beat = this.xToBeat(x, displayBeat);
+    const midi = this.yToMidi(y);
+    for (const part of this.score.parts) {
+      if (this.hiddenParts.has(part.id)) continue;
+      const notes = this.notesByPart.get(part.id);
+      if (!notes) continue;
+      for (const note of notes) {
+        if (note.midi + this.transpose !== midi) continue;
+        if (beat >= note.startBeat && beat < note.startBeat + note.durationBeats) {
+          return { partId: part.id, startBeat: note.startBeat, midi };
+        }
+      }
+    }
+    return null;
   }
 
   render(currentBeat: number) {
@@ -209,7 +237,6 @@ export class PianoRoll {
     const width = this.cssWidth;
     const height = this.cssHeight;
     const ctx = this.ctx2d;
-    const contentWidth = Math.max(1, width - KEYBOARD_WIDTH);
     const playheadX = this.playheadX(width);
     const rowHeight = this.rowHeightPx;
     const contentH = this.contentHeightPx();
@@ -221,7 +248,7 @@ export class PianoRoll {
 
     ctx.save();
     ctx.beginPath();
-    ctx.rect(KEYBOARD_WIDTH, 0, contentWidth, height);
+    ctx.rect(0, 0, width, height);
     ctx.clip();
 
     // loop region highlight
@@ -242,7 +269,7 @@ export class PianoRoll {
     // seek marker: where the next Play will start from, independent of the current scroll position
     if (this.seekMarkerBeat != null) {
       const x = beatToX(this.seekMarkerBeat);
-      if (x >= KEYBOARD_WIDTH - 6 && x <= width + 6) {
+      if (x >= -6 && x <= width + 6) {
         ctx.fillStyle = 'rgba(255,209,102,0.85)';
         for (let dashY = 0; dashY < height; dashY += 7) {
           ctx.fillRect(x - 0.75, dashY, 1.5, 4);
@@ -262,11 +289,11 @@ export class PianoRoll {
     // that actually lands in the visible content area is blitted -- the buffer itself spans
     // several viewport-widths so it doesn't need rebuilding every frame, but drawing all of that
     // every frame (most of which the clip would throw away anyway) defeats the point.
-    this.ensureContentBuffer(currentBeat, contentWidth, rowHeight);
+    this.ensureContentBuffer(currentBeat, width, rowHeight);
     if (this.contentBuffer) {
       const destX = playheadX - (currentBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
       const bufferCssWidth = this.contentBufferBeatsSpan * this.pixelsPerBeat;
-      const srcStartCss = Math.max(0, KEYBOARD_WIDTH - destX);
+      const srcStartCss = Math.max(0, -destX);
       const srcEndCss = Math.min(bufferCssWidth, width - destX);
       const srcWidthCss = srcEndCss - srcStartCss;
       const srcHeightCss = Math.min(height, contentH - this.scrollY);
@@ -289,34 +316,25 @@ export class PianoRoll {
     ctx.fillStyle = '#ff3b57';
     ctx.fillRect(playheadX - 1, 0, 2, height);
 
-    ctx.restore();
-
-    if (this.keyboardCacheDirty || !this.keyboardCache) {
-      this.rebuildKeyboardCache(rowHeight);
-      this.keyboardCacheDirty = false;
-    }
-    // Blit the cached keyboard bitmap, cropped to the current vertical scroll position: the
-    // gutter's content never changes except on resize, so re-drawing every key/label every frame
-    // was pure waste.
-    if (this.keyboardCache) {
-      const kcSrcHeightCss = Math.min(height, contentH - this.scrollY);
-      if (kcSrcHeightCss > 0) {
-        ctx.save();
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.drawImage(
-          this.keyboardCache,
-          0,
-          this.scrollY * this.dpr,
-          this.keyboardCache.width,
-          kcSrcHeightCss * this.dpr,
-          0,
-          0,
-          KEYBOARD_WIDTH,
-          kcSrcHeightCss,
-        );
-        ctx.restore();
+    // preview note label: set by a click on a note (see hitTestNote); shows its pitch name at the
+    // start of that note's bar. Drawn fresh each frame (not baked into the content buffer) since
+    // it's transient UI state, not part of the score.
+    if (this.previewNote) {
+      const x = beatToX(this.previewNote.startBeat);
+      const y = this.rowY(this.previewNote.midi) - rowHeight - this.scrollY;
+      if (x >= -60 && x <= width + 10 && y >= -20 && y <= height) {
+        const label = midiName(this.previewNote.midi);
+        ctx.font = 'bold 12px system-ui, sans-serif';
+        const textWidth = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(10,11,16,0.85)';
+        ctx.fillRect(x, y - 18, textWidth + 10, 16);
+        ctx.fillStyle = '#ffd166';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, x + 5, y - 10);
       }
     }
+
+    ctx.restore();
   }
 
   private ensureContentBuffer(currentBeat: number, contentWidth: number, rowHeight: number) {
@@ -529,45 +547,6 @@ export class PianoRoll {
     return entry;
   }
 
-  private rebuildKeyboardCache(rowHeight: number) {
-    const heightCss = this.contentHeightPx();
-    const kc = this.keyboardCache ?? document.createElement('canvas');
-    kc.width = Math.max(1, Math.round(KEYBOARD_WIDTH * this.dpr));
-    kc.height = Math.max(1, Math.round(heightCss * this.dpr));
-    const kctx = kc.getContext('2d');
-    if (!kctx) return;
-    kctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    this.drawKeyboard(kctx, heightCss, rowHeight);
-    this.keyboardCache = kc;
-  }
-
-  /** Fixed left-side piano keyboard spanning the full pitch range; rendered once into a cached bitmap. */
-  private drawKeyboard(ctx: CanvasRenderingContext2D, height: number, rowHeight: number) {
-    ctx.fillStyle = '#1a1c24';
-    ctx.fillRect(0, 0, KEYBOARD_WIDTH, height);
-
-    for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
-      const pc = ((midi % 12) + 12) % 12;
-      const isBlack = BLACK_KEY_PITCH_CLASSES.has(pc);
-      const y = this.rowY(midi) - rowHeight;
-      const keyWidth = isBlack ? KEYBOARD_WIDTH * 0.62 : KEYBOARD_WIDTH;
-      ctx.fillStyle = isBlack ? '#0c0d12' : '#dcdde3';
-      ctx.fillRect(0, y, keyWidth, Math.max(rowHeight - 1, 1));
-
-      if (pc === 0) {
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.font = '9px system-ui, sans-serif';
-        ctx.fillText(midiName(midi), 2, y + rowHeight - 2);
-      }
-    }
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(KEYBOARD_WIDTH, 0);
-    ctx.lineTo(KEYBOARD_WIDTH, height);
-    ctx.stroke();
-  }
 }
 
 function addRoundRectSubpath(path: Path2D, x: number, y: number, w: number, h: number, r: number) {

@@ -125,9 +125,12 @@ let loopEnabled = false;
 let rafId: number | null = null;
 let renderPending = false;
 let canvasLeft = 0;
+let canvasTop = 0;
 
 function updateCanvasRect() {
-  canvasLeft = canvas.getBoundingClientRect().left;
+  const rect = canvas.getBoundingClientRect();
+  canvasLeft = rect.left;
+  canvasTop = rect.top;
 }
 updateCanvasRect();
 
@@ -530,10 +533,13 @@ canvas.addEventListener(
   (e) => {
     if (!pianoRoll) return;
     e.preventDefault();
-    if (e.deltaX !== 0) {
-      panByBeats(e.deltaX / pianoRoll.getPixelsPerBeat());
-    } else if (e.shiftKey) {
+    if (e.shiftKey) {
       panByBeats(e.deltaY / pianoRoll.getPixelsPerBeat());
+    } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      // Trackpad gestures are rarely perfectly axis-aligned; picking whichever delta actually
+      // dominates (rather than "any nonzero deltaX means horizontal") keeps an intended vertical
+      // scroll from bleeding a little horizontal pan into the view on every tick.
+      panByBeats(e.deltaX / pianoRoll.getPixelsPerBeat());
     } else if (e.deltaY !== 0) {
       pianoRoll.scrollByPixels(e.deltaY);
       scheduleRender();
@@ -548,6 +554,7 @@ let dragStartY = 0;
 let dragLastX = 0;
 let dragLastY = 0;
 let dragMoved = false;
+let dragAxis: 'x' | 'y' | null = null;
 let loopSelectStartBeat: number | null = null;
 
 function clientXToBeat(clientX: number): number {
@@ -562,6 +569,7 @@ canvas.addEventListener('pointerdown', (e) => {
   dragLastX = e.clientX;
   dragLastY = e.clientY;
   dragMoved = false;
+  dragAxis = null;
   canvas.setPointerCapture(e.pointerId);
 
   if (e.shiftKey) {
@@ -573,7 +581,9 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 canvas.addEventListener('pointermove', (e) => {
   if (dragPointerId !== e.pointerId || !pianoRoll) return;
-  if (Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) > CLICK_DRAG_THRESHOLD_PX) dragMoved = true;
+  const totalDx = e.clientX - dragStartX;
+  const totalDy = e.clientY - dragStartY;
+  if (Math.hypot(totalDx, totalDy) > CLICK_DRAG_THRESHOLD_PX) dragMoved = true;
 
   if (loopSelectStartBeat != null) {
     const endBeat = clientXToBeat(e.clientX);
@@ -583,10 +593,14 @@ canvas.addEventListener('pointermove', (e) => {
     });
     scheduleRender();
   } else {
+    // Lock to whichever axis the drag committed to early on: real pointer movement is rarely
+    // perfectly straight, and applying both axes' deltas on every move let a drag meant as
+    // vertical-only bleed a little horizontal pan into the view (and vice versa) on every tick.
+    if (dragAxis === null && dragMoved) dragAxis = Math.abs(totalDx) > Math.abs(totalDy) ? 'x' : 'y';
     const dx = e.clientX - dragLastX;
     const dy = e.clientY - dragLastY;
-    panByBeats(-dx / pianoRoll.getPixelsPerBeat());
-    pianoRoll.scrollByPixels(-dy);
+    if (dragAxis !== 'y') panByBeats(-dx / pianoRoll.getPixelsPerBeat());
+    if (dragAxis !== 'x') pianoRoll.scrollByPixels(-dy);
     scheduleRender();
   }
   dragLastX = e.clientX;
@@ -600,8 +614,15 @@ function endDrag(e: PointerEvent) {
   if (loopSelectStartBeat != null) {
     finalizeLoopSelection(loopSelectStartBeat, clientXToBeat(e.clientX));
     loopSelectStartBeat = null;
-  } else if (!dragMoved && currentScore) {
+  } else if (!dragMoved && currentScore && pianoRoll) {
     clearLoopRegion();
+    const hit = pianoRoll.hitTestNote(e.clientX - canvasLeft, e.clientY - canvasTop, displayBeat());
+    if (hit) {
+      audioEngine?.previewNote(hit.midi);
+      pianoRoll.setPreviewNote({ startBeat: hit.startBeat, midi: hit.midi });
+    } else {
+      pianoRoll.setPreviewNote(null);
+    }
     seekToBeat(clientXToBeat(e.clientX));
   }
 }

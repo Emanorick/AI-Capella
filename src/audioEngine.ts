@@ -124,6 +124,12 @@ export class AudioEngine {
     this.applyMix();
   }
 
+  /** Plays a single short tone at the given (already-transposed) pitch, for click-to-audition. */
+  previewNote(midi: number) {
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+    playPianoNote(this.ctx, this.masterGain, this.ctx.currentTime, 0.5, midi);
+  }
+
   setMetronomeEnabled(enabled: boolean) {
     this.metronomeEnabled = enabled;
     if (this.playing) this.play(this.getCurrentBeat(), 60 / this.secPerBeat, this.lastTranspose);
