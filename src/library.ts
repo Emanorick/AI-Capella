@@ -1,4 +1,17 @@
 import { unzipSync, strFromU8 } from 'fflate';
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  type Unsubscribe,
+} from 'firebase/firestore';
+import { db } from './firebase';
 
 export interface StoredSong {
   id: string;
@@ -7,49 +20,68 @@ export interface StoredSong {
   importedAt: number;
 }
 
-const DB_NAME = 'ai-capella';
-const STORE_NAME = 'songs';
-const DB_VERSION = 1;
+const SONGS_COLLECTION = 'songs';
+const ACCESS_DOC_PATH = ['config', 'access'] as const;
 
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      req.result.createObjectStore(STORE_NAME, { keyPath: 'id' });
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+/** Live-subscribes to the shared song library; the callback fires immediately and again on every change from any device. */
+export function subscribeToSongs(callback: (songs: StoredSong[]) => void, onError: (err: unknown) => void): Unsubscribe {
+  if (!db) {
+    onError(new Error('Firebase is not configured'));
+    return () => {};
+  }
+  const q = query(collection(db, SONGS_COLLECTION), orderBy('importedAt', 'asc'));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const songs: StoredSong[] = snapshot.docs.map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          title: data.title as string,
+          xml: data.xml as string,
+          importedAt: (data.importedAt as number) ?? 0,
+        };
+      });
+      callback(songs);
+    },
+    onError,
+  );
 }
 
-export async function listImportedSongs(): Promise<StoredSong[]> {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const req = tx.objectStore(STORE_NAME).getAll();
-    req.onsuccess = () => resolve((req.result as StoredSong[]).sort((a, b) => a.importedAt - b.importedAt));
-    req.onerror = () => reject(req.error);
+/** Returns the new song's id (available immediately from Firestore's optimistic local write). */
+export async function saveImportedSong(song: { title: string; xml: string }): Promise<string> {
+  if (!db) throw new Error('Firebase is not configured');
+  const docRef = await addDoc(collection(db, SONGS_COLLECTION), {
+    title: song.title,
+    xml: song.xml,
+    importedAt: Date.now(),
+    createdAt: serverTimestamp(),
   });
-}
-
-export async function saveImportedSong(song: StoredSong): Promise<void> {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).put(song);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+  return docRef.id;
 }
 
 export async function deleteImportedSong(id: string): Promise<void> {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    tx.objectStore(STORE_NAME).delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+  if (!db) throw new Error('Firebase is not configured');
+  await deleteDoc(doc(db, SONGS_COLLECTION, id));
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const bytes = new TextEncoder().encode(text);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/** Checks a PIN against the hash stored in Firestore. This is a soft UI gate, not a real
+ *  security boundary -- see the setup notes for why that's an acceptable trade-off here. */
+export async function verifyPin(pin: string): Promise<boolean> {
+  if (!db) throw new Error('Firebase is not configured');
+  const snap = await getDoc(doc(db, ...ACCESS_DOC_PATH));
+  if (!snap.exists()) throw new Error('No PIN has been set up yet (missing config/access document)');
+  const expectedHash = snap.data().pinHash as string | undefined;
+  if (!expectedHash) throw new Error('config/access document is missing a pinHash field');
+  return (await sha256Hex(pin)) === expectedHash;
 }
 
 /** Reads a .musicxml/.xml file as-is, or unzips a compressed .mxl (MuseScore's default export format). */

@@ -4,7 +4,9 @@ import { AudioEngine, type PartMixState } from './audioEngine';
 import { PianoRoll, type LoopRegion } from './pianoRoll';
 import { colorForPartIndex } from './palette';
 import { measureAtBeat, type Score } from './score';
-import { deleteImportedSong, listImportedSongs, readScoreFile, saveImportedSong } from './library';
+import { deleteImportedSong, readScoreFile, saveImportedSong, subscribeToSongs } from './library';
+import { ensureSignedIn, isFirebaseConfigured } from './firebase';
+import { ensureAccess } from './pinGate';
 
 interface SongEntry {
   id: string;
@@ -160,9 +162,13 @@ songListEl.addEventListener('click', (e) => {
 });
 
 async function removeImportedSong(id: string) {
-  importedSongs = importedSongs.filter((s) => s.id !== id);
-  renderSongList();
-  await deleteImportedSong(id);
+  // No optimistic local removal: the shared onSnapshot listener updates `importedSongs` and
+  // re-renders for every device (including this one) once Firestore reflects the delete.
+  try {
+    await deleteImportedSong(id);
+  } catch (err) {
+    setImportStatus(`Couldn't remove song: ${err instanceof Error ? err.message : String(err)}`, true);
+  }
 }
 
 function setImportStatus(text: string, isError = false) {
@@ -171,6 +177,10 @@ function setImportStatus(text: string, isError = false) {
 }
 
 async function importFiles(files: FileList | File[]) {
+  if (!isFirebaseConfigured) {
+    setImportStatus('Shared library not configured yet.', true);
+    return;
+  }
   const list = Array.from(files).filter((f) => ACCEPTED_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext)));
   if (!list.length) {
     setImportStatus('Choose a .musicxml, .xml, or .mxl file.', true);
@@ -182,18 +192,16 @@ async function importFiles(files: FileList | File[]) {
     try {
       const xml = await readScoreFile(file);
       const score = parseMusicXML(xml); // validates the file and gives us a title
-      const id = `imported-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const title = score.title && score.title !== 'Untitled' ? score.title : file.name.replace(/\.(musicxml|xml|mxl)$/i, '');
-      await saveImportedSong({ id, title, xml, importedAt: Date.now() });
-      const entry: SongEntry = { id, title, xml, imported: true };
-      importedSongs.push(entry);
-      lastImported = entry;
-      setImportStatus(`Imported "${title}".`);
+      const id = await saveImportedSong({ title, xml });
+      lastImported = { id, title, xml, imported: true };
+      setImportStatus(`Imported "${title}" -- now available on every device.`);
     } catch (err) {
       setImportStatus(`Couldn't read ${file.name}: ${err instanceof Error ? err.message : 'invalid file'}`, true);
     }
   }
-  renderSongList();
+  // The onSnapshot listener will render the confirmed list; load the new song immediately
+  // rather than waiting on that round trip.
   if (lastImported) loadSong(lastImported);
 }
 
@@ -586,8 +594,27 @@ window.addEventListener('resize', () => {
 });
 
 (async () => {
-  const stored = await listImportedSongs();
-  importedSongs = stored.map((s) => ({ id: s.id, title: s.title, xml: s.xml, imported: true }));
-  renderSongList();
-  loadSong(BUILTIN_SONGS[0]);
+  loadSong(BUILTIN_SONGS[0]); // don't block on the shared library for the app to be usable
+
+  if (!isFirebaseConfigured) {
+    importBtn.disabled = true;
+    importBtn.title = 'Shared library not configured yet';
+    return;
+  }
+
+  try {
+    await ensureAccess(); // PIN gate; resolves immediately if already granted on this device
+    await ensureSignedIn();
+    subscribeToSongs(
+      (songs) => {
+        importedSongs = songs.map((s) => ({ id: s.id, title: s.title, xml: s.xml, imported: true }));
+        renderSongList();
+      },
+      (err) => {
+        setImportStatus(`Shared library unavailable: ${err instanceof Error ? err.message : String(err)}`, true);
+      },
+    );
+  } catch (err) {
+    setImportStatus(`Couldn't connect to the shared library: ${err instanceof Error ? err.message : String(err)}`, true);
+  }
 })();

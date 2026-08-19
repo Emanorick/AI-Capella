@@ -13,6 +13,7 @@
     "vite": "^8.2.0"
   },
   "dependencies": {
-    "fflate": "^0.8.3"
+    "fflate": "^0.8.3",
+    "firebase": "^12.17.1"
   }
 }
