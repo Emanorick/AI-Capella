@@ -52,8 +52,14 @@ body {
   gap: 4px;
 }
 
+#song-list li {
+  display: flex;
+  align-items: center;
+}
+
 .song-btn {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   text-align: left;
   background: transparent;
   border: none;
@@ -62,10 +68,64 @@ body {
   border-radius: 6px;
   cursor: pointer;
   font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .song-btn:hover {
   background: rgba(255, 255, 255, 0.08);
+}
+
+.song-delete-btn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  font-size: 16px;
+  border-radius: 5px;
+  line-height: 1;
+}
+
+.song-delete-btn:hover {
+  background: rgba(255, 59, 87, 0.2);
+  color: #ff3b57;
+}
+
+#import-btn {
+  width: 100%;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+#import-btn:hover {
+  border-color: rgba(255, 255, 255, 0.5);
+  color: #eef0f5;
+}
+
+#import-status {
+  margin-top: 6px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  min-height: 14px;
+}
+
+#import-status.error {
+  color: #ff6b7d;
+}
+
+#library.drag-over {
+  outline: 2px dashed #4fa8ff;
+  outline-offset: -2px;
 }
 
 #workspace {

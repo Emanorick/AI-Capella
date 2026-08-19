@@ -4,17 +4,24 @@ import { AudioEngine, type PartMixState } from './audioEngine';
 import { PianoRoll, type LoopRegion } from './pianoRoll';
 import { colorForPartIndex } from './palette';
 import { measureAtBeat, type Score } from './score';
+import { deleteImportedSong, listImportedSongs, readScoreFile, saveImportedSong } from './library';
 
-interface SongRef {
+interface SongEntry {
   id: string;
   title: string;
-  url: string;
+  url?: string; // built-in songs, fetched on demand
+  xml?: string; // imported songs, already in memory
+  imported?: boolean;
 }
 
-const SONGS: SongRef[] = [
-  { id: 'sample-satb', title: 'Alleluia (Demo SATB)', url: '/sample-satb.musicxml' },
-  { id: 'evening-rise', title: 'Evening Rise', url: '/evening-rise.musicxml' },
+// import.meta.env.BASE_URL (not a bare "/...") since the app is served from a subpath on
+// GitHub Pages (https://<user>.github.io/AI-Capella/) as well as from "/" in local dev.
+const BUILTIN_SONGS: SongEntry[] = [
+  { id: 'sample-satb', title: 'Alleluia (Demo SATB)', url: `${import.meta.env.BASE_URL}sample-satb.musicxml` },
+  { id: 'evening-rise', title: 'Evening Rise', url: `${import.meta.env.BASE_URL}evening-rise.musicxml` },
 ];
+let importedSongs: SongEntry[] = [];
+const ACCEPTED_EXTENSIONS = ['.musicxml', '.xml', '.mxl'];
 
 const BPM_PRESETS = [50, 80, 100, 120, 140];
 const MIN_TRANSPOSE = -7;
@@ -32,6 +39,9 @@ app.innerHTML = `
     <h1>AI-Capella</h1>
     <h2>Library</h2>
     <ul id="song-list"></ul>
+    <button id="import-btn">+ Import score</button>
+    <input id="import-input" type="file" accept=".musicxml,.xml,.mxl" multiple hidden />
+    <div id="import-status"></div>
   </aside>
   <main id="workspace">
     <header id="song-header">
@@ -65,6 +75,10 @@ app.innerHTML = `
 `;
 
 const songListEl = document.querySelector<HTMLUListElement>('#song-list')!;
+const importBtn = document.querySelector<HTMLButtonElement>('#import-btn')!;
+const importInput = document.querySelector<HTMLInputElement>('#import-input')!;
+const importStatusEl = document.querySelector<HTMLDivElement>('#import-status')!;
+const libraryEl = document.querySelector<HTMLElement>('#library')!;
 const songTitleEl = document.querySelector<HTMLHeadingElement>('#song-title')!;
 const positionEl = document.querySelector<HTMLDivElement>('#position-display')!;
 const partsPanelEl = document.querySelector<HTMLDivElement>('#parts-panel')!;
@@ -114,18 +128,94 @@ function scheduleRender() {
   });
 }
 
-songListEl.innerHTML = SONGS.map((s) => `<li data-id="${s.id}"><button class="song-btn">${s.title}</button></li>`).join('');
+function allSongs(): SongEntry[] {
+  return [...BUILTIN_SONGS, ...importedSongs];
+}
+
+function renderSongList() {
+  songListEl.innerHTML = allSongs()
+    .map(
+      (s) => `
+      <li data-id="${s.id}">
+        <button class="song-btn">${s.title}</button>
+        ${s.imported ? '<button class="song-delete-btn" title="Remove from library">&times;</button>' : ''}
+      </li>`,
+    )
+    .join('');
+}
+renderSongList();
+
 songListEl.addEventListener('click', (e) => {
-  const btn = (e.target as HTMLElement).closest('.song-btn');
-  const li = btn?.closest('li');
+  const target = e.target as HTMLElement;
+  const li = target.closest<HTMLElement>('li');
   const id = li?.getAttribute('data-id');
-  const song = SONGS.find((s) => s.id === id);
+  if (!id) return;
+
+  if (target.closest('.song-delete-btn')) {
+    void removeImportedSong(id);
+    return;
+  }
+  const song = allSongs().find((s) => s.id === id);
   if (song) loadSong(song);
 });
 
-async function loadSong(song: SongRef) {
+async function removeImportedSong(id: string) {
+  importedSongs = importedSongs.filter((s) => s.id !== id);
+  renderSongList();
+  await deleteImportedSong(id);
+}
+
+function setImportStatus(text: string, isError = false) {
+  importStatusEl.textContent = text;
+  importStatusEl.classList.toggle('error', isError);
+}
+
+async function importFiles(files: FileList | File[]) {
+  const list = Array.from(files).filter((f) => ACCEPTED_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext)));
+  if (!list.length) {
+    setImportStatus('Choose a .musicxml, .xml, or .mxl file.', true);
+    return;
+  }
+
+  let lastImported: SongEntry | null = null;
+  for (const file of list) {
+    try {
+      const xml = await readScoreFile(file);
+      const score = parseMusicXML(xml); // validates the file and gives us a title
+      const id = `imported-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const title = score.title && score.title !== 'Untitled' ? score.title : file.name.replace(/\.(musicxml|xml|mxl)$/i, '');
+      await saveImportedSong({ id, title, xml, importedAt: Date.now() });
+      const entry: SongEntry = { id, title, xml, imported: true };
+      importedSongs.push(entry);
+      lastImported = entry;
+      setImportStatus(`Imported "${title}".`);
+    } catch (err) {
+      setImportStatus(`Couldn't read ${file.name}: ${err instanceof Error ? err.message : 'invalid file'}`, true);
+    }
+  }
+  renderSongList();
+  if (lastImported) loadSong(lastImported);
+}
+
+importBtn.addEventListener('click', () => importInput.click());
+importInput.addEventListener('change', () => {
+  if (importInput.files?.length) importFiles(importInput.files);
+  importInput.value = '';
+});
+libraryEl.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  libraryEl.classList.add('drag-over');
+});
+libraryEl.addEventListener('dragleave', () => libraryEl.classList.remove('drag-over'));
+libraryEl.addEventListener('drop', (e) => {
+  e.preventDefault();
+  libraryEl.classList.remove('drag-over');
+  if (e.dataTransfer?.files.length) importFiles(e.dataTransfer.files);
+});
+
+async function loadSong(song: SongEntry) {
   stopRenderLoop();
-  const xmlText = await fetch(song.url).then((r) => r.text());
+  const xmlText: string = song.xml !== undefined ? song.xml : await fetch(song.url!).then((r) => r.text());
   const score = parseMusicXML(xmlText);
   currentScore = score;
   transpose = 0;
@@ -495,4 +585,9 @@ window.addEventListener('resize', () => {
   renderNow();
 });
 
-loadSong(SONGS[0]);
+(async () => {
+  const stored = await listImportedSongs();
+  importedSongs = stored.map((s) => ({ id: s.id, title: s.title, xml: s.xml, imported: true }));
+  renderSongList();
+  loadSong(BUILTIN_SONGS[0]);
+})();
