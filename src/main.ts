@@ -91,6 +91,28 @@ let partMix = new Map<string, PartMixState>();
 let loopRegion: LoopRegion | null = null;
 let loopEnabled = false;
 let rafId: number | null = null;
+let renderPending = false;
+let canvasLeft = 0;
+
+function updateCanvasRect() {
+  canvasLeft = canvas.getBoundingClientRect().left;
+}
+updateCanvasRect();
+
+/**
+ * Coalesces render requests to at most one per animation frame. Wheel/trackpad events and
+ * pointermove can fire far faster than the display refreshes (100+/sec during a fast swipe);
+ * rendering synchronously per event does far more repaint work than can ever be shown and was
+ * the main source of stutter while panning.
+ */
+function scheduleRender() {
+  if (renderPending) return;
+  renderPending = true;
+  requestAnimationFrame(() => {
+    renderPending = false;
+    renderNow();
+  });
+}
 
 songListEl.innerHTML = SONGS.map((s) => `<li data-id="${s.id}"><button class="song-btn">${s.title}</button></li>`).join('');
 songListEl.addEventListener('click', (e) => {
@@ -131,6 +153,7 @@ async function loadSong(song: SongRef) {
   updateLoopButton();
   buildPartsPanel(score);
   pianoRoll.resize();
+  updateCanvasRect();
   renderNow();
 }
 
@@ -277,7 +300,7 @@ function panByBeats(deltaBeats: number) {
   if (!pianoRoll) return;
   viewOffsetBeats += deltaBeats;
   clampViewOffset();
-  renderNow();
+  scheduleRender();
 }
 
 /**
@@ -341,8 +364,7 @@ let dragMoved = false;
 let loopSelectStartBeat: number | null = null;
 
 function clientXToBeat(clientX: number): number {
-  const rect = canvas.getBoundingClientRect();
-  return pianoRoll!.xToBeat(clientX - rect.left, displayBeat());
+  return pianoRoll!.xToBeat(clientX - canvasLeft, displayBeat());
 }
 
 canvas.addEventListener('pointerdown', (e) => {
@@ -370,7 +392,7 @@ canvas.addEventListener('pointermove', (e) => {
       start: Math.min(loopSelectStartBeat, endBeat),
       end: Math.max(loopSelectStartBeat, endBeat),
     });
-    renderNow();
+    scheduleRender();
   } else {
     const dx = e.clientX - dragLastX;
     panByBeats(-dx / pianoRoll.getPixelsPerBeat());
@@ -458,6 +480,7 @@ function stopRenderLoop() {
 
 window.addEventListener('resize', () => {
   pianoRoll?.resize();
+  updateCanvasRect();
   renderNow();
 });
 

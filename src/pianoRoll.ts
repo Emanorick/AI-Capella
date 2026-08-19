@@ -44,6 +44,8 @@ export class PianoRoll {
   private keyboardCacheDirty = true;
   private lyricBitmaps = new Map<string, { canvas: HTMLCanvasElement; cssWidth: number; cssHeight: number }>();
   private lyricMeasureCtx: CanvasRenderingContext2D | null = null;
+  private cssWidth = 0;
+  private cssHeight = 0;
 
   constructor(canvas: HTMLCanvasElement, score: Score, partColor: (partId: string) => string) {
     this.canvas = canvas;
@@ -107,6 +109,9 @@ export class PianoRoll {
 
   resize() {
     const rect = this.canvas.getBoundingClientRect();
+    this.cssWidth = rect.width;
+    this.cssHeight = rect.height;
+
     const desiredDpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
     const rawPixels = rect.width * rect.height * desiredDpr * desiredDpr;
     const budgetScale = rawPixels > MAX_BACKING_PIXELS ? Math.sqrt(MAX_BACKING_PIXELS / rawPixels) : 1;
@@ -130,16 +135,17 @@ export class PianoRoll {
     return KEYBOARD_WIDTH + contentWidth * PLAYHEAD_X_RATIO;
   }
 
-  /** Inverse of the render-time beat->x mapping: canvas-local x (from getBoundingClientRect) -> beat. */
+  /** Inverse of the render-time beat->x mapping: canvas-local x (from the cached canvas rect) -> beat. */
   xToBeat(x: number, displayBeat: number): number {
-    const width = this.canvas.getBoundingClientRect().width;
-    return displayBeat + (x - this.playheadX(width)) / this.pixelsPerBeat;
+    return displayBeat + (x - this.playheadX(this.cssWidth)) / this.pixelsPerBeat;
   }
 
   render(currentBeat: number) {
-    const rect = this.canvas.getBoundingClientRect();
-    const width = rect.width;
-    const height = rect.height;
+    // Cached in resize() rather than read from getBoundingClientRect() here: this runs every
+    // animation frame (and on every wheel/pointer event), and a layout read interleaved with the
+    // position-display text write each frame forces the browser into synchronous layout thrashing.
+    const width = this.cssWidth;
+    const height = this.cssHeight;
     const ctx = this.ctx2d;
     const contentWidth = Math.max(1, width - KEYBOARD_WIDTH);
     const playheadX = this.playheadX(width);
