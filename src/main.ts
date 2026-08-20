@@ -526,6 +526,11 @@ function clampViewOffset() {
 
 function panByBeats(deltaBeats: number) {
   if (!pianoRoll) return;
+  // Keep the view locked to the actual playback position while playing: panning it away is
+  // exactly what put the red line out of sync with the music (the view would show a different
+  // beat than the one actually sounding, since the line's screen x is fixed but the beat under it
+  // becomes whatever was panned to). Still allowed while paused/stopped, to browse the score.
+  if (audioEngine?.isPlaying()) return;
   viewOffsetBeats += deltaBeats;
   clampViewOffset();
   scheduleRender();
