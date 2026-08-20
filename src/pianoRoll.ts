@@ -55,7 +55,6 @@ export class PianoRoll {
   private hiddenParts = new Set<string>();
   private dimmedParts = new Set<string>();
   private loopRegion: LoopRegion | null = null;
-  private seekMarkerBeat: number | null = null;
   private beatMarkers: ReturnType<typeof getBeatMarkers>;
   private notesByPart: Map<string, NoteEvent[]>;
   private slursByPart: Map<string, SlurArc[]>;
@@ -161,11 +160,6 @@ export class PianoRoll {
     this.loopRegion = region;
   }
 
-  /** The beat a click-to-seek set as the next playback start point, shown independent of the playhead. */
-  setSeekMarker(beat: number | null) {
-    this.seekMarkerBeat = beat;
-  }
-
   /** Shows the pitch name label at a clicked note's position (or clears it, if null). */
   setPreviewNote(note: { startBeat: number; midi: number } | null) {
     this.previewNote = note;
@@ -240,7 +234,7 @@ export class PianoRoll {
     return null;
   }
 
-  render(currentBeat: number) {
+  render(displayBeat: number, playheadBeat: number) {
     // Cached in resize() rather than read from getBoundingClientRect() here: this runs every
     // animation frame (and on every wheel/pointer event), and a layout read interleaved with the
     // position-display text write each frame forces the browser into synchronous layout thrashing.
@@ -248,11 +242,15 @@ export class PianoRoll {
     const height = this.cssHeight;
     const contentAreaHeight = this.contentAreaHeight();
     const ctx = this.ctx2d;
-    const playheadX = this.playheadX(width);
+    const anchorX = this.playheadX(width);
     const rowHeight = this.rowHeightPx;
     const contentH = this.contentHeightPx();
 
-    const beatToX = (beat: number) => playheadX + (beat - currentBeat) * this.pixelsPerBeat;
+    // beatToX is anchored to displayBeat (the view's own reference point, at the fixed anchorX
+    // fraction of the width) -- everything scrolls relative to that. playheadBeat is a separate,
+    // independent beat: where the piece actually is / will resume from. The two coincide (so the
+    // red line sits right at anchorX) exactly when the view hasn't been panned away from it.
+    const beatToX = (beat: number) => anchorX + (beat - displayBeat) * this.pixelsPerBeat;
 
     ctx.fillStyle = '#12141c';
     ctx.fillRect(0, 0, width, height);
@@ -282,18 +280,6 @@ export class PianoRoll {
       if (x < -20 || x > width + 20) continue;
       ctx.fillText(String(marker.measureNumber), x + 4, 15);
     }
-    if (this.seekMarkerBeat != null) {
-      const x = beatToX(this.seekMarkerBeat);
-      if (x >= -6 && x <= width + 6) {
-        ctx.fillStyle = '#ffd166';
-        ctx.beginPath();
-        ctx.moveTo(x - 5, 2);
-        ctx.lineTo(x + 5, 2);
-        ctx.lineTo(x, 10);
-        ctx.closePath();
-        ctx.fill();
-      }
-    }
 
     ctx.save();
     ctx.beginPath();
@@ -316,23 +302,12 @@ export class PianoRoll {
       ctx.fillRect(x2 - 0.75, 0, 1.5, contentAreaHeight);
     }
 
-    // seek marker: where the next Play will start from, independent of the current scroll position
-    if (this.seekMarkerBeat != null) {
-      const x = beatToX(this.seekMarkerBeat);
-      if (x >= -6 && x <= width + 6) {
-        ctx.fillStyle = 'rgba(255,209,102,0.85)';
-        for (let dashY = 0; dashY < contentAreaHeight; dashY += 7) {
-          ctx.fillRect(x - 0.75, dashY, 1.5, 4);
-        }
-      }
-    }
-
     // Scrolling content (gridlines, notes, slurs): rebuilt only occasionally; every frame is a
     // single cheap blit of the pre-rendered buffer at the correct scroll offset. Only the slice
     // that actually lands in the visible content area is blitted -- the buffer itself spans
     // several viewport-widths so it doesn't need rebuilding every frame, but drawing all of that
     // every frame (most of which the clip would throw away anyway) defeats the point.
-    this.ensureContentBuffer(currentBeat, width, rowHeight);
+    this.ensureContentBuffer(displayBeat, width, rowHeight);
     // Self-correcting: the incremental rebuild-margin check above assumes steady, smooth beat
     // progression, but a dropped frame, a tab coming back from the background, or anything else
     // that lets the beat jump further than expected in one tick can still leave the buffer not
@@ -341,15 +316,15 @@ export class PianoRoll {
     // will really cover [0, width] and force one immediate rebuild if it won't -- this makes "the
     // buffer covers what's on screen" an invariant checked every frame instead of a hope.
     if (this.contentBuffer) {
-      const destXCheck = playheadX - (currentBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
+      const destXCheck = anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
       const bufferCssWidthCheck = this.contentBufferBeatsSpan * this.pixelsPerBeat;
       if (destXCheck > 0.5 || destXCheck + bufferCssWidthCheck < width - 0.5) {
         this.contentBufferDirty = true;
-        this.ensureContentBuffer(currentBeat, width, rowHeight);
+        this.ensureContentBuffer(displayBeat, width, rowHeight);
       }
     }
     if (this.contentBuffer) {
-      const destX = playheadX - (currentBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
+      const destX = anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
       const bufferCssWidth = this.contentBufferBeatsSpan * this.pixelsPerBeat;
       const srcStartCss = Math.max(0, -destX);
       const srcEndCss = Math.min(bufferCssWidth, width - destX);
@@ -390,9 +365,18 @@ export class PianoRoll {
 
     ctx.restore();
 
-    // playhead: drawn last, full height (ruler + content), unclipped/untranslated
-    ctx.fillStyle = '#ff3b57';
-    ctx.fillRect(playheadX - 1, 0, 2, height);
+    // playhead: always the actual current-or-paused position (playheadBeat), not necessarily
+    // displayBeat -- panning the view away from it (e.g. browsing the score while paused) is
+    // allowed, and this keeps genuinely tracking where the piece is/will resume from as you do,
+    // rather than silently relabeling whatever's under the view's fixed anchor point. So its x is
+    // recomputed from playheadBeat like anything else in the content, and it can end up off-screen
+    // if you've panned far enough away -- correct, since that position isn't visible right now.
+    // Drawn last, full height (ruler + content), unclipped/untranslated.
+    const playheadXPos = beatToX(playheadBeat);
+    if (playheadXPos >= -2 && playheadXPos <= width + 2) {
+      ctx.fillStyle = '#ff3b57';
+      ctx.fillRect(playheadXPos - 1, 0, 2, height);
+    }
   }
 
   private ensureContentBuffer(currentBeat: number, contentWidth: number, rowHeight: number) {

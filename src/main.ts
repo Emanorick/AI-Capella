@@ -398,7 +398,6 @@ function togglePlay() {
       fromBeat = 0;
     }
     viewOffsetBeats = 0;
-    pianoRoll?.setSeekMarker(null); // consumed once playback starts; stop drawing it every frame
     audioEngine.play(fromBeat, bpm, transpose);
     syncPlayButtons(true);
     startRenderLoop();
@@ -423,7 +422,6 @@ function stopPlayback() {
   audioEngine.setPausedBeat(resetBeat);
   viewOffsetBeats = 0;
   syncPlayButtons(false);
-  pianoRoll.setSeekMarker(resetBeat !== 0 && !loopRegion ? customStartBeat : null);
   renderNow();
 }
 stopBtn.addEventListener('click', stopPlayback);
@@ -551,7 +549,6 @@ function seekToBeat(beat: number) {
   }
   viewOffsetBeats += oldEngineBeat - clamped;
   clampViewOffset();
-  pianoRoll.setSeekMarker(clamped);
   renderNow();
 }
 
@@ -571,7 +568,6 @@ function finalizeLoopSelection(beatA: number, beatB: number) {
   } else {
     loopRegion = { start, end };
     loopEnabled = true;
-    pianoRoll.setSeekMarker(null);
   }
   pianoRoll.setLoopRegion(loopRegion);
   updateLoopButton();
@@ -732,7 +728,7 @@ function updatePositionDisplay(beat: number) {
 function renderNow() {
   if (!pianoRoll || !audioEngine) return;
   const beat = displayBeat();
-  pianoRoll.render(beat);
+  pianoRoll.render(beat, engineBeat());
   updatePositionDisplay(beat);
 }
 
@@ -756,13 +752,13 @@ function renderLoop() {
     audioEngine.setPausedBeat(resetBeat);
     viewOffsetBeats = 0;
     syncPlayButtons(false);
-    pianoRoll.render(resetBeat);
+    pianoRoll.render(resetBeat, resetBeat);
     updatePositionDisplay(resetBeat);
     rafId = null;
     return;
   }
 
-  pianoRoll.render(beat + viewOffsetBeats);
+  pianoRoll.render(beat + viewOffsetBeats, beat);
   updatePositionDisplay(beat + viewOffsetBeats);
   rafId = requestAnimationFrame(renderLoop);
 }
