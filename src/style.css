@@ -220,15 +220,51 @@ body {
   font-size: 13px;
 }
 
-#settings-toggle {
+#play-btn-mini,
+#stop-btn-mini {
   width: 26px;
   height: 26px;
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+#play-btn-mini:hover,
+#stop-btn-mini:hover {
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #eef0f5;
+}
+
+#play-btn-mini:disabled,
+#stop-btn-mini:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* A slim, right-aligned bar directly below the settings panel: the toggle button lives here (not
+   inside the panel) so it stays visible and clickable even while the panel itself is collapsed. */
+#settings-toggle-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+#settings-toggle {
+  width: 26px;
+  height: 18px;
+  border-radius: 0 0 6px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-top: none;
+  background: #14161e;
   color: rgba(255, 255, 255, 0.75);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1;
 }
 
@@ -327,6 +363,27 @@ body {
 
 #play-btn:disabled {
   background: rgba(255, 255, 255, 0.15);
+  cursor: default;
+}
+
+#stop-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: transparent;
+  color: #eef0f5;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+#stop-btn:hover {
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+#stop-btn:disabled {
+  opacity: 0.35;
   cursor: default;
 }
 

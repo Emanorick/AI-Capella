@@ -1,7 +1,7 @@
 import './style.css';
 import { parseMusicXML } from './musicxml';
 import { AudioEngine, type PartMixState } from './audioEngine';
-import { PianoRoll, type LoopRegion } from './pianoRoll';
+import { PianoRoll, RULER_HEIGHT_PX, type LoopRegion } from './pianoRoll';
 import { colorForPartIndex } from './palette';
 import { measureAtBeat, type Score } from './score';
 import { deleteImportedSong, readScoreFile, saveImportedSong, subscribeToSongs } from './library';
@@ -53,15 +53,17 @@ app.innerHTML = `
       </div>
       <div id="header-right">
         <div id="position-display">—</div>
-        <button id="settings-toggle" title="Hide settings" aria-expanded="true">&#9662;</button>
+        <button id="stop-btn-mini" disabled title="Stop and reset to the start">&#9632;</button>
+        <button id="play-btn-mini" disabled title="Play/Pause">&#9658;</button>
       </div>
     </header>
     <div id="settings-panel">
       <div id="parts-panel"></div>
       <div id="transport">
         <button id="play-btn" disabled>&#9658;</button>
+        <button id="stop-btn" disabled title="Stop and reset to the start">&#9632;</button>
         <button id="metronome-btn" disabled>Metronome</button>
-        <button id="loop-btn" disabled title="Shift+drag on the roll to set a loop">Loop</button>
+        <button id="loop-btn" disabled title="Drag the ruler above the roll to set a loop">Loop</button>
         <div class="transport-group" id="bpm-group">
           <span class="transport-label">BPM</span>
           ${BPM_PRESETS.map((b) => `<button class="bpm-btn" data-bpm="${b}">${b}</button>`).join('')}
@@ -84,6 +86,9 @@ app.innerHTML = `
         </div>
       </div>
     </div>
+    <div id="settings-toggle-row">
+      <button id="settings-toggle" title="Hide settings" aria-expanded="true">&#9662;</button>
+    </div>
     <canvas id="roll"></canvas>
   </main>
 `;
@@ -100,6 +105,9 @@ const settingsPanelEl = document.querySelector<HTMLDivElement>('#settings-panel'
 const settingsToggleBtn = document.querySelector<HTMLButtonElement>('#settings-toggle')!;
 const partsPanelEl = document.querySelector<HTMLDivElement>('#parts-panel')!;
 const playBtn = document.querySelector<HTMLButtonElement>('#play-btn')!;
+const playBtnMini = document.querySelector<HTMLButtonElement>('#play-btn-mini')!;
+const stopBtn = document.querySelector<HTMLButtonElement>('#stop-btn')!;
+const stopBtnMini = document.querySelector<HTMLButtonElement>('#stop-btn-mini')!;
 const metronomeBtn = document.querySelector<HTMLButtonElement>('#metronome-btn')!;
 const loopBtn = document.querySelector<HTMLButtonElement>('#loop-btn')!;
 const transposeValueEl = document.querySelector<HTMLSpanElement>('#transpose-value')!;
@@ -119,6 +127,7 @@ let transpose = 0;
 let zoom = 1;
 let viewOffsetBeats = 0;
 let metronomeOn = false;
+let customStartBeat: number | null = null; // last spot set via the ruler; Stop returns here
 let partMix = new Map<string, PartMixState>();
 let loopRegion: LoopRegion | null = null;
 let loopEnabled = false;
@@ -278,6 +287,7 @@ async function loadSong(song: SongEntry) {
   viewOffsetBeats = 0;
   loopRegion = null;
   loopEnabled = false;
+  customStartBeat = null;
 
   audioEngine = new AudioEngine(score);
   audioEngine.setDuckedVolume(duckVolume);
@@ -292,6 +302,9 @@ async function loadSong(song: SongEntry) {
 
   songTitleEl.textContent = score.title;
   playBtn.disabled = false;
+  playBtnMini.disabled = false;
+  stopBtn.disabled = false;
+  stopBtnMini.disabled = false;
   metronomeBtn.disabled = false;
   loopBtn.disabled = false;
   updateLoopButton();
@@ -362,11 +375,18 @@ partsPanelEl.addEventListener('click', (e) => {
   renderNow();
 });
 
+/** Keeps the header's compact play button and the transport's full one showing the same state. */
+function syncPlayButtons(playing: boolean) {
+  const icon = playing ? '&#10074;&#10074;' : '&#9658;';
+  playBtn.innerHTML = icon;
+  playBtnMini.innerHTML = icon;
+}
+
 function togglePlay() {
   if (!audioEngine || !currentScore || playBtn.disabled) return;
   if (audioEngine.isPlaying()) {
     audioEngine.pause();
-    playBtn.innerHTML = '&#9658;';
+    syncPlayButtons(false);
     stopRenderLoop();
   } else {
     let fromBeat = audioEngine.getPausedBeat();
@@ -378,11 +398,27 @@ function togglePlay() {
     viewOffsetBeats = 0;
     pianoRoll?.setSeekMarker(null); // consumed once playback starts; stop drawing it every frame
     audioEngine.play(fromBeat, bpm, transpose);
-    playBtn.innerHTML = '&#10074;&#10074;';
+    syncPlayButtons(true);
     startRenderLoop();
   }
 }
 playBtn.addEventListener('click', togglePlay);
+playBtnMini.addEventListener('click', togglePlay);
+
+/** Stops playback and resets to the loop region's start, the last ruler-set start point, or the beginning. */
+function stopPlayback() {
+  if (!audioEngine || !pianoRoll || stopBtn.disabled) return;
+  audioEngine.stop();
+  stopRenderLoop();
+  const target = loopRegion ? loopRegion.start : (customStartBeat ?? 0);
+  audioEngine.setPausedBeat(target);
+  viewOffsetBeats = 0;
+  syncPlayButtons(false);
+  pianoRoll.setSeekMarker(loopRegion ? null : customStartBeat);
+  renderNow();
+}
+stopBtn.addEventListener('click', stopPlayback);
+stopBtnMini.addEventListener('click', stopPlayback);
 
 window.addEventListener('keydown', (e) => {
   if (e.code !== 'Space') return;
@@ -404,11 +440,11 @@ function updateLoopButton() {
   if (loopRegion) {
     loopBtn.title = loopEnabled
       ? `Looping ${loopRegion.start.toFixed(1)}–${loopRegion.end.toFixed(1)} (click to stop there instead)`
-      : `Loop region set, off — click to loop it (shift+drag to redefine)`;
+      : `Loop region set, off — click to loop it (drag the ruler to redefine)`;
   } else {
     loopBtn.title = loopEnabled
-      ? 'Looping the whole piece (shift+drag the roll to loop a region instead)'
-      : 'Click to loop the whole piece, or shift+drag the roll to loop a region';
+      ? 'Looping the whole piece (drag the ruler above the roll to loop a region instead)'
+      : 'Click to loop the whole piece, or drag the ruler above the roll to loop a region';
   }
 }
 loopBtn.addEventListener('click', () => {
@@ -572,7 +608,9 @@ canvas.addEventListener('pointerdown', (e) => {
   dragAxis = null;
   canvas.setPointerCapture(e.pointerId);
 
-  if (e.shiftKey) {
+  // The ruler strip at the top of the roll is the only place that sets the playback start point
+  // or a loop region -- everywhere else, clicking/scrolling can't accidentally jump playback.
+  if (e.clientY - canvasTop < RULER_HEIGHT_PX) {
     loopSelectStartBeat = clientXToBeat(e.clientX);
   } else {
     loopSelectStartBeat = null;
@@ -612,10 +650,18 @@ function endDrag(e: PointerEvent) {
   canvas.classList.remove('dragging');
 
   if (loopSelectStartBeat != null) {
-    finalizeLoopSelection(loopSelectStartBeat, clientXToBeat(e.clientX));
+    if (dragMoved) {
+      finalizeLoopSelection(loopSelectStartBeat, clientXToBeat(e.clientX));
+    } else {
+      // A tap (not a drag) in the ruler just sets the start point, same as the old plain click.
+      clearLoopRegion();
+      customStartBeat = loopSelectStartBeat;
+      seekToBeat(loopSelectStartBeat);
+    }
     loopSelectStartBeat = null;
   } else if (!dragMoved && currentScore && pianoRoll) {
-    clearLoopRegion();
+    // A tap in the note area (not the ruler) only previews whatever note is under it -- it never
+    // moves playback, so casual clicks or short scrolls while playing can't jump the position.
     const hit = pianoRoll.hitTestNote(e.clientX - canvasLeft, e.clientY - canvasTop, displayBeat());
     if (hit) {
       audioEngine?.previewNote(hit.midi);
@@ -623,7 +669,6 @@ function endDrag(e: PointerEvent) {
     } else {
       pianoRoll.setPreviewNote(null);
     }
-    seekToBeat(clientXToBeat(e.clientX));
   }
 }
 canvas.addEventListener('pointerup', endDrag);
@@ -681,7 +726,7 @@ function renderLoop() {
     audioEngine.stop();
     audioEngine.setPausedBeat(resetBeat);
     viewOffsetBeats = 0;
-    playBtn.innerHTML = '&#9658;';
+    syncPlayButtons(false);
     pianoRoll.render(resetBeat);
     updatePositionDisplay(resetBeat);
     rafId = null;
@@ -707,6 +752,18 @@ window.addEventListener('resize', () => {
   updateCanvasRect();
   renderNow();
 });
+
+// Mobile browsers can change the canvas's actual laid-out size (address bar show/hide, dynamic
+// toolbar, app-switcher return) without firing a window 'resize' event -- when that happened, the
+// canvas kept rendering at its old (now stale) cssWidth/cssHeight while the element itself sat in
+// a differently-sized box, leaving raw unpainted canvas showing as a black area next to the
+// content. ResizeObserver watches the canvas's own box directly, so it catches every case.
+const canvasResizeObserver = new ResizeObserver(() => {
+  pianoRoll?.resize();
+  updateCanvasRect();
+  renderNow();
+});
+canvasResizeObserver.observe(canvas);
 
 (async () => {
   // The app opens on the library view (see setViewMode above); no song is auto-loaded.

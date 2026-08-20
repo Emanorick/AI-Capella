@@ -2,6 +2,10 @@ import type { NoteEvent, Score, SlurArc } from './score';
 import { getBeatMarkers } from './score';
 
 export const BASE_PIXELS_PER_BEAT = 70;
+// The only place a click/drag sets the playback start point or defines a loop region -- clicks in
+// the scrollable note area below are just for previewing a note's pitch, and can't accidentally
+// jump playback (a real problem before: any click during scrolling or note-preview would seek).
+export const RULER_HEIGHT_PX = 22;
 const PLAYHEAD_X_RATIO = 0.2;
 const ROW_PADDING_SEMITONES = 2;
 // Row height in css px is the larger of MIN_ROW_HEIGHT_PX and "stretch to fill the viewport": a
@@ -138,8 +142,13 @@ export class PianoRoll {
     return (this.maxMidi - this.minMidi) * this.rowHeightPx;
   }
 
+  /** The scrollable note area's own height: total canvas height minus the fixed ruler strip. */
+  private contentAreaHeight(): number {
+    return Math.max(1, this.cssHeight - RULER_HEIGHT_PX);
+  }
+
   private maxScrollY(): number {
-    return Math.max(0, this.contentHeightPx() - this.cssHeight);
+    return Math.max(0, this.contentHeightPx() - this.contentAreaHeight());
   }
 
   /** Pans the pitch axis by a delta in css px; positive scrolls down toward lower pitches. */
@@ -174,7 +183,7 @@ export class PianoRoll {
     this.lyricBitmaps.clear(); // cached bitmaps are baked at the old dpr
 
     const totalRows = Math.max(1, this.maxMidi - this.minMidi);
-    this.rowHeightPx = Math.max(MIN_ROW_HEIGHT_PX, this.cssHeight / totalRows);
+    this.rowHeightPx = Math.max(MIN_ROW_HEIGHT_PX, this.contentAreaHeight() / totalRows);
 
     if (!this.scrollYInitialized) {
       // Center the view on first layout rather than starting pinned to the top of the range.
@@ -202,9 +211,9 @@ export class PianoRoll {
     return displayBeat + (x - this.playheadX(this.cssWidth)) / this.pixelsPerBeat;
   }
 
-  /** Inverse of rowY(): canvas-local y (accounting for the current vertical scroll) -> midi. */
+  /** Inverse of rowY(): canvas-local y (accounting for the ruler strip and current vertical scroll) -> midi. */
   private yToMidi(y: number): number {
-    const contentY = y + this.scrollY;
+    const contentY = (y - RULER_HEIGHT_PX) + this.scrollY;
     const height = this.contentHeightPx();
     return this.minMidi + Math.floor((height - contentY) / this.rowHeightPx);
   }
@@ -236,6 +245,7 @@ export class PianoRoll {
     // position-display text write each frame forces the browser into synchronous layout thrashing.
     const width = this.cssWidth;
     const height = this.cssHeight;
+    const contentAreaHeight = this.contentAreaHeight();
     const ctx = this.ctx2d;
     const playheadX = this.playheadX(width);
     const rowHeight = this.rowHeightPx;
@@ -246,10 +256,49 @@ export class PianoRoll {
     ctx.fillStyle = '#12141c';
     ctx.fillRect(0, 0, width, height);
 
+    // Ruler: the only clickable strip for setting the playback start point or a loop region (see
+    // RULER_HEIGHT_PX). Fixed at the top, never scrolls vertically, but shares the same horizontal
+    // beat->x mapping as the note content below so measure numbers/markers line up with their bars.
+    ctx.fillStyle = '#181b26';
+    ctx.fillRect(0, 0, width, RULER_HEIGHT_PX);
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, RULER_HEIGHT_PX - 0.5);
+    ctx.lineTo(width, RULER_HEIGHT_PX - 0.5);
+    ctx.stroke();
+    if (this.loopRegion) {
+      const x1 = beatToX(this.loopRegion.start);
+      const x2 = beatToX(this.loopRegion.end);
+      ctx.fillStyle = 'rgba(79,168,255,0.35)';
+      ctx.fillRect(x1, 0, x2 - x1, RULER_HEIGHT_PX);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.font = 'bold 10px system-ui, sans-serif';
+    for (const marker of this.beatMarkers) {
+      if (!marker.isDownbeat) continue;
+      const x = beatToX(marker.beat);
+      if (x < -20 || x > width + 20) continue;
+      ctx.fillText(String(marker.measureNumber), x + 4, 15);
+    }
+    if (this.seekMarkerBeat != null) {
+      const x = beatToX(this.seekMarkerBeat);
+      if (x >= -6 && x <= width + 6) {
+        ctx.fillStyle = '#ffd166';
+        ctx.beginPath();
+        ctx.moveTo(x - 5, 2);
+        ctx.lineTo(x + 5, 2);
+        ctx.lineTo(x, 10);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
     ctx.save();
     ctx.beginPath();
-    ctx.rect(0, 0, width, height);
+    ctx.rect(0, RULER_HEIGHT_PX, width, contentAreaHeight);
     ctx.clip();
+    ctx.translate(0, RULER_HEIGHT_PX);
 
     // loop region highlight
     // Thin vertical markers below are drawn as fillRect, not stroke(): a 1-2px straight line is
@@ -260,10 +309,10 @@ export class PianoRoll {
       const x1 = beatToX(this.loopRegion.start);
       const x2 = beatToX(this.loopRegion.end);
       ctx.fillStyle = 'rgba(79,168,255,0.14)';
-      ctx.fillRect(x1, 0, x2 - x1, height);
+      ctx.fillRect(x1, 0, x2 - x1, contentAreaHeight);
       ctx.fillStyle = 'rgba(79,168,255,0.7)';
-      ctx.fillRect(x1 - 0.75, 0, 1.5, height);
-      ctx.fillRect(x2 - 0.75, 0, 1.5, height);
+      ctx.fillRect(x1 - 0.75, 0, 1.5, contentAreaHeight);
+      ctx.fillRect(x2 - 0.75, 0, 1.5, contentAreaHeight);
     }
 
     // seek marker: where the next Play will start from, independent of the current scroll position
@@ -271,16 +320,9 @@ export class PianoRoll {
       const x = beatToX(this.seekMarkerBeat);
       if (x >= -6 && x <= width + 6) {
         ctx.fillStyle = 'rgba(255,209,102,0.85)';
-        for (let dashY = 0; dashY < height; dashY += 7) {
+        for (let dashY = 0; dashY < contentAreaHeight; dashY += 7) {
           ctx.fillRect(x - 0.75, dashY, 1.5, 4);
         }
-        ctx.fillStyle = '#ffd166';
-        ctx.beginPath();
-        ctx.moveTo(x - 5, 0);
-        ctx.lineTo(x + 5, 0);
-        ctx.lineTo(x, 8);
-        ctx.closePath();
-        ctx.fill();
       }
     }
 
@@ -296,7 +338,7 @@ export class PianoRoll {
       const srcStartCss = Math.max(0, -destX);
       const srcEndCss = Math.min(bufferCssWidth, width - destX);
       const srcWidthCss = srcEndCss - srcStartCss;
-      const srcHeightCss = Math.min(height, contentH - this.scrollY);
+      const srcHeightCss = Math.min(contentAreaHeight, contentH - this.scrollY);
       if (srcWidthCss > 0 && srcHeightCss > 0) {
         ctx.drawImage(
           this.contentBuffer,
@@ -312,17 +354,13 @@ export class PianoRoll {
       }
     }
 
-    // playhead
-    ctx.fillStyle = '#ff3b57';
-    ctx.fillRect(playheadX - 1, 0, 2, height);
-
     // preview note label: set by a click on a note (see hitTestNote); shows its pitch name at the
     // start of that note's bar. Drawn fresh each frame (not baked into the content buffer) since
     // it's transient UI state, not part of the score.
     if (this.previewNote) {
       const x = beatToX(this.previewNote.startBeat);
       const y = this.rowY(this.previewNote.midi) - rowHeight - this.scrollY;
-      if (x >= -60 && x <= width + 10 && y >= -20 && y <= height) {
+      if (x >= -60 && x <= width + 10 && y >= -20 && y <= contentAreaHeight) {
         const label = midiName(this.previewNote.midi);
         ctx.font = 'bold 12px system-ui, sans-serif';
         const textWidth = ctx.measureText(label).width;
@@ -335,6 +373,10 @@ export class PianoRoll {
     }
 
     ctx.restore();
+
+    // playhead: drawn last, full height (ruler + content), unclipped/untranslated
+    ctx.fillStyle = '#ff3b57';
+    ctx.fillRect(playheadX - 1, 0, 2, height);
   }
 
   private ensureContentBuffer(currentBeat: number, contentWidth: number, rowHeight: number) {
@@ -391,17 +433,18 @@ export class PianoRoll {
     ctx.lineWidth = 1;
     ctx.stroke(semitonePath);
 
-    // beat / measure gridlines, batched into one stroke() per tier instead of one per line
+    // beat / measure gridlines, batched into one stroke() per tier instead of one per line. Measure
+    // numbers are drawn in the fixed ruler strip instead (see render()), not here: this buffer
+    // scrolls with pitch, so a label baked in here would scroll away with whatever voice happened
+    // to be on top when the buffer was last rebuilt.
     let thinPath: Path2D | null = null;
     let thickPath: Path2D | null = null;
-    const measureLabels: { x: number; number: number }[] = [];
     for (const marker of this.beatMarkers) {
       const x = localBeatToX(marker.beat);
       if (x < -20 || x > widthCss + 20) continue;
       const path = marker.isDownbeat ? (thickPath ??= new Path2D()) : (thinPath ??= new Path2D());
       path.moveTo(x, 0);
       path.lineTo(x, heightCss);
-      if (marker.isDownbeat) measureLabels.push({ x, number: marker.measureNumber });
     }
     if (thinPath) {
       ctx.strokeStyle = 'rgba(255,255,255,0.1)';
@@ -412,11 +455,6 @@ export class PianoRoll {
       ctx.strokeStyle = 'rgba(255,255,255,0.35)';
       ctx.lineWidth = 1.5;
       ctx.stroke(thickPath);
-    }
-    if (measureLabels.length) {
-      ctx.fillStyle = 'rgba(255,255,255,0.55)';
-      ctx.font = 'bold 11px system-ui, sans-serif';
-      for (const label of measureLabels) ctx.fillText(String(label.number), label.x + 4, 14);
     }
 
     // notes: dimmed (non-soloed) parts first, then normal/soloed parts on top so a soloed voice's
