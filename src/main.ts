@@ -34,6 +34,7 @@ const ZOOM_STEP = 1.25;
 const VIEW_EDGE_SLACK_BEATS = 2;
 const CLICK_DRAG_THRESHOLD_PX = 5;
 const MIN_LOOP_BEATS = 0.5;
+const PREVIEW_NOTE_LABEL_MS = 1200;
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
@@ -128,6 +129,7 @@ let zoom = 1;
 let viewOffsetBeats = 0;
 let metronomeOn = false;
 let customStartBeat: number | null = null; // last spot set via the ruler; Stop returns here
+let previewNoteTimeout: number | null = null;
 let partMix = new Map<string, PartMixState>();
 let loopRegion: LoopRegion | null = null;
 let loopEnabled = false;
@@ -408,13 +410,20 @@ playBtnMini.addEventListener('click', togglePlay);
 /** Stops playback and resets to the loop region's start, the last ruler-set start point, or the beginning. */
 function stopPlayback() {
   if (!audioEngine || !pianoRoll || stopBtn.disabled) return;
+  const wasPlaying = audioEngine.isPlaying();
+  const priorPausedBeat = audioEngine.getPausedBeat();
+  const target = loopRegion ? loopRegion.start : (customStartBeat ?? 0);
+  // Pressing Stop again while already stopped at the target (loop/custom start) goes the rest of
+  // the way to the very beginning, same as a media player's Stop button.
+  const alreadyAtTarget = !wasPlaying && Math.abs(priorPausedBeat - target) < 0.01;
+  const resetBeat = alreadyAtTarget ? 0 : target;
+
   audioEngine.stop();
   stopRenderLoop();
-  const target = loopRegion ? loopRegion.start : (customStartBeat ?? 0);
-  audioEngine.setPausedBeat(target);
+  audioEngine.setPausedBeat(resetBeat);
   viewOffsetBeats = 0;
   syncPlayButtons(false);
-  pianoRoll.setSeekMarker(loopRegion ? null : customStartBeat);
+  pianoRoll.setSeekMarker(resetBeat !== 0 && !loopRegion ? customStartBeat : null);
   renderNow();
 }
 stopBtn.addEventListener('click', stopPlayback);
@@ -663,12 +672,27 @@ function endDrag(e: PointerEvent) {
     // A tap in the note area (not the ruler) only previews whatever note is under it -- it never
     // moves playback, so casual clicks or short scrolls while playing can't jump the position.
     const hit = pianoRoll.hitTestNote(e.clientX - canvasLeft, e.clientY - canvasTop, displayBeat());
+    if (previewNoteTimeout != null) {
+      clearTimeout(previewNoteTimeout);
+      previewNoteTimeout = null;
+    }
     if (hit) {
       audioEngine?.previewNote(hit.midi);
       pianoRoll.setPreviewNote({ startBeat: hit.startBeat, midi: hit.midi });
+      // The label is only shown briefly, while the tone plays -- not left on screen until the
+      // next click.
+      previewNoteTimeout = window.setTimeout(() => {
+        previewNoteTimeout = null;
+        pianoRoll?.setPreviewNote(null);
+        renderNow();
+      }, PREVIEW_NOTE_LABEL_MS);
     } else {
       pianoRoll.setPreviewNote(null);
     }
+    // Unlike during playback (where the render loop repaints every frame regardless), nothing
+    // else forces a redraw while paused -- without this the tone would play but its label would
+    // never actually appear on screen until some other interaction happened to trigger one.
+    renderNow();
   }
 }
 canvas.addEventListener('pointerup', endDrag);

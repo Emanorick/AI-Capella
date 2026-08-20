@@ -201,6 +201,12 @@ export class AudioEngine {
 
   pause() {
     this.pausedBeat = this.getCurrentBeat();
+    // Suspending the context freezes its clock but does NOT cancel already-scheduled oscillators
+    // -- they just wait. If anything later resumes the context (previewNote() does, to audition a
+    // clicked note while paused), those old notes would suddenly fire in a burst, sounding like
+    // playback had resumed on its own. Clearing the schedule here removes that risk entirely; the
+    // resume-from-pause path always goes through play(), which reschedules from scratch anyway.
+    this.clearSchedule();
     this.ctx.suspend();
     this.playing = false;
   }

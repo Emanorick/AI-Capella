@@ -23,6 +23,7 @@ const LYRIC_AREA_PX = 15; // space reserved below the bar for its lyric, within 
 const DIMMED_ALPHA = 0.5;
 const MAX_DPR = 2; // native Retina density; only caps 3x phones, doesn't soften a normal laptop screen
 const BUFFER_SPAN_MULTIPLIER = 3; // scrolling-content buffer covers this many viewport-widths of beats
+const MAX_BUFFER_DEVICE_PX = 8192; // defensive cap on the content buffer's width in device px (see ensureContentBuffer)
 const BUFFER_REBUILD_MARGIN = 0.25; // rebuild once the playhead gets within this fraction of a viewport-width of the buffer's edge
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
@@ -332,6 +333,21 @@ export class PianoRoll {
     // several viewport-widths so it doesn't need rebuilding every frame, but drawing all of that
     // every frame (most of which the clip would throw away anyway) defeats the point.
     this.ensureContentBuffer(currentBeat, width, rowHeight);
+    // Self-correcting: the incremental rebuild-margin check above assumes steady, smooth beat
+    // progression, but a dropped frame, a tab coming back from the background, or anything else
+    // that lets the beat jump further than expected in one tick can still leave the buffer not
+    // actually covering the full visible width. Rather than trust that assumption blindly (which
+    // showed up in the field as a black, unpainted strip next to the content), verify the blit
+    // will really cover [0, width] and force one immediate rebuild if it won't -- this makes "the
+    // buffer covers what's on screen" an invariant checked every frame instead of a hope.
+    if (this.contentBuffer) {
+      const destXCheck = playheadX - (currentBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
+      const bufferCssWidthCheck = this.contentBufferBeatsSpan * this.pixelsPerBeat;
+      if (destXCheck > 0.5 || destXCheck + bufferCssWidthCheck < width - 0.5) {
+        this.contentBufferDirty = true;
+        this.ensureContentBuffer(currentBeat, width, rowHeight);
+      }
+    }
     if (this.contentBuffer) {
       const destX = playheadX - (currentBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
       const bufferCssWidth = this.contentBufferBeatsSpan * this.pixelsPerBeat;
@@ -389,7 +405,14 @@ export class PianoRoll {
       currentBeat + margin > this.contentBufferOriginBeat + this.contentBufferBeatsSpan;
     if (!needsRebuild) return;
 
-    const halfSpan = (visibleBeatsSpan * BUFFER_SPAN_MULTIPLIER) / 2;
+    // Cap the buffer's device-pixel width defensively: some browser/GPU combinations silently
+    // clamp or fail to paint canvases beyond roughly 16k device px on a side, which on a very
+    // wide and/or high-DPI desktop display could turn "3 viewport-widths of buffer" into a canvas
+    // larger than that. Staying comfortably under it costs a smaller (but still ample) buffer only
+    // in that extreme combination -- everywhere else this has no effect.
+    const idealHalfSpan = (visibleBeatsSpan * BUFFER_SPAN_MULTIPLIER) / 2;
+    const maxBeatsSpan = MAX_BUFFER_DEVICE_PX / this.dpr / this.pixelsPerBeat;
+    const halfSpan = Math.min(idealHalfSpan, Math.max(visibleBeatsSpan, maxBeatsSpan / 2));
     const originBeat = currentBeat - halfSpan;
     const beatsSpan = halfSpan * 2;
     this.contentBufferOriginBeat = originBeat;
