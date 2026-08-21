@@ -225,6 +225,39 @@ export class PianoRoll {
     return Math.round(x * this.dpr) / this.dpr;
   }
 
+  /**
+   * Blits the horizontal slice of a pre-rendered buffer strip (content or ruler) that actually
+   * lands within the visible [0, width] range, at the device-pixel-snapped x for displayBeat.
+   * The source rows to copy (srcYCss/heightCss) are the only thing that differs between the two
+   * buffers; all the slice math is shared. Draws at destination y=0 -- callers position
+   * vertically via a ctx translate.
+   */
+  private blitBufferSlice(
+    buffer: HTMLCanvasElement,
+    displayBeat: number,
+    anchorX: number,
+    width: number,
+    srcYCss: number,
+    heightCss: number,
+  ) {
+    const destX = this.snapToDevicePx(anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat);
+    const bufferCssWidth = this.contentBufferBeatsSpan * this.pixelsPerBeat;
+    const srcStartCss = Math.max(0, -destX);
+    const srcWidthCss = Math.min(bufferCssWidth, width - destX) - srcStartCss;
+    if (srcWidthCss <= 0 || heightCss <= 0) return;
+    this.ctx2d.drawImage(
+      buffer,
+      srcStartCss * this.dpr,
+      srcYCss * this.dpr,
+      srcWidthCss * this.dpr,
+      heightCss * this.dpr,
+      destX + srcStartCss,
+      0,
+      srcWidthCss,
+      heightCss,
+    );
+  }
+
   /** Inverse of the render-time beat->x mapping: canvas-local x (from the cached canvas rect) -> beat. */
   xToBeat(x: number, displayBeat: number): number {
     return displayBeat + (x - this.playheadX(this.cssWidth)) / this.pixelsPerBeat;
@@ -300,24 +333,7 @@ export class PianoRoll {
     // and just blitted here, same as the note content below -- see snapToDevicePx's doc comment.
     this.ensureContentBuffer(displayBeat, width, rowHeight);
     if (this.rulerBuffer) {
-      const destX = this.snapToDevicePx(anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat);
-      const bufferCssWidth = this.contentBufferBeatsSpan * this.pixelsPerBeat;
-      const srcStartCss = Math.max(0, -destX);
-      const srcEndCss = Math.min(bufferCssWidth, width - destX);
-      const srcWidthCss = srcEndCss - srcStartCss;
-      if (srcWidthCss > 0) {
-        ctx.drawImage(
-          this.rulerBuffer,
-          srcStartCss * this.dpr,
-          0,
-          srcWidthCss * this.dpr,
-          RULER_HEIGHT_PX * this.dpr,
-          destX + srcStartCss,
-          0,
-          srcWidthCss,
-          RULER_HEIGHT_PX,
-        );
-      }
+      this.blitBufferSlice(this.rulerBuffer, displayBeat, anchorX, width, 0, RULER_HEIGHT_PX);
     }
 
     ctx.save();
@@ -363,26 +379,9 @@ export class PianoRoll {
       }
     }
     if (this.contentBuffer) {
-      const destX = this.snapToDevicePx(anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat);
       const scrollYSnapped = this.snapToDevicePx(this.scrollY);
-      const bufferCssWidth = this.contentBufferBeatsSpan * this.pixelsPerBeat;
-      const srcStartCss = Math.max(0, -destX);
-      const srcEndCss = Math.min(bufferCssWidth, width - destX);
-      const srcWidthCss = srcEndCss - srcStartCss;
       const srcHeightCss = Math.min(contentAreaHeight, contentH - scrollYSnapped);
-      if (srcWidthCss > 0 && srcHeightCss > 0) {
-        ctx.drawImage(
-          this.contentBuffer,
-          srcStartCss * this.dpr,
-          scrollYSnapped * this.dpr,
-          srcWidthCss * this.dpr,
-          srcHeightCss * this.dpr,
-          destX + srcStartCss,
-          0,
-          srcWidthCss,
-          srcHeightCss,
-        );
-      }
+      this.blitBufferSlice(this.contentBuffer, displayBeat, anchorX, width, scrollYSnapped, srcHeightCss);
     }
 
     // preview note label: set by a click on a note (see hitTestNote); shows its pitch name at the
