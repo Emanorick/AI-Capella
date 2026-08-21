@@ -1,0 +1,43 @@
+rules_version = '2';
+
+// Source-of-truth security rules for the app, versioned in the repo instead of living only in
+// the Firebase console. Deploy with:  firebase deploy --only firestore:rules
+//
+// The trust model (documented in PROJECT.md and pinGate.ts) is deliberately soft: anyone who can
+// sign in anonymously is a trusted choir member; the PIN gate is UI-level only. These rules
+// therefore gate on `request.auth != null` -- but they DO validate document shape and size, so a
+// compromised or curious client can't fill the database with arbitrary junk, oversized blobs, or
+// extra fields, and can't touch anything outside the two collections the app actually uses.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Shared song library. The app creates docs with exactly these fields (library.ts) and
+    // deletes them; it never updates a song in place, so update is denied outright.
+    match /songs/{songId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['title', 'xmlGz', 'importedAt', 'createdAt'])
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 300
+        && request.resource.data.xmlGz is bytes
+        && request.resource.data.xmlGz.size() <= 950000
+        && request.resource.data.importedAt is number
+        && request.resource.data.createdAt == request.time;
+      allow update: if false;
+      allow delete: if request.auth != null;
+    }
+
+    // PIN hash for the soft access gate. Clients only ever read it (verifyPin in library.ts);
+    // the hash itself is set up once through the console or Admin SDK, never from the app.
+    match /config/access {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Everything else is off-limits, signed in or not.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
