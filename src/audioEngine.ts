@@ -91,9 +91,13 @@ export class AudioEngine {
   private metronomeEnabled = false;
   private duckedVolume = DEFAULT_DUCKED_VOLUME;
   private score: Score;
+  // Computed once per score: play() can be called many times per session (every seek, BPM,
+  // transpose, or metronome change reschedules), and the markers never change.
+  private beatMarkers: ReturnType<typeof getBeatMarkers>;
 
   constructor(score: Score) {
     this.score = score;
+    this.beatMarkers = getBeatMarkers(score);
     this.masterGain = this.ctx.createGain();
     this.masterGain.gain.value = 0.9;
 
@@ -141,10 +145,6 @@ export class AudioEngine {
     this.applyMix();
   }
 
-  getBpm() {
-    return 60 / this.secPerBeat;
-  }
-
   private applyMix() {
     const anySolo = Array.from(this.mixState.values()).some((s) => s === 'solo');
     const now = this.ctx.currentTime;
@@ -183,7 +183,11 @@ export class AudioEngine {
     for (const note of this.score.notes) {
       if (note.startBeat + note.durationBeats <= fromBeat) continue;
       const start = now + Math.max(0, note.startBeat - fromBeat) * this.secPerBeat;
-      const dur = note.durationBeats * this.secPerBeat;
+      // A note already sounding at fromBeat (seek/BPM/transpose mid-note) is retriggered from
+      // "now", so only its REMAINING beats should be scheduled -- giving it its full written
+      // duration made it end late and overlap whatever follows at its pitch.
+      const remainingBeats = note.durationBeats - Math.max(0, fromBeat - note.startBeat);
+      const dur = remainingBeats * this.secPerBeat;
       const gainNode = this.partGains.get(note.partId);
       if (!gainNode) continue;
       const nodes = playPianoNote(this.ctx, gainNode, start, dur, note.midi + transposeSemitones);
@@ -191,7 +195,7 @@ export class AudioEngine {
     }
 
     if (this.metronomeEnabled) {
-      for (const marker of getBeatMarkers(this.score)) {
+      for (const marker of this.beatMarkers) {
         if (marker.beat < fromBeat) continue;
         const start = now + (marker.beat - fromBeat) * this.secPerBeat;
         this.scheduledNodes.push(playClick(this.ctx, this.metronomeGain, start, marker.isDownbeat));
@@ -211,15 +215,23 @@ export class AudioEngine {
     this.playing = false;
   }
 
-  resume() {
-    this.ctx.resume();
-    this.playing = true;
-  }
-
   stop() {
     this.clearSchedule();
     this.pausedBeat = 0;
     this.playing = false;
+  }
+
+  /**
+   * Releases the underlying AudioContext. Each engine owns one, browsers cap how many can exist
+   * at once, and a closed context can never be resumed -- so this must be called exactly when the
+   * engine is being replaced (e.g. loading a different song), and the instance never used after.
+   */
+  dispose() {
+    this.clearSchedule();
+    this.playing = false;
+    void this.ctx.close().catch(() => {
+      // already closed / closing -- nothing to release
+    });
   }
 
   isPlaying() {

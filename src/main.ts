@@ -190,12 +190,21 @@ function allSongs(): SongEntry[] {
   return [...BUILTIN_SONGS, ...importedSongs];
 }
 
+/**
+ * Escapes text destined for an innerHTML template. Song titles and part names come from imported
+ * MusicXML files in the shared Firestore library -- i.e. from other (anonymous-auth) clients --
+ * so interpolating them raw would let one member's crafted file run script on everyone's device.
+ */
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
 function renderSongList() {
   songListEl.innerHTML = allSongs()
     .map(
       (s) => `
-      <li data-id="${s.id}">
-        <button class="song-btn">${s.title}</button>
+      <li data-id="${escapeHtml(s.id)}">
+        <button class="song-btn">${escapeHtml(s.title)}</button>
         ${s.imported ? '<button class="song-delete-btn" title="Remove from library">&times;</button>' : ''}
       </li>`,
     )
@@ -279,8 +288,21 @@ libraryEl.addEventListener('drop', (e) => {
 
 async function loadSong(song: SongEntry) {
   stopRenderLoop();
-  const xmlText: string = song.xml !== undefined ? song.xml : await fetch(song.url!).then((r) => r.text());
-  const score = parseMusicXML(xmlText);
+  let score: Score;
+  try {
+    let xmlText: string;
+    if (song.xml !== undefined) {
+      xmlText = song.xml;
+    } else {
+      const res = await fetch(song.url!);
+      if (!res.ok) throw new Error(`fetch failed (${res.status})`);
+      xmlText = await res.text();
+    }
+    score = parseMusicXML(xmlText);
+  } catch (err) {
+    setImportStatus(`Couldn't load "${song.title}": ${err instanceof Error ? err.message : String(err)}`, true);
+    return;
+  }
   currentScore = score;
   transpose = 0;
   transposeValueEl.textContent = '0';
@@ -291,6 +313,7 @@ async function loadSong(song: SongEntry) {
   loopEnabled = false;
   customStartBeat = null;
 
+  audioEngine?.dispose(); // each engine owns an AudioContext; browsers cap how many can exist
   audioEngine = new AudioEngine(score);
   audioEngine.setDuckedVolume(duckVolume);
   pianoRoll = new PianoRoll(canvas, score, (partId) => {
@@ -319,9 +342,9 @@ function buildPartsPanel(score: Score) {
     .map((p, idx) => {
       const color = colorForPartIndex(idx);
       return `
-      <div class="part-row" data-part="${p.id}">
+      <div class="part-row" data-part="${escapeHtml(p.id)}">
         <span class="swatch" style="background:${color}"></span>
-        <span class="part-name">${p.name}</span>
+        <span class="part-name">${escapeHtml(p.name)}</span>
         <button class="mix-btn mute-btn" data-action="muted">M</button>
         <button class="mix-btn solo-btn" data-action="solo">S</button>
       </div>`;
