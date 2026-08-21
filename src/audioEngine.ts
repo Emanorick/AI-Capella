@@ -3,6 +3,7 @@ import { getBeatMarkers } from './score';
 
 const DEFAULT_DUCKED_VOLUME = 0.25; // default level for non-soloed parts when at least one part is soloed
 const RELEASE_TIME = 0.25;
+const MIN_NOTE_DURATION_SEC = 0.02; // floor so a zero/near-zero-duration note can't collide two automation events at the same time
 
 function midiToFreq(midi: number): number {
   return 440 * Math.pow(2, (midi - 69) / 12);
@@ -173,7 +174,10 @@ export class AudioEngine {
   play(fromBeat: number, bpm: number, transposeSemitones: number) {
     this.clearSchedule();
     if (this.ctx.state === 'suspended') this.ctx.resume();
-    this.secPerBeat = 60 / bpm;
+    // A non-finite/non-positive bpm would make every downstream time calculation NaN/Infinity;
+    // fall back to the last known-good tempo rather than propagating that into the scheduling
+    // below (see the note-loop guard for why a single bad value must never abort the whole loop).
+    this.secPerBeat = Number.isFinite(bpm) && bpm > 0 ? 60 / bpm : this.secPerBeat;
     this.lastTranspose = transposeSemitones;
     const now = this.ctx.currentTime + 0.06;
     this.playStartCtxTime = now;
@@ -181,20 +185,37 @@ export class AudioEngine {
     this.playing = true;
 
     for (const note of this.score.notes) {
+      // A note with a non-finite (or otherwise unschedulable) start/duration -- e.g. from a
+      // malformed source file -- would make `start`/`dur` below NaN or Infinity, which Web Audio
+      // rejects by throwing synchronously. Since that throw would happen partway through this
+      // loop, it wouldn't just skip the one bad note: it would abort scheduling for every note
+      // after it too, while `this.playing` above has already flipped to true -- silence, with no
+      // way to recover short of reloading the page. Skip anything unschedulable up front, and
+      // belt-and-suspenders wrap the actual scheduling call too, so one bad note can never take
+      // the rest of the piece down with it.
+      if (!Number.isFinite(note.startBeat) || !Number.isFinite(note.durationBeats)) continue;
       if (note.startBeat + note.durationBeats <= fromBeat) continue;
       const start = now + Math.max(0, note.startBeat - fromBeat) * this.secPerBeat;
-      const dur = note.durationBeats * this.secPerBeat;
+      const dur = Math.max(MIN_NOTE_DURATION_SEC, note.durationBeats * this.secPerBeat);
       const gainNode = this.partGains.get(note.partId);
       if (!gainNode) continue;
-      const nodes = playPianoNote(this.ctx, gainNode, start, dur, note.midi + transposeSemitones);
-      this.scheduledNodes.push(...nodes);
+      try {
+        const nodes = playPianoNote(this.ctx, gainNode, start, dur, note.midi + transposeSemitones);
+        this.scheduledNodes.push(...nodes);
+      } catch (err) {
+        console.error('Skipping a note that could not be scheduled:', note, err);
+      }
     }
 
     if (this.metronomeEnabled) {
       for (const marker of getBeatMarkers(this.score)) {
-        if (marker.beat < fromBeat) continue;
+        if (!Number.isFinite(marker.beat) || marker.beat < fromBeat) continue;
         const start = now + (marker.beat - fromBeat) * this.secPerBeat;
-        this.scheduledNodes.push(playClick(this.ctx, this.metronomeGain, start, marker.isDownbeat));
+        try {
+          this.scheduledNodes.push(playClick(this.ctx, this.metronomeGain, start, marker.isDownbeat));
+        } catch (err) {
+          console.error('Skipping a metronome click that could not be scheduled:', marker, err);
+        }
       }
     }
   }

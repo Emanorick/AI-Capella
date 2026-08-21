@@ -85,6 +85,7 @@ export function parseMIDI(buffer: ArrayBuffer): Score {
   const numTracks = reader.u16();
   const division = reader.u16();
   if (division & 0x8000) throw new Error('SMPTE-timecode MIDI files are not supported');
+  if (division === 0) throw new Error('Invalid MIDI file: ticks-per-quarter-note (division) is zero');
   const ticksPerQuarter = division;
   reader.pos = headerEnd; // tolerate a header chunk longer than the 6 bytes we read
 
