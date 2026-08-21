@@ -131,25 +131,35 @@ AI-Capella/
 ├── public/
 │   └── evening-rise.musicxml   # bundled sample score
 ├── src/
-│   ├── main.ts              # app shell, event wiring, transport/mix state, render loop
+│   ├── main.ts              # app shell: DOM scaffold and event wiring only
+│   ├── player.ts             # Player controller: playback/view state, transport, render loop
+│   ├── libraryView.ts         # library sidebar: song list, import flow, lazy Firebase bootstrap
+│   ├── canvasInput.ts         # wheel/pointer interaction on the roll canvas
 │   ├── musicxml.ts           # MusicXML → Score parser
+│   ├── musicxml.test.ts       # Vitest suite for the parser
 │   ├── score.ts              # the Score data model + small pure helpers
+│   ├── score.test.ts          # Vitest suite for the score helpers
 │   ├── pianoRoll.ts           # canvas rendering: the piano roll itself
 │   ├── audioEngine.ts         # Web Audio synthesis + playback scheduling
 │   ├── palette.ts             # deterministic per-voice color assignment
-│   ├── library.ts             # Firestore-backed shared song storage, PIN verification, .mxl unzip
+│   ├── scoreFile.ts           # reading .musicxml/.xml/.mxl files (fflate unzip)
+│   ├── escapeHtml.ts          # escaping for untrusted strings in innerHTML templates
+│   ├── library.ts             # Firestore-backed shared song storage, PIN verification
 │   ├── firebase.ts            # Firebase app/auth/Firestore initialization, anonymous sign-in
 │   ├── firebaseConfig.ts      # Firebase web app config (not secret; see file comment)
 │   ├── pinGate.ts             # the full-screen PIN prompt overlay
 │   └── style.css              # all styling
 ├── .github/workflows/deploy.yml   # builds and deploys dist/ to GitHub Pages on every push
-├── vite.config.ts             # sets base: '/AI-Capella/' for GitHub Pages' subpath hosting
+├── firestore.rules             # Firestore security rules (deploy: firebase deploy --only firestore:rules)
+├── firebase.json               # Firebase CLI config pointing at firestore.rules
+├── vite.config.ts             # sets base: '/AI-Capella/' for GitHub Pages' subpath hosting; Vitest config
 ├── tsconfig.json
 └── package.json
 ```
 
-No test suite, no server code, no bundler plugins beyond stock Vite + TypeScript. The entire
-app is a single-page client-side bundle.
+Unit tests (Vitest + jsdom) cover the parser and score helpers: `npm test`. No server code,
+no bundler plugins beyond stock Vite + TypeScript. The app is client-side only; the Firebase
+machinery is code-split behind a dynamic import so the initial bundle stays small.
 
 ---
 
