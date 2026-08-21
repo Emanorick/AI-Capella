@@ -109,8 +109,9 @@ Solo buttons:
   your part with nothing else at all.
 
 ### Import & shared library
-- Drag-and-drop or file-picker import of `.musicxml`, `.xml`, or `.mxl` (MuseScore's
-  zip-compressed export format — unzipped client-side via `fflate`, see §4.2).
+- Drag-and-drop or file-picker import of `.musicxml`, `.xml`, `.mxl` (MuseScore's
+  zip-compressed export format — unzipped client-side via `fflate`), or a standard MIDI file
+  (`.mid`/`.midi`, format 0/1/2 — parsed entirely client-side, no conversion service; see §4.2).
 - Imported scores are gzip-compressed and written to a shared Firestore collection, so
   everyone using the app (any device, any browser) sees the same library in real time via a
   live `onSnapshot` subscription — no manual refresh, no per-device storage.
@@ -133,6 +134,7 @@ AI-Capella/
 ├── src/
 │   ├── main.ts              # app shell, event wiring, transport/mix state, render loop
 │   ├── musicxml.ts           # MusicXML → Score parser
+│   ├── midi.ts                # Standard MIDI file → Score parser
 │   ├── score.ts              # the Score data model + small pure helpers
 │   ├── pianoRoll.ts           # canvas rendering: the piano roll itself
 │   ├── audioEngine.ts         # Web Audio synthesis + playback scheduling
@@ -178,7 +180,7 @@ seconds, never MusicXML's raw `<duration>` divisions. Seconds only enter the pic
 offset using the current BPM. This is what makes changing BPM live trivial: nothing about the
 score model or the rendering math depends on tempo at all.
 
-### 4.2 Parsing (`musicxml.ts`, `library.ts`)
+### 4.2 Parsing (`musicxml.ts`, `midi.ts`, `library.ts`)
 
 `parseMusicXML` walks a `score-partwise` MusicXML document part-by-part, measure-by-measure,
 tracking a `cursor` (in beats) that advances with each `<note>` and rewinds/advances on
@@ -197,6 +199,22 @@ handles:
 `.mxl` files (MuseScore's default export — a zip containing the MusicXML plus a
 `META-INF/container.xml` manifest) are unzipped client-side in `library.ts` using `fflate`,
 reading the manifest to find the actual score file inside the archive.
+
+**MIDI import** (`midi.ts`) is a from-scratch standard MIDI file (SMF) reader — no external
+library — supporting format 0, 1, and 2 files, running status, and both text/lyric meta-event
+conventions. It parses directly into the same `Score` model, notably *without* going through
+MusicXML at all: a MIDI note is already a plain numeric pitch (0–127, and note 60 = C4 in both
+MIDI's own numbering and this app's `midi` field), so there's no step/alter "spelling" to
+reconstruct the way a MusicXML writer would need. Each MIDI track becomes a voice/part (named
+from its Sequence/Track Name meta event, or "Track N"; a track using more than one channel is
+split further, one part per channel); Lyric (and Text) meta events are attached to whichever
+note-on comes next in that track, matching the common karaoke-MIDI convention; Time Signature
+meta events drive the same measure-boundary construction MusicXML import does. A MIDI file's own
+tempo (Set Tempo meta events) is read only far enough to be skipped — like MusicXML, tempo
+always comes from the app's own BPM control, never the source file. Because the resulting
+`Score` has no natural MusicXML-equivalent text form worth manufacturing, MIDI imports are
+stored in the shared library as a JSON-serialized `Score` rather than XML text — see
+`StoredSong.format` in `library.ts`, which every load path branches on.
 
 ### 4.3 Rendering (`pianoRoll.ts`)
 

@@ -1,10 +1,11 @@
 import './style.css';
 import { parseMusicXML } from './musicxml';
+import { parseMIDI } from './midi';
 import { AudioEngine, type PartMixState } from './audioEngine';
 import { PianoRoll, RULER_HEIGHT_PX, type LoopRegion } from './pianoRoll';
 import { colorForPartIndex } from './palette';
 import { measureAtBeat, type Score } from './score';
-import { deleteImportedSong, readScoreFile, saveImportedSong, subscribeToSongs } from './library';
+import { deleteImportedSong, readScoreFile, saveImportedSong, subscribeToSongs, type SongFormat } from './library';
 import { ensureSignedIn, isFirebaseConfigured } from './firebase';
 import { ensureAccess } from './pinGate';
 
@@ -13,6 +14,7 @@ interface SongEntry {
   title: string;
   url?: string; // built-in songs, fetched on demand
   xml?: string; // imported songs, already in memory
+  format?: SongFormat; // only meaningful alongside `xml`; built-in songs are always MusicXML
   imported?: boolean;
 }
 
@@ -22,7 +24,8 @@ const BUILTIN_SONGS: SongEntry[] = [
   { id: 'evening-rise', title: 'Evening Rise', url: `${import.meta.env.BASE_URL}evening-rise.musicxml` },
 ];
 let importedSongs: SongEntry[] = [];
-const ACCEPTED_EXTENSIONS = ['.musicxml', '.xml', '.mxl'];
+const ACCEPTED_EXTENSIONS = ['.musicxml', '.xml', '.mxl', '.mid', '.midi'];
+const MIDI_EXTENSIONS = ['.mid', '.midi'];
 
 const BPM_PRESETS = [50, 80, 100, 120, 140];
 const DUCK_VOLUME_PRESETS = [0.1, 0.25, 0.5, 0.75];
@@ -43,7 +46,7 @@ app.innerHTML = `
     <h2>Library</h2>
     <ul id="song-list"></ul>
     <button id="import-btn">+ Import score</button>
-    <input id="import-input" type="file" accept=".musicxml,.xml,.mxl" multiple hidden />
+    <input id="import-input" type="file" accept=".musicxml,.xml,.mxl,.mid,.midi" multiple hidden />
     <div id="import-status"></div>
   </aside>
   <main id="workspace">
@@ -246,11 +249,26 @@ async function importFiles(files: FileList | File[]) {
   let lastImported: SongEntry | null = null;
   for (const file of list) {
     try {
-      const xml = await readScoreFile(file);
-      const score = parseMusicXML(xml); // validates the file and gives us a title
-      const title = score.title && score.title !== 'Untitled' ? score.title : file.name.replace(/\.(musicxml|xml|mxl)$/i, '');
-      const id = await saveImportedSong({ title, xml });
-      lastImported = { id, title, xml, imported: true };
+      const isMidi = MIDI_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext));
+      let title: string;
+      let xml: string;
+      let format: SongFormat;
+      if (isMidi) {
+        // MIDI notes are already plain numeric pitches with no notation-level spelling to
+        // reconstruct, so this stores the parsed Score directly (as JSON) rather than forcing it
+        // through a synthetic MusicXML round-trip that would only add a lossy conversion step.
+        const score = parseMIDI(await file.arrayBuffer());
+        title = score.title && score.title !== 'Untitled' ? score.title : file.name.replace(/\.(mid|midi)$/i, '');
+        xml = JSON.stringify(score);
+        format = 'score';
+      } else {
+        xml = await readScoreFile(file);
+        const score = parseMusicXML(xml); // validates the file and gives us a title
+        title = score.title && score.title !== 'Untitled' ? score.title : file.name.replace(/\.(musicxml|xml|mxl)$/i, '');
+        format = 'musicxml';
+      }
+      const id = await saveImportedSong({ title, xml, format });
+      lastImported = { id, title, xml, format, imported: true };
       setImportStatus(`Imported "${title}" -- now available on every device.`);
     } catch (err) {
       setImportStatus(`Couldn't import ${file.name}: ${err instanceof Error ? err.message : 'invalid file'}`, true);
@@ -280,7 +298,9 @@ libraryEl.addEventListener('drop', (e) => {
 async function loadSong(song: SongEntry) {
   stopRenderLoop();
   const xmlText: string = song.xml !== undefined ? song.xml : await fetch(song.url!).then((r) => r.text());
-  const score = parseMusicXML(xmlText);
+  // Built-in songs (fetched by URL) and imported MusicXML/.mxl files are MusicXML text; MIDI
+  // imports were already parsed into a Score at import time and stored as its JSON serialization.
+  const score: Score = song.format === 'score' ? (JSON.parse(xmlText) as Score) : parseMusicXML(xmlText);
   currentScore = score;
   transpose = 0;
   transposeValueEl.textContent = '0';
@@ -805,7 +825,7 @@ canvasResizeObserver.observe(canvas);
     await ensureAccess(); // PIN gate; resolves immediately if already granted on this device
     subscribeToSongs(
       (songs) => {
-        importedSongs = songs.map((s) => ({ id: s.id, title: s.title, xml: s.xml, imported: true }));
+        importedSongs = songs.map((s) => ({ id: s.id, title: s.title, xml: s.xml, format: s.format, imported: true }));
         renderSongList();
       },
       (err) => {

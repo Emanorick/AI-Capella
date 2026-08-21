@@ -18,10 +18,17 @@ import { db } from './firebase';
 // other field on the doc -- leave headroom below that rather than cutting it exactly at the limit.
 const MAX_COMPRESSED_XML_BYTES = 900_000;
 
+export type SongFormat = 'musicxml' | 'score';
+
 export interface StoredSong {
   id: string;
   title: string;
+  // MusicXML markup when format is 'musicxml'; a JSON-serialized Score (see score.ts) when
+  // format is 'score' -- MIDI imports go this route since MIDI notes are already plain numeric
+  // pitches with no notation-level spelling to encode, so round-tripping them through MusicXML
+  // text would only add a lossy, unnecessary conversion step.
   xml: string;
+  format: SongFormat;
   importedAt: number;
 }
 
@@ -47,6 +54,9 @@ export function subscribeToSongs(callback: (songs: StoredSong[]) => void, onErro
           id: d.id,
           title: data.title as string,
           xml,
+          // Documents written before MIDI import existed have no format field; they're always
+          // MusicXML.
+          format: ((data.format as SongFormat | undefined) ?? 'musicxml') as SongFormat,
           importedAt: (data.importedAt as number) ?? 0,
         };
       });
@@ -57,7 +67,7 @@ export function subscribeToSongs(callback: (songs: StoredSong[]) => void, onErro
 }
 
 /** Returns the new song's id (available immediately from Firestore's optimistic local write). */
-export async function saveImportedSong(song: { title: string; xml: string }): Promise<string> {
+export async function saveImportedSong(song: { title: string; xml: string; format: SongFormat }): Promise<string> {
   if (!db) throw new Error('Firebase is not configured');
   const compressed = gzipSync(strToU8(song.xml));
   if (compressed.byteLength > MAX_COMPRESSED_XML_BYTES) {
@@ -68,6 +78,7 @@ export async function saveImportedSong(song: { title: string; xml: string }): Pr
   const docRef = await addDoc(collection(db, SONGS_COLLECTION), {
     title: song.title,
     xmlGz: Bytes.fromUint8Array(compressed),
+    format: song.format,
     importedAt: Date.now(),
     createdAt: serverTimestamp(),
   });
