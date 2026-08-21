@@ -4,9 +4,17 @@ import { AudioEngine, type PartMixState } from './audioEngine';
 import { PianoRoll, RULER_HEIGHT_PX, type LoopRegion } from './pianoRoll';
 import { colorForPartIndex } from './palette';
 import { measureAtBeat, type Score } from './score';
-import { deleteImportedSong, readScoreFile, saveImportedSong, subscribeToSongs } from './library';
-import { ensureSignedIn, isFirebaseConfigured } from './firebase';
-import { ensureAccess } from './pinGate';
+import { readScoreFile } from './scoreFile';
+import { isFirebaseConfigured } from './firebaseConfig';
+
+// The Firebase SDK dominates the bundle but is only needed for the shared library, so
+// library.ts/firebase.ts/pinGate.ts are loaded lazily -- the first paint (library view, built-in
+// songs, the whole player) doesn't wait on it. One cached promise so every caller shares a load.
+type LibraryModule = typeof import('./library');
+let libraryModulePromise: Promise<LibraryModule> | null = null;
+function loadLibraryModule(): Promise<LibraryModule> {
+  return (libraryModulePromise ??= import('./library'));
+}
 
 interface SongEntry {
   id: string;
@@ -230,6 +238,7 @@ async function removeImportedSong(id: string) {
   // No optimistic local removal: the shared onSnapshot listener updates `importedSongs` and
   // re-renders for every device (including this one) once Firestore reflects the delete.
   try {
+    const { deleteImportedSong } = await loadLibraryModule();
     await deleteImportedSong(id);
   } catch (err) {
     setImportStatus(`Couldn't remove song: ${err instanceof Error ? err.message : String(err)}`, true);
@@ -253,6 +262,7 @@ async function importFiles(files: FileList | File[]) {
   }
 
   let lastImported: SongEntry | null = null;
+  const { saveImportedSong } = await loadLibraryModule();
   for (const file of list) {
     try {
       const xml = await readScoreFile(file);
@@ -822,6 +832,11 @@ canvasResizeObserver.observe(canvas);
   }
 
   try {
+    const [{ ensureSignedIn }, { ensureAccess }, { subscribeToSongs }] = await Promise.all([
+      import('./firebase'),
+      import('./pinGate'),
+      loadLibraryModule(),
+    ]);
     // Sign in first: verifyPin (inside ensureAccess) reads Firestore, and the security rules
     // require request.auth != null, so an unsigned-in read would just hang/get rejected.
     await ensureSignedIn();
