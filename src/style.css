@@ -7,6 +7,12 @@
   box-sizing: border-box;
 }
 
+/* Keyboard-focus ring: visible on tab-focus everywhere, without flashing on mouse clicks. */
+:focus-visible {
+  outline: 2px solid #4fa8ff;
+  outline-offset: 2px;
+}
+
 html,
 body {
   margin: 0;

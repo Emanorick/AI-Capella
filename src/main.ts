@@ -227,12 +227,54 @@ playBtnMini.addEventListener('click', () => player.togglePlay());
 stopBtn.addEventListener('click', () => player.stopPlayback());
 stopBtnMini.addEventListener('click', () => player.stopPlayback());
 
+const KEY_PAN_BEATS = 2;
+
 window.addEventListener('keydown', (e) => {
-  if (e.code !== 'Space') return;
   const tag = (document.activeElement as HTMLElement | null)?.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-  e.preventDefault();
-  player.togglePlay();
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return; // e.g. the PIN gate's input
+  if (!player.hasScore() || !app.classList.contains('mode-player')) return;
+
+  switch (e.code) {
+    case 'Space':
+      // Not when a button has focus: space "clicks" the focused button natively, and doing both
+      // would toggle playback twice (or fight the button's own action).
+      if (tag === 'BUTTON') return;
+      e.preventDefault();
+      player.togglePlay();
+      break;
+    case 'ArrowLeft':
+      e.preventDefault();
+      player.panByBeats(e.shiftKey ? -KEY_PAN_BEATS * 4 : -KEY_PAN_BEATS);
+      break;
+    case 'ArrowRight':
+      e.preventDefault();
+      player.panByBeats(e.shiftKey ? KEY_PAN_BEATS * 4 : KEY_PAN_BEATS);
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      player.scrollByPixels(-40);
+      break;
+    case 'ArrowDown':
+      e.preventDefault();
+      player.scrollByPixels(40);
+      break;
+    case 'Minus':
+    case 'NumpadSubtract':
+      e.preventDefault();
+      applyZoom(1 / ZOOM_STEP);
+      break;
+    case 'Equal': // the +/= key, without requiring shift
+    case 'NumpadAdd':
+      e.preventDefault();
+      applyZoom(ZOOM_STEP);
+      break;
+    case 'KeyM':
+      metronomeBtn.click(); // reuses the button path so UI state stays in sync
+      break;
+    case 'KeyL':
+      loopBtn.click();
+      break;
+  }
 });
 
 metronomeBtn.addEventListener('click', () => {
