@@ -78,6 +78,13 @@ export class PianoRoll {
   private contentBufferBeatsSpan = 0;
   private contentBufferDirty = true;
 
+  // Ruler measure-number labels, pre-rendered alongside the content buffer (same origin/span, same
+  // rebuild trigger) instead of being fillText'd fresh every frame -- text shaping/rasterizing on
+  // every animation frame was real per-frame cost, and doing it at a different fractional x each
+  // frame (as playback beat progresses continuously) is exactly what makes text look like it's
+  // shimmering/blurring: see snapToDevicePx below for the other half of that fix.
+  private rulerBuffer: HTMLCanvasElement | null = null;
+
   constructor(canvas: HTMLCanvasElement, score: Score, partColor: (partId: string) => string) {
     this.canvas = canvas;
     this.score = score;
@@ -174,6 +181,11 @@ export class PianoRoll {
     this.canvas.width = Math.max(1, Math.round(rect.width * this.dpr));
     this.canvas.height = Math.max(1, Math.round(rect.height * this.dpr));
     this.ctx2d.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    // Resizing the backing store resets context state, including this -- see snapToDevicePx for
+    // why it matters (an unsnapped position wouldn't need smoothing disabled, but a snapped one
+    // still gets blitted at a fractional *device* pixel unless smoothing is off, since some
+    // browsers interpolate a 1:1 drawImage anyway when antialiasing hints are on).
+    this.ctx2d.imageSmoothingEnabled = false;
     this.contentBufferDirty = true;
     this.lyricBitmaps.clear(); // cached bitmaps are baked at the old dpr
 
@@ -199,6 +211,18 @@ export class PianoRoll {
 
   private playheadX(width: number): number {
     return width * PLAYHEAD_X_RATIO;
+  }
+
+  /**
+   * Rounds a css-px x to the nearest whole *device* pixel. The scrolling content buffer is blitted
+   * at a continuously-changing x (following the playback beat), and a fractional device-pixel
+   * offset forces the browser to resample/interpolate an otherwise 1:1 image copy -- softening
+   * already-crisp pre-rendered text a little differently every frame, which reads as blur/shimmer.
+   * Snapping the destination keeps every frame's blit pixel-aligned; the sub-device-pixel error
+   * this introduces is far below what's visible.
+   */
+  private snapToDevicePx(x: number): number {
+    return Math.round(x * this.dpr) / this.dpr;
   }
 
   /** Inverse of the render-time beat->x mapping: canvas-local x (from the cached canvas rect) -> beat. */
@@ -272,13 +296,28 @@ export class PianoRoll {
       ctx.fillStyle = 'rgba(79,168,255,0.35)';
       ctx.fillRect(x1, 0, x2 - x1, RULER_HEIGHT_PX);
     }
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    ctx.font = 'bold 10px system-ui, sans-serif';
-    for (const marker of this.beatMarkers) {
-      if (!marker.isDownbeat) continue;
-      const x = beatToX(marker.beat);
-      if (x < -20 || x > width + 20) continue;
-      ctx.fillText(String(marker.measureNumber), x + 4, 15);
+    // Measure-number labels themselves are pre-rendered into rulerBuffer (see ensureContentBuffer)
+    // and just blitted here, same as the note content below -- see snapToDevicePx's doc comment.
+    this.ensureContentBuffer(displayBeat, width, rowHeight);
+    if (this.rulerBuffer) {
+      const destX = this.snapToDevicePx(anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat);
+      const bufferCssWidth = this.contentBufferBeatsSpan * this.pixelsPerBeat;
+      const srcStartCss = Math.max(0, -destX);
+      const srcEndCss = Math.min(bufferCssWidth, width - destX);
+      const srcWidthCss = srcEndCss - srcStartCss;
+      if (srcWidthCss > 0) {
+        ctx.drawImage(
+          this.rulerBuffer,
+          srcStartCss * this.dpr,
+          0,
+          srcWidthCss * this.dpr,
+          RULER_HEIGHT_PX * this.dpr,
+          destX + srcStartCss,
+          0,
+          srcWidthCss,
+          RULER_HEIGHT_PX,
+        );
+      }
     }
 
     ctx.save();
@@ -302,12 +341,12 @@ export class PianoRoll {
       ctx.fillRect(x2 - 0.75, 0, 1.5, contentAreaHeight);
     }
 
-    // Scrolling content (gridlines, notes, slurs): rebuilt only occasionally; every frame is a
-    // single cheap blit of the pre-rendered buffer at the correct scroll offset. Only the slice
-    // that actually lands in the visible content area is blitted -- the buffer itself spans
-    // several viewport-widths so it doesn't need rebuilding every frame, but drawing all of that
-    // every frame (most of which the clip would throw away anyway) defeats the point.
-    this.ensureContentBuffer(displayBeat, width, rowHeight);
+    // Scrolling content (gridlines, notes, slurs): rebuilt only occasionally (already ensured
+    // above, alongside the ruler buffer); every frame is a single cheap blit of the pre-rendered
+    // buffer at the correct scroll offset. Only the slice that actually lands in the visible
+    // content area is blitted -- the buffer itself spans several viewport-widths so it doesn't
+    // need rebuilding every frame, but drawing all of that every frame (most of which the clip
+    // would throw away anyway) defeats the point.
     // Self-correcting: the incremental rebuild-margin check above assumes steady, smooth beat
     // progression, but a dropped frame, a tab coming back from the background, or anything else
     // that lets the beat jump further than expected in one tick can still leave the buffer not
@@ -324,17 +363,18 @@ export class PianoRoll {
       }
     }
     if (this.contentBuffer) {
-      const destX = anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
+      const destX = this.snapToDevicePx(anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat);
+      const scrollYSnapped = this.snapToDevicePx(this.scrollY);
       const bufferCssWidth = this.contentBufferBeatsSpan * this.pixelsPerBeat;
       const srcStartCss = Math.max(0, -destX);
       const srcEndCss = Math.min(bufferCssWidth, width - destX);
       const srcWidthCss = srcEndCss - srcStartCss;
-      const srcHeightCss = Math.min(contentAreaHeight, contentH - this.scrollY);
+      const srcHeightCss = Math.min(contentAreaHeight, contentH - scrollYSnapped);
       if (srcWidthCss > 0 && srcHeightCss > 0) {
         ctx.drawImage(
           this.contentBuffer,
           srcStartCss * this.dpr,
-          this.scrollY * this.dpr,
+          scrollYSnapped * this.dpr,
           srcWidthCss * this.dpr,
           srcHeightCss * this.dpr,
           destX + srcStartCss,
@@ -349,7 +389,7 @@ export class PianoRoll {
     // start of that note's bar. Drawn fresh each frame (not baked into the content buffer) since
     // it's transient UI state, not part of the score.
     if (this.previewNote) {
-      const x = beatToX(this.previewNote.startBeat);
+      const x = this.snapToDevicePx(beatToX(this.previewNote.startBeat));
       const y = this.rowY(this.previewNote.midi) - rowHeight - this.scrollY;
       if (x >= -60 && x <= width + 10 && y >= -20 && y <= contentAreaHeight) {
         const label = midiName(this.previewNote.midi);
@@ -372,7 +412,7 @@ export class PianoRoll {
     // recomputed from playheadBeat like anything else in the content, and it can end up off-screen
     // if you've panned far enough away -- correct, since that position isn't visible right now.
     // Drawn last, full height (ruler + content), unclipped/untranslated.
-    const playheadXPos = beatToX(playheadBeat);
+    const playheadXPos = this.snapToDevicePx(beatToX(playheadBeat));
     if (playheadXPos >= -2 && playheadXPos <= width + 2) {
       ctx.fillStyle = '#ff3b57';
       ctx.fillRect(playheadXPos - 1, 0, 2, height);
@@ -412,6 +452,26 @@ export class PianoRoll {
     bctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.paintContent(bctx, originBeat, bufCssWidth, contentH, rowHeight);
     this.contentBuffer = buf;
+
+    const rulerBuf = this.rulerBuffer ?? document.createElement('canvas');
+    rulerBuf.width = buf.width;
+    rulerBuf.height = Math.max(1, Math.round(RULER_HEIGHT_PX * this.dpr));
+    const rctx = rulerBuf.getContext('2d');
+    if (rctx) {
+      rctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      rctx.imageSmoothingEnabled = false;
+      rctx.clearRect(0, 0, bufCssWidth, RULER_HEIGHT_PX);
+      rctx.fillStyle = 'rgba(255,255,255,0.6)';
+      rctx.font = 'bold 10px system-ui, sans-serif';
+      for (const marker of this.beatMarkers) {
+        if (!marker.isDownbeat) continue;
+        const x = (marker.beat - originBeat) * this.pixelsPerBeat;
+        if (x < -20 || x > bufCssWidth + 20) continue;
+        rctx.fillText(String(marker.measureNumber), x + 4, 15);
+      }
+      this.rulerBuffer = rulerBuf;
+    }
+
     this.contentBufferDirty = false;
   }
 
