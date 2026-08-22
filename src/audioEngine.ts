@@ -4,6 +4,15 @@ import { getBeatMarkers } from './score';
 const DEFAULT_DUCKED_VOLUME = 0.25; // default level for non-soloed parts when at least one part is soloed
 const RELEASE_TIME = 0.25;
 const MIN_NOTE_DURATION_SEC = 0.02; // floor so a zero/near-zero-duration note can't collide two automation events at the same time
+// Scheduling every remaining note in the piece synchronously, on every single play() call, doesn't
+// scale: a note-dense score can be thousands of notes (5 audio nodes each), and BPM/transpose/seek/
+// metronome changes all reschedule from scratch. Under enough simultaneous load the audio thread
+// can't keep up and ctx.currentTime itself starts lagging real time -- which then poisons
+// everything derived from it (the reported playback position, and therefore every future
+// reschedule's math too). Instead, only ever schedule a bounded lookahead window of real time
+// ahead of the current position, topped up incrementally as playback progresses (see tick()).
+const LOOKAHEAD_SEC = 8; // schedule this many seconds of audio ahead of the current position
+const LOOKAHEAD_REFILL_SEC = 3; // top up once the scheduled horizon is within this many seconds of "now"
 
 function midiToFreq(midi: number): number {
   return 440 * Math.pow(2, (midi - 69) / 12);
@@ -57,6 +66,24 @@ function playPianoNote(
   osc1.stop(stopTime);
   osc2.stop(stopTime);
 
+  // Stopping a source node doesn't disconnect the rest of its chain -- the downstream gain/filter
+  // nodes stay wired into the graph (doing zero-output work) until something explicitly
+  // disconnects them or the browser's GC eventually reclaims them. Over a note-dense piece (or
+  // repeated reschedules, each rebuilding a batch of these) that adds up to a graph with far more
+  // live nodes than are actually sounding, which is exactly what was making the audio clock itself
+  // fall behind real time under load. Disconnect the whole chain the moment the primary oscillator
+  // ends -- whether that's its natural stop time, or an early one from clearSchedule() preempting
+  // it -- so the live graph stays bounded to what's actually still sounding.
+  osc1.addEventListener('ended', () => {
+    for (const node of [osc1, osc2, osc2Gain, filter, ampGain]) {
+      try {
+        node.disconnect();
+      } catch {
+        // already disconnected
+      }
+    }
+  });
+
   return [osc1, osc2];
 }
 
@@ -71,6 +98,18 @@ function playClick(ctx: AudioContext, destination: AudioNode, startTime: number,
   osc.connect(gain).connect(destination);
   osc.start(startTime);
   osc.stop(startTime + 0.05);
+  osc.addEventListener('ended', () => {
+    try {
+      osc.disconnect();
+    } catch {
+      // already disconnected
+    }
+    try {
+      gain.disconnect();
+    } catch {
+      // already disconnected
+    }
+  });
   return osc;
 }
 
@@ -92,9 +131,12 @@ export class AudioEngine {
   private metronomeEnabled = false;
   private duckedVolume = DEFAULT_DUCKED_VOLUME;
   private score: Score;
+  private beatMarkers: ReturnType<typeof getBeatMarkers>;
+  private scheduledUpToBeat = 0; // notes/clicks with a beat before this have already been scheduled for the current play() session
 
   constructor(score: Score) {
     this.score = score;
+    this.beatMarkers = getBeatMarkers(score);
     this.masterGain = this.ctx.createGain();
     this.masterGain.gain.value = 0.9;
 
@@ -176,46 +218,79 @@ export class AudioEngine {
     if (this.ctx.state === 'suspended') this.ctx.resume();
     // A non-finite/non-positive bpm would make every downstream time calculation NaN/Infinity;
     // fall back to the last known-good tempo rather than propagating that into the scheduling
-    // below (see the note-loop guard for why a single bad value must never abort the whole loop).
+    // below (see scheduleRange()'s per-note guard for why a single bad value must never abort the
+    // whole loop).
     this.secPerBeat = Number.isFinite(bpm) && bpm > 0 ? 60 / bpm : this.secPerBeat;
     this.lastTranspose = transposeSemitones;
-    const now = this.ctx.currentTime + 0.06;
-    this.playStartCtxTime = now;
+    this.playStartCtxTime = this.ctx.currentTime + 0.06;
     this.playStartBeat = fromBeat;
     this.playing = true;
+    this.scheduledUpToBeat = fromBeat;
+    // The initial schedule must scan from the very start of the piece, not just from fromBeat:
+    // a long-held note that started earlier but is still sounding at fromBeat (seeking/starting
+    // into its middle) needs to be picked up too, not just notes that start at-or-after it. Every
+    // later top-up from tick() can then safely range-limit its scan, since anything overlapping an
+    // earlier window was already handled by this call or a previous top-up.
+    this.scheduleAhead(true);
+  }
 
+  /**
+   * Tops up the schedule as playback progresses. Called once per animation frame from the render
+   * loop while playing -- cheap when there's nothing to do (a single beat comparison), and only
+   * actually schedules anything once the already-scheduled horizon gets close.
+   */
+  tick() {
+    if (!this.playing) return;
+    const horizonBeats = LOOKAHEAD_REFILL_SEC / this.secPerBeat;
+    if (this.scheduledUpToBeat - this.getCurrentBeat() < horizonBeats) this.scheduleAhead(false);
+  }
+
+  private scheduleAhead(includeAlreadySounding: boolean) {
+    const lookaheadBeats = LOOKAHEAD_SEC / this.secPerBeat;
+    const targetBeat = this.getCurrentBeat() + lookaheadBeats;
+    if (targetBeat <= this.scheduledUpToBeat && !includeAlreadySounding) return;
+    const fromBeatExclusive = includeAlreadySounding ? -Infinity : this.scheduledUpToBeat;
+    this.scheduleNotesInRange(fromBeatExclusive, targetBeat);
+    if (this.metronomeEnabled) this.scheduleMetronomeInRange(fromBeatExclusive, targetBeat);
+    this.scheduledUpToBeat = Math.max(this.scheduledUpToBeat, targetBeat);
+  }
+
+  /** Both this.score.notes and this.beatMarkers are sorted ascending by beat, so each top-up can
+   *  resume scanning from roughly where the last one left off rather than rescanning from zero. */
+  private scheduleNotesInRange(fromBeatExclusive: number, toBeatExclusive: number) {
     for (const note of this.score.notes) {
+      if (note.startBeat < fromBeatExclusive) continue;
+      if (note.startBeat >= toBeatExclusive) break;
       // A note with a non-finite (or otherwise unschedulable) start/duration -- e.g. from a
       // malformed source file -- would make `start`/`dur` below NaN or Infinity, which Web Audio
-      // rejects by throwing synchronously. Since that throw would happen partway through this
-      // loop, it wouldn't just skip the one bad note: it would abort scheduling for every note
-      // after it too, while `this.playing` above has already flipped to true -- silence, with no
-      // way to recover short of reloading the page. Skip anything unschedulable up front, and
+      // rejects by throwing synchronously. Skip anything unschedulable up front, and
       // belt-and-suspenders wrap the actual scheduling call too, so one bad note can never take
       // the rest of the piece down with it.
       if (!Number.isFinite(note.startBeat) || !Number.isFinite(note.durationBeats)) continue;
-      if (note.startBeat + note.durationBeats <= fromBeat) continue;
-      const start = now + Math.max(0, note.startBeat - fromBeat) * this.secPerBeat;
+      if (note.startBeat + note.durationBeats <= this.playStartBeat) continue;
+      const start = this.playStartCtxTime + Math.max(0, note.startBeat - this.playStartBeat) * this.secPerBeat;
       const dur = Math.max(MIN_NOTE_DURATION_SEC, note.durationBeats * this.secPerBeat);
       const gainNode = this.partGains.get(note.partId);
       if (!gainNode) continue;
       try {
-        const nodes = playPianoNote(this.ctx, gainNode, start, dur, note.midi + transposeSemitones);
+        const nodes = playPianoNote(this.ctx, gainNode, start, dur, note.midi + this.lastTranspose);
         this.scheduledNodes.push(...nodes);
       } catch (err) {
         console.error('Skipping a note that could not be scheduled:', note, err);
       }
     }
+  }
 
-    if (this.metronomeEnabled) {
-      for (const marker of getBeatMarkers(this.score)) {
-        if (!Number.isFinite(marker.beat) || marker.beat < fromBeat) continue;
-        const start = now + (marker.beat - fromBeat) * this.secPerBeat;
-        try {
-          this.scheduledNodes.push(playClick(this.ctx, this.metronomeGain, start, marker.isDownbeat));
-        } catch (err) {
-          console.error('Skipping a metronome click that could not be scheduled:', marker, err);
-        }
+  private scheduleMetronomeInRange(fromBeatExclusive: number, toBeatExclusive: number) {
+    for (const marker of this.beatMarkers) {
+      if (marker.beat < fromBeatExclusive) continue;
+      if (marker.beat >= toBeatExclusive) break;
+      if (!Number.isFinite(marker.beat) || marker.beat < this.playStartBeat) continue;
+      const start = this.playStartCtxTime + (marker.beat - this.playStartBeat) * this.secPerBeat;
+      try {
+        this.scheduledNodes.push(playClick(this.ctx, this.metronomeGain, start, marker.isDownbeat));
+      } catch (err) {
+        console.error('Skipping a metronome click that could not be scheduled:', marker, err);
       }
     }
   }

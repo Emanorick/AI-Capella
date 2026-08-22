@@ -754,6 +754,7 @@ function renderNow() {
 
 function renderLoop() {
   if (!audioEngine || !pianoRoll || !currentScore) return;
+  audioEngine.tick(); // tops up the bounded lookahead schedule as playback progresses
   const beat = audioEngine.getCurrentBeat();
   // A loop region, once marked, bounds playback; the Loop button decides whether hitting that
   // bound (or the end of the piece, when no region is marked) wraps around or stops there.
