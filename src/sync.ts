@@ -48,35 +48,52 @@ export function getServerTimeOffsetMs(): number {
   return offsetMs;
 }
 
+// A single round-trip measurement's error is bounded by roughly half its round-trip time, and
+// network latency is rarely symmetric (upload/download queuing differ), so one sample alone can
+// easily be 100-300ms off. Taking several and keeping the one with the lowest round-trip time --
+// the sample that hit the least queuing/congestion in either direction -- is the standard NTP-
+// client mitigation and meaningfully tightens the estimate without adding real complexity.
+const CALIBRATION_SAMPLES = 5;
+
 /**
  * NTP-style round-trip offset estimate: write a per-device doc with a serverTimestamp(), read it
  * straight back from the server (bypassing the local cache, which would just echo our own write
  * instantly and defeat the measurement), and estimate the server clock at the midpoint of the
  * round trip. Keyed by a per-device id rather than a shared doc -- two devices calibrating
- * concurrently against the same doc would corrupt each other's round-trip reading.
+ * concurrently against the same doc would corrupt each other's round-trip reading. Repeats this
+ * CALIBRATION_SAMPLES times and keeps the lowest-round-trip-time sample (see the constant's
+ * comment); one bad sample doesn't abort the rest, only a doc that never once resolves does.
  */
 export async function calibrateClockOffset(): Promise<void> {
   if (!db) return;
-  try {
-    const ref = doc(db, 'sessions', `clockPing_${getDeviceId()}`);
-    const t0 = Date.now();
-    await setDoc(ref, { ts: serverTimestamp() });
-    const snap = await getDocFromServer(ref);
-    const t1 = Date.now();
-    const ts = snap.data()?.ts as Timestamp | undefined;
-    if (!ts) return;
-    offsetMs = ts.toMillis() - (t0 + (t1 - t0) / 2);
-  } catch (err) {
-    // Leave the previous (or default zero) offset in place; a stale/missing calibration just
-    // means the sync buffer absorbs a bit more slack than ideal, not a hard failure. A *default*
-    // (never-succeeded) offset of 0 is the dangerous case though: computeFutureOriginServerTimeMs
-    // then silently substitutes this device's raw, unmeasured clock skew from the server for the
-    // real offset, which can plausibly be a second or more on a device that hasn't NTP-synced
-    // recently -- logged so it's diagnosable rather than a mysteriously "async" sounding group.
-    // A likely cause if this keeps failing: Firestore security rules that only cover
-    // sessions/live and not the whole sessions/** collection (this writes sessions/clockPing_*).
-    console.warn('[AI-Capella] Clock calibration failed; synced playback may start noticeably out of sync on this device until it succeeds.', err);
+  const ref = doc(db, 'sessions', `clockPing_${getDeviceId()}`);
+  let best: { offsetMs: number; rttMs: number } | null = null;
+  for (let i = 0; i < CALIBRATION_SAMPLES; i++) {
+    try {
+      const t0 = Date.now();
+      await setDoc(ref, { ts: serverTimestamp() });
+      const snap = await getDocFromServer(ref);
+      const t1 = Date.now();
+      const ts = snap.data()?.ts as Timestamp | undefined;
+      if (!ts) continue;
+      const rttMs = t1 - t0;
+      if (!best || rttMs < best.rttMs) best = { offsetMs: ts.toMillis() - (t0 + rttMs / 2), rttMs };
+    } catch {
+      // This one sample failed (transient network blip) -- keep trying the rest.
+    }
   }
+  if (best) {
+    offsetMs = best.offsetMs;
+    return;
+  }
+  // Leave the previous (or default zero) offset in place; every sample failing outright is the
+  // dangerous case though -- a *default* (never-succeeded) offset of 0 makes
+  // computeFutureOriginServerTimeMs silently substitute this device's raw, unmeasured clock skew
+  // from the server for the real offset, which can plausibly be a second or more on a device that
+  // hasn't NTP-synced recently -- logged so it's diagnosable rather than a mysteriously "async"
+  // sounding group. A likely cause if this keeps failing: Firestore security rules that only
+  // cover sessions/live and not the whole sessions/** collection (this writes sessions/clockPing_*).
+  console.warn('[AI-Capella] Clock calibration failed; synced playback may start noticeably out of sync on this device until it succeeds.');
 }
 
 /** Calibrates immediately, then periodically and whenever the tab becomes visible again. */

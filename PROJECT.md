@@ -393,8 +393,12 @@ per-*device* Firestore doc (keyed by a `crypto.randomUUID()` persisted in `local
 *shared* calibration doc would let two devices' concurrent writes corrupt each other's
 round-trip reading) with a `serverTimestamp()`, read it straight back from the server
 (`getDocFromServer`, bypassing the local cache, which would just echo the write instantly and
-defeat the measurement), and estimate the server clock at the midpoint of the round trip.
-`startPeriodicCalibration()` runs this on load, every 5 minutes, and on `visibilitychange`. Every
+defeat the measurement), and estimate the server clock at the midpoint of the round trip. A
+single sample's error is bounded by roughly half its round-trip time, and real network latency is
+rarely symmetric, so this repeats the measurement `CALIBRATION_SAMPLES` (5) times and keeps
+whichever sample had the lowest round-trip time — the standard NTP-client mitigation, since the
+fastest round trip hit the least queuing/congestion in either direction. `startPeriodicCalibration()`
+runs this on load, every 5 minutes, and on `visibilitychange`. Every
 synced "start playing" write (Play, seek/BPM/transpose while playing) awaits
 `ensureCalibrated()` first, which resolves once that first attempt has finished — otherwise the
 very first Play right after the app loads could race the initial calibration and broadcast
