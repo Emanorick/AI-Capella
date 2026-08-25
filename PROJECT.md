@@ -126,13 +126,15 @@ Solo buttons:
 
 ### Synced multi-device playback
 - Every connected device is a full remote control for one shared playback session: hitting
-  Play/Pause/Stop, changing BPM, transpose, or the metronome, seeking via the ruler, changing
-  mute/solo, marking a loop region, or picking a different song on *any* device applies to
-  *every* connected device — including starting audio at (as close as technically possible to)
-  the same real-world instant, not just the same logical position. Tempo is a synced field like
-  everything else: any device can change it, but the value is always identical everywhere.
-- Not synced (personal viewing preference, stays per-device): zoom level, vertical scroll
-  position, and the solo-ducking volume level.
+  Play/Pause/Stop, changing BPM, transpose, or the metronome, seeking via the ruler, marking a
+  loop region, or picking a different song on *any* device applies to *every* connected device —
+  including starting audio at (as close as technically possible to) the same real-world instant,
+  not just the same logical position. Tempo is a synced field like everything else: any device
+  can change it, but the value is always identical everywhere.
+- Mute/solo/true-solo is the one deliberate exception: each device chooses which voices *it*
+  hears independently of every other device, so e.g. a soprano can isolate their own part while
+  everyone else in the room still hears the full mix. Not synced, personal per-device viewing
+  preference too: zoom level, vertical scroll position, and the solo-ducking volume level.
 - See §4.7 for how the cross-device timing actually works.
 
 ---
@@ -367,9 +369,10 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
 ### 4.7 Synced multi-device playback (`sync.ts`, `main.ts`)
 
 One Firestore doc, `sessions/live`, holds the entire shared transport state — `songId`, `bpm`,
-`transpose`, `metronomeOn`, `loopEnabled`/`loopRegion`, `partMix`, and the play/pause origin
-(`playing`, `originBeat`, `originServerTimeMs`). Every connected device subscribes to it via
-`subscribePlaybackState()`.
+`transpose`, `metronomeOn`, `loopEnabled`/`loopRegion`, and the play/pause origin (`playing`,
+`originBeat`, `originServerTimeMs`). Every connected device subscribes to it via
+`subscribePlaybackState()`. Mute/solo/true-solo is deliberately *not* in this doc — see "Not
+synced" below.
 
 **The hard part: making Play land at the same real instant, not just the same logical beat.**
 Broadcasting "play now" doesn't work — Firestore's realtime updates don't arrive at every
@@ -393,9 +396,9 @@ round-trip reading) with a `serverTimestamp()`, read it straight back from the s
 defeat the measurement), and estimate the server clock at the midpoint of the round trip.
 `startPeriodicCalibration()` runs this on load, every 5 minutes, and on `visibilitychange`.
 
-**State ownership.** Every control in `main.ts` — Play/Pause/Stop, BPM, transpose, seek,
-metronome, loop, mute/solo, song selection — calls `pushState()` with a patch and does nothing
-else locally; `applyPlaybackState()`, driven only by the `onSnapshot` callback (including the
+**State ownership.** Every *synced* control in `main.ts` — Play/Pause/Stop, BPM, transpose, seek,
+metronome, loop, song selection — calls `pushState()` with a patch and does nothing else
+locally; `applyPlaybackState()`, driven only by the `onSnapshot` callback (including the
 writer's own near-instant optimistic echo), is the single place that actually mutates local
 state and calls into `audioEngine`/`pianoRoll`. This is the same pattern the shared song
 library already used for deletion (every device, including the one that clicked delete, only
@@ -403,7 +406,9 @@ updates once Firestore reflects it), applied consistently to the whole transport
 just one action. A consequence: a late joiner or a reconnect needs no special-case code at
 all — the first snapshot after subscribing runs through the exact same function, which
 recomputes the live position from a possibly-minutes-old `originServerTimeMs` anchor and joins
-already in sync.
+already in sync. Mute/solo/true-solo is the one exception: it mutates `partMix` and calls
+`audioEngine.setPartMixState()`/`pianoRoll.setPartMix()` directly, never through `pushState()`,
+since it's local-only (see "Not synced" below) — nothing to publish or wait on an echo for.
 
 Two write shapes matter for correctness:
 - **Timing writes** (anything that starts, stops, or moves playback, or changes BPM/transpose
@@ -413,14 +418,12 @@ Two write shapes matter for correctness:
   *partial* concurrent writes could combine a winning `bpm` from one with a losing `originBeat`
   from another into an incoherent state. Sending the whole group atomically means whichever
   write lands last, it lands whole.
-- **Simple writes** (mute/solo, loop region, metronome, BPM/transpose while paused) just touch
-  the field(s) that changed.
-- `applyPlaybackState()` also diffs incoming timing fields against what it last applied and
-  only touches `AudioEngine` when they actually changed — an update that only changed, say,
-  mute/solo must *not* trigger a reschedule, or every remote mix change would audibly retrigger
-  every currently-sounding note (`AudioEngine.play()` always clears and re-attacks the full
-  schedule; mute/solo alone is applied as a plain gain change via `setPartMixState()`, which
-  needs no reschedule at all).
+- **Simple writes** (loop region, metronome, BPM/transpose while paused) just touch the field(s)
+  that changed.
+- `applyPlaybackState()` also diffs incoming timing fields against what it last applied and only
+  touches `AudioEngine` when they actually changed — an update that only changed the metronome,
+  say, must *not* trigger a reschedule, or every remote toggle would audibly retrigger every
+  currently-sounding note (`AudioEngine.play()` always clears and re-attacks the full schedule).
 
 **Without Firebase configured**, `pushState()` applies changes immediately and locally instead
 of publishing (single-device fallback, matching the app's pre-sync behavior) — a "start
@@ -428,11 +431,19 @@ playing" patch has its origin timestamp zeroed in that case, which makes `AudioE
 take its normal "as soon as possible" path instead of waiting for a sync instant nothing else
 is listening for.
 
-**Not synced**, and deliberately so: loop/end-of-piece wraparound stays fully local per device
-(each device is already clock-synced to the same anchor, so they cross a boundary within a
-couple of animation frames of each other regardless — good enough for a rehearsal tool without
-the real complexity of anchor-based drift-free loop math), and zoom/scroll/duck-volume remain
-personal per-device preferences, never written to the shared doc at all.
+**Not synced**, and deliberately so:
+- **Mute/solo/true-solo.** `partMix` lives entirely in local `main.ts` state and is never
+  written to `sessions/live` at all — each device picks which voices *it* wants to hear
+  independently (e.g. a soprano isolating their own part via true-solo while everyone else still
+  hears the full mix), without affecting anyone else's playback. It resets to all-`normal`
+  whenever `loadSongLocally()` runs (a fresh song, on this device, gets a fresh mix), driven
+  directly by the mute/solo/true-solo click handlers rather than `pushState()`.
+- **Loop/end-of-piece wraparound** stays fully local per device (each device is already
+  clock-synced to the same anchor, so they cross a boundary within a couple of animation frames
+  of each other regardless — good enough for a rehearsal tool without the real complexity of
+  anchor-based drift-free loop math).
+- **Zoom, scroll position, and solo-ducking volume** remain personal per-device preferences,
+  never written to the shared doc at all.
 
 ---
 

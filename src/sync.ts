@@ -1,6 +1,5 @@
 import { doc, getDocFromServer, onSnapshot, serverTimestamp, setDoc, Timestamp, type Unsubscribe } from 'firebase/firestore';
 import { db } from './firebase';
-import type { PartMixState } from './audioEngine';
 import type { LoopRegion } from './pianoRoll';
 
 // How far into the future a "start playing" instant is broadcast, relative to the moment it's
@@ -16,6 +15,9 @@ const DEVICE_ID_STORAGE_KEY = 'ai-capella-device-id';
 
 const SESSION_DOC_PATH = ['sessions', 'live'] as const;
 
+// Deliberately not part of the synced state: mute/solo/true-solo. Each device chooses which
+// voices it personally hears -- e.g. a soprano wants to hear only their own part while everyone
+// else in the room hears the full mix -- without affecting what anyone else hears.
 export interface PlaybackState {
   songId: string | null;
   playing: boolean;
@@ -26,7 +28,6 @@ export interface PlaybackState {
   metronomeOn: boolean;
   loopEnabled: boolean;
   loopRegion: LoopRegion | null;
-  partMix: Record<string, PartMixState>;
 }
 
 function getDeviceId(): string {
@@ -109,7 +110,6 @@ export function subscribePlaybackState(callback: (state: PlaybackState | null) =
         metronomeOn: (data.metronomeOn as boolean) ?? false,
         loopEnabled: (data.loopEnabled as boolean) ?? false,
         loopRegion: (data.loopRegion as LoopRegion | null) ?? null,
-        partMix: (data.partMix as Record<string, PartMixState>) ?? {},
       });
     },
     onError,

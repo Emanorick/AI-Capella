@@ -145,8 +145,8 @@ let canvasTop = 0;
 
 // Multi-device sync: which song is currently loaded locally, plus bookkeeping so an incoming
 // shared-session update only actually touches AudioEngine when something timing-relevant
-// (play/pause, position, bpm, transpose) genuinely changed -- an update that only changed, say,
-// mute/solo must NOT reschedule playback, or every remote mix change would audibly retrigger
+// (play/pause, position, bpm, transpose) genuinely changed -- an update that only changed the
+// metronome, say, must NOT reschedule playback, or every remote toggle would audibly retrigger
 // every currently-sounding note. See applyPlaybackState().
 let loadedSongId: string | null = null;
 let pendingSongId: string | null = null; // set when a remote songId isn't in our library list yet
@@ -323,7 +323,6 @@ function selectSong(song: SongEntry) {
     metronomeOn: false,
     loopEnabled: false,
     loopRegion: null,
-    partMix: {},
   });
 }
 
@@ -354,6 +353,11 @@ async function loadSongLocally(song: SongEntry) {
   });
   pianoRoll.setLoopRegion(null);
 
+  // Mute/solo isn't synced (see PlaybackState's doc comment) -- every device starts a new song
+  // with its own fresh, all-normal mix.
+  partMix = new Map(score.parts.map((p) => [p.id, 'normal' as PartMixState]));
+  pianoRoll.setPartMix(partMix);
+
   songTitleEl.textContent = score.title;
   playBtn.disabled = false;
   playBtnMini.disabled = false;
@@ -377,13 +381,12 @@ function currentStateSnapshot(): PlaybackState {
     metronomeOn,
     loopEnabled,
     loopRegion,
-    partMix: Object.fromEntries(partMix) as Record<string, PartMixState>,
   };
 }
 
 /**
- * The single way every control below changes playback/mix/loop state: publish the change and let
- * it come back through applyPlaybackState(), rather than mutating local state directly. This
+ * The single way every synced control below changes playback/loop state: publish the change and
+ * let it come back through applyPlaybackState(), rather than mutating local state directly. This
  * mirrors a pattern the shared song library already used (deleting a song updates every device,
  * including the one that clicked delete, only once Firestore reflects it) -- applied consistently
  * to every transport control instead of just song deletion. Without Firebase configured there's no
@@ -391,6 +394,8 @@ function currentStateSnapshot(): PlaybackState {
  * fallback, matching this app's pre-sync behavior); a "start playing" patch has its sync-buffer
  * origin timestamp zeroed in that case, so AudioEngine.play() takes its normal "as soon as
  * possible" path instead of waiting for a sync instant nothing else is listening for.
+ * Mute/solo/true-solo are the one exception -- deliberately local-only, see PlaybackState's doc
+ * comment in sync.ts -- so they mutate state directly instead of going through here.
  */
 function pushState(patch: Partial<PlaybackState>) {
   if (isFirebaseConfigured) {
@@ -426,10 +431,6 @@ async function applyPlaybackState(state: PlaybackState) {
   loopRegion = state.loopRegion;
   pianoRoll?.setLoopRegion(loopRegion);
   updateLoopButton();
-  partMix = new Map(Object.entries(state.partMix));
-  pianoRoll?.setPartMix(partMix);
-  for (const [partId, mixState] of partMix) audioEngine?.setPartMixState(partId, mixState);
-  syncPartRowClasses();
 
   if (!audioEngine) return;
 
@@ -503,20 +504,23 @@ function syncPartRowClasses() {
  * Solo button, which just ducks/dims the others). Clicking the same voice again restores everyone.
  */
 function toggleTrueSolo(partId: string) {
-  if (!currentScore) return;
+  if (!audioEngine || !pianoRoll || !currentScore) return;
   const alreadyIsolated =
     partMix.get(partId) !== 'muted' && currentScore.parts.every((p) => p.id === partId || partMix.get(p.id) === 'muted');
-  const newMix: Record<string, PartMixState> = {};
   for (const p of currentScore.parts) {
-    newMix[p.id] = alreadyIsolated || p.id === partId ? 'normal' : 'muted';
+    const next: PartMixState = alreadyIsolated || p.id === partId ? 'normal' : 'muted';
+    partMix.set(p.id, next);
+    audioEngine.setPartMixState(p.id, next);
   }
-  pushState({ partMix: newMix });
+  pianoRoll.setPartMix(partMix);
+  syncPartRowClasses();
+  renderNow();
 }
 
 partsPanelEl.addEventListener('click', (e) => {
   const target = e.target as HTMLElement;
   const row = target.closest<HTMLElement>('.part-row');
-  if (!row) return;
+  if (!row || !audioEngine || !pianoRoll) return;
   const partId = row.getAttribute('data-part')!;
   const action = target.getAttribute('data-action') as PartMixState | null;
 
@@ -527,7 +531,11 @@ partsPanelEl.addEventListener('click', (e) => {
 
   const current = partMix.get(partId) ?? 'normal';
   const next: PartMixState = current === action ? 'normal' : action;
-  pushState({ partMix: { ...Object.fromEntries(partMix), [partId]: next } });
+  partMix.set(partId, next);
+  audioEngine.setPartMixState(partId, next);
+  pianoRoll.setPartMix(partMix);
+  syncPartRowClasses();
+  renderNow();
 });
 
 /** Keeps the header's compact play button and the transport's full one showing the same state. */
