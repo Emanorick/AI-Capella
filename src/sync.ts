@@ -66,19 +66,38 @@ export async function calibrateClockOffset(): Promise<void> {
     const ts = snap.data()?.ts as Timestamp | undefined;
     if (!ts) return;
     offsetMs = ts.toMillis() - (t0 + (t1 - t0) / 2);
-  } catch {
+  } catch (err) {
     // Leave the previous (or default zero) offset in place; a stale/missing calibration just
-    // means the sync buffer absorbs a bit more slack than ideal, not a hard failure.
+    // means the sync buffer absorbs a bit more slack than ideal, not a hard failure. A *default*
+    // (never-succeeded) offset of 0 is the dangerous case though: computeFutureOriginServerTimeMs
+    // then silently substitutes this device's raw, unmeasured clock skew from the server for the
+    // real offset, which can plausibly be a second or more on a device that hasn't NTP-synced
+    // recently -- logged so it's diagnosable rather than a mysteriously "async" sounding group.
+    // A likely cause if this keeps failing: Firestore security rules that only cover
+    // sessions/live and not the whole sessions/** collection (this writes sessions/clockPing_*).
+    console.warn('[AI-Capella] Clock calibration failed; synced playback may start noticeably out of sync on this device until it succeeds.', err);
   }
 }
 
 /** Calibrates immediately, then periodically and whenever the tab becomes visible again. */
+let calibrationAttempted: Promise<void> | null = null;
 export function startPeriodicCalibration() {
-  void calibrateClockOffset();
+  calibrationAttempted = calibrateClockOffset();
   setInterval(() => void calibrateClockOffset(), CALIBRATION_INTERVAL_MS);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') void calibrateClockOffset();
   });
+}
+
+/**
+ * Resolves once the first calibration attempt (success or failure) has finished. Broadcasting a
+ * "start playing" instant before that point would compute it against the default offsetMs of 0
+ * (see calibrateClockOffset's comment) instead of a real measurement -- awaited by every synced
+ * "start playing" write in main.ts so the very first Play right after the app loads isn't the one
+ * play that starts audibly out of sync. A no-op once the first attempt has already resolved.
+ */
+export async function ensureCalibrated(): Promise<void> {
+  if (calibrationAttempted) await calibrationAttempted;
 }
 
 /** The instant a "start playing" broadcast should target, in server time. */

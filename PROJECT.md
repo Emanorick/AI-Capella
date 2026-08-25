@@ -394,7 +394,13 @@ per-*device* Firestore doc (keyed by a `crypto.randomUUID()` persisted in `local
 round-trip reading) with a `serverTimestamp()`, read it straight back from the server
 (`getDocFromServer`, bypassing the local cache, which would just echo the write instantly and
 defeat the measurement), and estimate the server clock at the midpoint of the round trip.
-`startPeriodicCalibration()` runs this on load, every 5 minutes, and on `visibilitychange`.
+`startPeriodicCalibration()` runs this on load, every 5 minutes, and on `visibilitychange`. Every
+synced "start playing" write (Play, seek/BPM/transpose while playing) awaits
+`ensureCalibrated()` first, which resolves once that first attempt has finished — otherwise the
+very first Play right after the app loads could race the initial calibration and broadcast
+against the default, unmeasured `offsetMs` of 0. A calibration write that keeps failing (e.g. a
+Firestore rule that doesn't cover `sessions/clockPing_*`, see §5) logs a console warning rather
+than failing loudly, since it degrades to "offset stays 0" instead of breaking anything outright.
 
 **State ownership.** Every *synced* control in `main.ts` — Play/Pause/Stop, BPM, transpose, seek,
 metronome, loop, song selection — calls `pushState()` with a patch and does nothing else
@@ -462,7 +468,15 @@ To point the app at your own Firebase project instead of the bundled one, edit
 - A Firestore collection `songs` (populated automatically as scores are imported).
 - A single document at `config/access` with a `pinHash` field: the SHA-256 hex digest of
   whatever PIN you want the group to use.
-- Firestore Security Rules that require `request.auth != null` for reads/writes to both.
+- Firestore Security Rules that require `request.auth != null` for reads/writes to `songs/**`,
+  `config/access`, **and `sessions/**`** (the synced-playback session doc `sessions/live` plus
+  the per-device clock-calibration docs `sessions/clockPing_*`, see §4.7). A rule scoped to the
+  literal path `sessions/live` and not the whole collection will silently break clock
+  calibration — `calibrateClockOffset()` swallows the permission-denied error and just leaves
+  the offset at its default of 0, which shows up as synced playback starting audibly out of
+  sync (by however much this device's own clock differs from the server) rather than as an
+  obvious error. Check the browser console for a `[AI-Capella] Clock calibration failed` warning
+  if that happens.
 
 ### Deployment
 

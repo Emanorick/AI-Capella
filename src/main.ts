@@ -408,6 +408,19 @@ function pushState(patch: Partial<PlaybackState>) {
   }
 }
 
+/**
+ * pushState() for every "start playing at this beat" patch (Play, seek-while-playing, BPM/
+ * transpose change while playing) -- waits for clock calibration to have attempted at least once
+ * first (see sync.ensureCalibrated's doc comment), so the very first Play right after the app
+ * loads doesn't compute its sync target against a default, unmeasured offset. Callers stay
+ * synchronous and fire this without awaiting it, so it never delays anything else the calling
+ * handler does locally (e.g. seekToBeat's own view-position compensation).
+ */
+async function publishPlayingAt(originBeat: number, extra: Partial<PlaybackState> = {}) {
+  await sync.ensureCalibrated();
+  pushState({ ...extra, playing: true, originBeat, originServerTimeMs: sync.computeFutureOriginServerTimeMs() });
+}
+
 /** The single place that applies shared-session state locally -- see pushState()'s doc comment. */
 async function applyPlaybackState(state: PlaybackState) {
   if (state.songId !== loadedSongId) {
@@ -556,7 +569,7 @@ function togglePlay() {
     } else if (fromBeat >= currentScore.totalBeats) {
       fromBeat = 0;
     }
-    pushState({ playing: true, originBeat: fromBeat, originServerTimeMs: sync.computeFutureOriginServerTimeMs() });
+    void publishPlayingAt(fromBeat);
   }
 }
 playBtn.addEventListener('click', togglePlay);
@@ -612,7 +625,7 @@ document.querySelectorAll<HTMLButtonElement>('.bpm-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     const newBpm = parseInt(btn.getAttribute('data-bpm')!, 10);
     if (audioEngine?.isPlaying()) {
-      pushState({ bpm: newBpm, playing: true, originBeat: audioEngine.getCurrentBeat(), originServerTimeMs: sync.computeFutureOriginServerTimeMs() });
+      void publishPlayingAt(audioEngine.getCurrentBeat(), { bpm: newBpm });
     } else {
       pushState({ bpm: newBpm });
     }
@@ -633,7 +646,7 @@ function applyTranspose(delta: number) {
   if (!audioEngine || !pianoRoll) return;
   const newTranspose = Math.max(MIN_TRANSPOSE, Math.min(MAX_TRANSPOSE, transpose + delta));
   if (audioEngine.isPlaying()) {
-    pushState({ transpose: newTranspose, playing: true, originBeat: audioEngine.getCurrentBeat(), originServerTimeMs: sync.computeFutureOriginServerTimeMs() });
+    void publishPlayingAt(audioEngine.getCurrentBeat(), { transpose: newTranspose });
   } else {
     pushState({ transpose: newTranspose });
   }
@@ -690,7 +703,7 @@ function seekToBeat(beat: number) {
   const clamped = Math.max(0, Math.min(currentScore.totalBeats, beat));
   const oldEngineBeat = engineBeat();
   if (audioEngine.isPlaying()) {
-    pushState({ playing: true, originBeat: clamped, originServerTimeMs: sync.computeFutureOriginServerTimeMs() });
+    void publishPlayingAt(clamped);
   } else {
     pushState({ playing: false, originBeat: clamped, originServerTimeMs: 0 });
   }
