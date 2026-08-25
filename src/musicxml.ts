@@ -33,7 +33,6 @@ export function parseMusicXML(xmlText: string): Score {
   const notes: NoteEvent[] = [];
   const measures: MeasureInfo[] = [];
   const slurs: SlurArc[] = [];
-  const ties: SlurArc[] = [];
   let totalBeats = 0;
   let measuresBuilt = false;
 
@@ -48,9 +47,14 @@ export function parseMusicXML(xmlText: string): Score {
     let cursor = 0;
     let lastNoteStart = 0;
     const openSlurs = new Map<number, { beat: number; midi: number }>();
-    // Ties (same-pitch notes sustained across a boundary, most commonly a barline) are a separate
-    // MusicXML element from slurs -- keyed by pitch since a part only has one open tie per pitch.
-    const openTies = new Map<number, number>();
+    // A tie is MusicXML's way of representing one sustained pitch that had to be split into
+    // multiple <note> elements because a note can't itself cross a measure boundary in the file
+    // format -- musically (and for playback/rendering purposes) it's one continuous note, so tied
+    // notes are merged into a single NoteEvent here rather than kept as separate ones bridged by a
+    // visual line: this map holds, per currently-open pitch, the actual NoteEvent object already
+    // pushed to `notes` that a subsequent tied note should extend instead of duplicating. A tie
+    // chain (a note held across more than one boundary) keeps extending the same object.
+    const openTieNotes = new Map<number, NoteEvent>();
 
     const measureEls = Array.from(partEl.querySelectorAll('measure'));
     for (const measureEl of measureEls) {
@@ -88,14 +92,32 @@ export function parseMusicXML(xmlText: string): Score {
                 const octave = parseInt(pitchEl.querySelector('octave')?.textContent || '4', 10);
                 const midi = pitchToMidi(step, alter, octave);
                 const lyric = child.querySelector(':scope > lyric > text')?.textContent?.trim();
-                notes.push({
-                  partId,
-                  midi,
-                  startBeat,
-                  durationBeats,
-                  lyric: lyric || undefined,
-                  measureNumber,
-                });
+
+                // Tools vary in which element they emit for a tie: <tie> is the sound-level
+                // element, <notations><tied> is the notation/visual-level one. Real-world files
+                // (especially OMR/scan-derived ones) sometimes carry only one of the two, so check
+                // both -- a note with both start and stop for the same element type is harmless
+                // (a Set collapses the duplicate).
+                const tieTypes = new Set(
+                  Array.from(child.querySelectorAll(':scope > tie, :scope > notations > tied')).map((el) => el.getAttribute('type')),
+                );
+                const continuesOpenTie = tieTypes.has('stop') && openTieNotes.has(midi);
+
+                if (continuesOpenTie) {
+                  // Extend the already-pushed NoteEvent through this note's end instead of adding
+                  // a second one -- see openTieNotes' doc comment for why.
+                  const open = openTieNotes.get(midi)!;
+                  open.durationBeats = startBeat + durationBeats - open.startBeat;
+                  if (tieTypes.has('start')) {
+                    openTieNotes.set(midi, open); // chain continues into a further tied note
+                  } else {
+                    openTieNotes.delete(midi);
+                  }
+                } else {
+                  const noteEvent: NoteEvent = { partId, midi, startBeat, durationBeats, lyric: lyric || undefined, measureNumber };
+                  notes.push(noteEvent);
+                  if (tieTypes.has('start')) openTieNotes.set(midi, noteEvent);
+                }
 
                 for (const slurEl of Array.from(child.querySelectorAll(':scope > notations > slur'))) {
                   const num = parseInt(slurEl.getAttribute('number') || '1', 10);
@@ -107,27 +129,6 @@ export function parseMusicXML(xmlText: string): Score {
                     if (open) {
                       slurs.push({ partId, startBeat: open.beat, startMidi: open.midi, endBeat: startBeat, endMidi: midi });
                       openSlurs.delete(num);
-                    }
-                  }
-                }
-
-                // Tools vary in which element they emit for a tie: <tie> is the sound-level
-                // element, <notations><tied> is the notation/visual-level one. Real-world files
-                // (especially OMR/scan-derived ones) sometimes carry only one of the two, so check
-                // both -- a note with both for the same tie is harmless (the second match is a
-                // no-op: 'start' overwrites with the same value, 'stop' finds nothing left to close).
-                const tieEls = child.querySelectorAll(':scope > tie, :scope > notations > tied');
-                for (const tieEl of Array.from(tieEls)) {
-                  const type = tieEl.getAttribute('type');
-                  if (type === 'start') {
-                    // The line should bridge the gap between the two note bars, so anchor it to
-                    // this note's END (not its start) -- the next tied note picks up from there.
-                    openTies.set(midi, startBeat + durationBeats);
-                  } else if (type === 'stop') {
-                    const openBeat = openTies.get(midi);
-                    if (openBeat !== undefined) {
-                      ties.push({ partId, startBeat: openBeat, startMidi: midi, endBeat: startBeat, endMidi: midi });
-                      openTies.delete(midi);
                     }
                   }
                 }
@@ -168,5 +169,5 @@ export function parseMusicXML(xmlText: string): Score {
 
   notes.sort((a, b) => a.startBeat - b.startBeat);
 
-  return { title, parts, notes, measures, slurs, ties, totalBeats };
+  return { title, parts, notes, measures, slurs, totalBeats };
 }

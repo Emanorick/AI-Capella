@@ -33,7 +33,9 @@ export interface Score {
   notes: NoteEvent[];
   measures: MeasureInfo[];
   slurs: SlurArc[];
-  ties: SlurArc[]; // same shape as a slur (startMidi === endMidi); drawn as a straight line, not an arc
+  // Ties are not represented separately: a tied MusicXML note (split across a measure boundary,
+  // since a note can't itself cross one in the file format) is merged into a single NoteEvent at
+  // parse time instead, so it renders and plays back as the one continuous note it really is.
   totalBeats: number;
 }
 

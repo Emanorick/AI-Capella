@@ -74,8 +74,10 @@ and per-voice mixer for that song. A "← Library" button goes back without losi
   the edge of the screen) while you're just browsing, and snaps back the moment you press
   Play. While actually playing, horizontal panning is locked (the view follows the music) so
   the line and the audio can never visually desync.
-- **Ties** (a note sustained across a bar-line) are drawn as a thin straight line bridging the
-  two bars; **slurs** are drawn as an arched curve in the voice's own color.
+- **Ties** (a note sustained across a bar-line, or any tie) are merged into a single note at parse
+  time rather than kept as two notes joined by a line — see §4.2 — so a tied note renders as one
+  seamless bar and plays back with a single attack, not a retrigger. **Slurs** are drawn as an
+  arched curve in the voice's own color.
 
 ### Playback & transport
 - Play/Pause and Stop are available both in the full transport bar and as compact buttons in
@@ -169,8 +171,7 @@ interface Score {
   notes: NoteEvent[];           // flat list across all parts, sorted by startBeat
   measures: MeasureInfo[];      // for the ruler's measure numbers / time signature
   slurs: SlurArc[];
-  ties: SlurArc[];               // same shape as a slur; drawn as a straight line
-  totalBeats: number;
+  totalBeats: number;             // ties aren't a separate field -- see below, they're merged into notes
 }
 ```
 
@@ -192,9 +193,13 @@ handles:
   slur's `number` attribute.
 - **Ties**, checked against *both* `<tie>` (the sound-level element) and
   `<notations><tied>` (the notation-level element) — real-world files, especially
-  OMR/scan-derived ones, sometimes only emit one or the other. A tie's line is anchored to the
-  *end* of the first note and the *start* of the second, so it visually bridges the bar
-  boundary rather than running start-to-start.
+  OMR/scan-derived ones, sometimes only emit one or the other. A note can't itself cross a
+  measure boundary in the MusicXML format, so a note held across one (or tied for any other
+  reason) is necessarily written as multiple `<note>` elements — but musically it's one
+  continuous note, so the parser *merges* a tied sequence into a single `NoteEvent` (extending
+  its `durationBeats` through each tied segment, chains included) rather than keeping them
+  separate and bridging the gap visually. This is what makes a tied note render as one seamless
+  bar and play back with a single attack instead of an audible retrigger at the tie point.
 
 `.mxl` files (MuseScore's default export — a zip containing the MusicXML plus a
 `META-INF/container.xml` manifest) are unzipped client-side in `library.ts` using `fflate`,
@@ -222,9 +227,8 @@ This is the most performance-sensitive part of the app — it has to redraw smoo
 playback, every animation frame, on everything from a phone to a 4K desktop monitor. The
 design went through several rounds of performance/sharpness fixes; the current approach:
 
-**Pre-rendered scrolling buffers, blitted per frame.** Gridlines, note bars, lyrics, slurs,
-and ties don't change relative to each other during playback — only the horizontal scroll
-offset does. So instead of re-issuing hundreds of fill/stroke/text calls every frame, they're
+**Pre-rendered scrolling buffers, blitted per frame.** Gridlines, note bars, lyrics, and slurs
+don't change relative to each other during playback — only the horizontal scroll offset does. So instead of re-issuing hundreds of fill/stroke/text calls every frame, they're
 rasterized *once* into a wide offscreen canvas (`contentBuffer`, spanning several
 viewport-widths of beats) whenever something structural actually changes (mute/solo,
 transpose, zoom, resize, or the playhead nearing the buffer's edge). Every frame then does a

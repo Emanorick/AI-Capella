@@ -31,14 +31,6 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
 }
 
-// Rounds a beat value to a stable integer key for tie-endpoint matching -- both sides of a tie
-// are computed independently (a note's own start/end vs. the tie's recorded endpoints) and should
-// land on the exact same float in the common case, but this tolerates a hairline mismatch rather
-// than requiring bit-for-bit equality.
-function beatKey(beat: number): number {
-  return Math.round(beat * 1e6);
-}
-
 export type PartMixState = 'normal' | 'muted' | 'solo';
 export interface LoopRegion {
   start: number;
@@ -66,14 +58,6 @@ export class PianoRoll {
   private beatMarkers: ReturnType<typeof getBeatMarkers>;
   private notesByPart: Map<string, NoteEvent[]>;
   private slursByPart: Map<string, SlurArc[]>;
-  private tiesByPart: Map<string, SlurArc[]>;
-  // A tie is MusicXML's way of representing one sustained pitch that had to be split into two
-  // <note> elements because a note can't itself cross a measure boundary in the file format --
-  // musically it's one continuous note. These key sets let the note-bar drawing below detect that
-  // and merge the two halves into a single seamless bar (no gap, no rounded corner at the seam)
-  // instead of two independently-rounded pill shapes that read as separate notes.
-  private tieOutKeys = new Set<string>(); // "<partId>|<beatKey(endBeat)>|<midi>" for a note that continues into a following tied note
-  private tieInKeys = new Set<string>(); // "<partId>|<beatKey(startBeat)>|<midi>" for a note that is itself a tie's continuation
   private dpr = 1;
   private previewNote: { startBeat: number; midi: number } | null = null;
   private lyricBitmaps = new Map<string, { canvas: HTMLCanvasElement; cssWidth: number; cssHeight: number }>();
@@ -122,15 +106,6 @@ export class PianoRoll {
       if (list) list.push(slur);
       else this.slursByPart.set(slur.partId, [slur]);
     }
-    this.tiesByPart = new Map();
-    for (const tie of score.ties) {
-      const list = this.tiesByPart.get(tie.partId);
-      if (list) list.push(tie);
-      else this.tiesByPart.set(tie.partId, [tie]);
-      this.tieOutKeys.add(`${tie.partId}|${beatKey(tie.startBeat)}|${tie.startMidi}`);
-      this.tieInKeys.add(`${tie.partId}|${beatKey(tie.endBeat)}|${tie.endMidi}`);
-    }
-
     const pitches = score.notes.map((n) => n.midi);
     this.minMidi = (pitches.length ? Math.min(...pitches) : 60) - ROW_PADDING_SEMITONES;
     this.maxMidi = (pitches.length ? Math.max(...pitches) : 72) + ROW_PADDING_SEMITONES;
@@ -561,14 +536,7 @@ export class PianoRoll {
         const w = note.durationBeats * this.pixelsPerBeat;
         if (x + w < -10 || x > widthCss + 10) continue;
         const y = this.rowY(midi) - rowHeight;
-        // A tied note continues into (or from) an adjacent note of the same pitch with no gap in
-        // between -- draw it flush against its neighbor with a square corner at the seam, instead
-        // of the small trailing gap + fully-rounded corners every other note gets, so the pair
-        // reads as one continuous bar rather than two separate notes.
-        const tiedIn = this.tieInKeys.has(`${partId}|${beatKey(note.startBeat)}|${note.midi}`);
-        const tiedOut = this.tieOutKeys.has(`${partId}|${beatKey(note.startBeat + note.durationBeats)}|${note.midi}`);
-        const barW = tiedOut ? w : Math.max(w - 2, 3);
-        addRoundRectSubpath(path, x, y + barPad, Math.max(barW, 3), barH, 3, tiedIn ? 0 : 3, tiedOut ? 0 : 3);
+        addRoundRectSubpath(path, x, y + barPad, Math.max(w - 2, 3), barH, 3);
         if (!dimmed && note.lyric && w > 14) lyricNotes.push(note);
       }
       ctx.globalAlpha = dimmed ? DIMMED_ALPHA : 1;
@@ -623,31 +591,6 @@ export class PianoRoll {
       ctx.globalAlpha = 1;
     }
 
-    // ties (same-pitch notes sustained across a boundary, most commonly a barline): drawn as a
-    // straight line rather than an arched slur, bridging the gap between the two note bars.
-    for (const part of this.score.parts) {
-      if (this.hiddenParts.has(part.id)) continue;
-      const ties = this.tiesByPart.get(part.id);
-      if (!ties || !ties.length) continue;
-      const path = new Path2D();
-      let any = false;
-      for (const tie of ties) {
-        const midi = tie.startMidi + this.transpose;
-        const x1 = localBeatToX(tie.startBeat);
-        const x2 = localBeatToX(tie.endBeat);
-        if (x2 < -10 || x1 > widthCss + 10) continue;
-        const y = this.rowY(midi) - rowHeight + barPad + barH / 2;
-        path.moveTo(x1, y);
-        path.lineTo(x2, y);
-        any = true;
-      }
-      if (!any) continue;
-      ctx.globalAlpha = this.dimmedParts.has(part.id) ? DIMMED_ALPHA : 0.9;
-      ctx.strokeStyle = this.partColor(part.id);
-      ctx.lineWidth = 2;
-      ctx.stroke(path);
-      ctx.globalAlpha = 1;
-    }
   }
 
   private getLyricBitmap(text: string): { canvas: HTMLCanvasElement; cssWidth: number; cssHeight: number } {
@@ -678,16 +621,11 @@ export class PianoRoll {
 
 }
 
-/**
- * Rounds the left and right corners independently (both default to `r`) so a note bar that's tied
- * to its neighbor can go square-edged on the tied side instead -- see the tie key sets above for
- * why that matters.
- */
-function addRoundRectSubpath(path: Path2D, x: number, y: number, w: number, h: number, r: number, rLeft = r, rRight = r) {
-  path.moveTo(x + rLeft, y);
-  path.arcTo(x + w, y, x + w, y + h, rRight);
-  path.arcTo(x + w, y + h, x, y + h, rRight);
-  path.arcTo(x, y + h, x, y, rLeft);
-  path.arcTo(x, y, x + w, y, rLeft);
+function addRoundRectSubpath(path: Path2D, x: number, y: number, w: number, h: number, r: number) {
+  path.moveTo(x + r, y);
+  path.arcTo(x + w, y, x + w, y + h, r);
+  path.arcTo(x + w, y + h, x, y + h, r);
+  path.arcTo(x, y + h, x, y, r);
+  path.arcTo(x, y, x + w, y, r);
   path.closePath();
 }

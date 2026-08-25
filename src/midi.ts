@@ -244,7 +244,6 @@ export function parseMIDI(buffer: ArrayBuffer): Score {
     notes: allNotes,
     measures,
     slurs: [],
-    ties: [],
     totalBeats,
   };
 }
