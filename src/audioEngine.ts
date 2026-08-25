@@ -213,7 +213,14 @@ export class AudioEngine {
     this.scheduledNodes = [];
   }
 
-  play(fromBeat: number, bpm: number, transposeSemitones: number) {
+  /**
+   * `startAtEpochMs`, when given, is a shared wall-clock instant (e.g. from a multi-device sync
+   * broadcast) to start at, translated into this device's own AudioContext clock -- rather than
+   * the default "as soon as possible" (`ctx.currentTime + 0.06`). If that instant has already
+   * passed (slow delivery, a device joining mid-song), playback joins already in progress from
+   * wherever it would be right now instead of starting late from `fromBeat`.
+   */
+  play(fromBeat: number, bpm: number, transposeSemitones: number, startAtEpochMs?: number) {
     this.clearSchedule();
     if (this.ctx.state === 'suspended') this.ctx.resume();
     // A non-finite/non-positive bpm would make every downstream time calculation NaN/Infinity;
@@ -222,10 +229,22 @@ export class AudioEngine {
     // whole loop).
     this.secPerBeat = Number.isFinite(bpm) && bpm > 0 ? 60 / bpm : this.secPerBeat;
     this.lastTranspose = transposeSemitones;
-    this.playStartCtxTime = this.ctx.currentTime + 0.06;
-    this.playStartBeat = fromBeat;
+    const now = this.ctx.currentTime;
+    if (startAtEpochMs != null) {
+      const deltaSec = (startAtEpochMs - Date.now()) / 1000;
+      if (deltaSec > 0) {
+        this.playStartCtxTime = now + deltaSec;
+        this.playStartBeat = fromBeat;
+      } else {
+        this.playStartCtxTime = now;
+        this.playStartBeat = fromBeat + -deltaSec / this.secPerBeat;
+      }
+    } else {
+      this.playStartCtxTime = now + 0.06;
+      this.playStartBeat = fromBeat;
+    }
     this.playing = true;
-    this.scheduledUpToBeat = fromBeat;
+    this.scheduledUpToBeat = this.playStartBeat;
     // The initial schedule must scan from the very start of the piece, not just from fromBeat:
     // a long-held note that started earlier but is still sounding at fromBeat (seeking/starting
     // into its middle) needs to be picked up too, not just notes that start at-or-after it. Every

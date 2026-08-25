@@ -8,6 +8,8 @@ import { measureAtBeat, type Score } from './score';
 import { deleteImportedSong, readScoreFile, saveImportedSong, subscribeToSongs, type SongFormat } from './library';
 import { ensureSignedIn, isFirebaseConfigured } from './firebase';
 import { ensureAccess } from './pinGate';
+import * as sync from './sync';
+import type { PlaybackState } from './sync';
 
 interface SongEntry {
   id: string;
@@ -141,6 +143,17 @@ let renderPending = false;
 let canvasLeft = 0;
 let canvasTop = 0;
 
+// Multi-device sync: which song is currently loaded locally, plus bookkeeping so an incoming
+// shared-session update only actually touches AudioEngine when something timing-relevant
+// (play/pause, position, bpm, transpose) genuinely changed -- an update that only changed, say,
+// mute/solo must NOT reschedule playback, or every remote mix change would audibly retrigger
+// every currently-sounding note. See applyPlaybackState().
+let loadedSongId: string | null = null;
+let pendingSongId: string | null = null; // set when a remote songId isn't in our library list yet
+let lastReceivedPlaybackState: PlaybackState | null = null;
+let lastAppliedTiming: { playing: boolean; originBeat: number; originServerTimeMs: number; bpm: number; transpose: number } | null = null;
+let lastAppliedMetronomeOn = false;
+
 function updateCanvasRect() {
   const rect = canvas.getBoundingClientRect();
   canvasLeft = rect.left;
@@ -217,7 +230,7 @@ songListEl.addEventListener('click', (e) => {
     return;
   }
   const song = allSongs().find((s) => s.id === id);
-  if (song) loadSong(song);
+  if (song) selectSong(song);
 });
 
 async function removeImportedSong(id: string) {
@@ -274,9 +287,9 @@ async function importFiles(files: FileList | File[]) {
       setImportStatus(`Couldn't import ${file.name}: ${err instanceof Error ? err.message : 'invalid file'}`, true);
     }
   }
-  // The onSnapshot listener will render the confirmed list; load the new song immediately
+  // The onSnapshot listener will render the confirmed list; select the new song immediately
   // rather than waiting on that round trip.
-  if (lastImported) loadSong(lastImported);
+  if (lastImported) selectSong(lastImported);
 }
 
 importBtn.addEventListener('click', () => importInput.click());
@@ -295,21 +308,43 @@ libraryEl.addEventListener('drop', (e) => {
   if (e.dataTransfer?.files.length) importFiles(e.dataTransfer.files);
 });
 
-async function loadSong(song: SongEntry) {
+/**
+ * Announces a song choice to the shared session; every connected device (including this one)
+ * actually loads it once that choice comes back through applyPlaybackState(), same as every other
+ * control below -- see pushState()'s doc comment for why nothing here applies state directly.
+ */
+function selectSong(song: SongEntry) {
+  pushState({
+    songId: song.id,
+    playing: false,
+    originBeat: 0,
+    originServerTimeMs: 0,
+    transpose: 0,
+    metronomeOn: false,
+    loopEnabled: false,
+    loopRegion: null,
+    partMix: {},
+  });
+}
+
+/** Does the actual work of loading a song locally. Only ever called from applyPlaybackState(). */
+async function loadSongLocally(song: SongEntry) {
   stopRenderLoop();
   const xmlText: string = song.xml !== undefined ? song.xml : await fetch(song.url!).then((r) => r.text());
   // Built-in songs (fetched by URL) and imported MusicXML/.mxl files are MusicXML text; MIDI
   // imports were already parsed into a Score at import time and stored as its JSON serialization.
   const score: Score = song.format === 'score' ? (JSON.parse(xmlText) as Score) : parseMusicXML(xmlText);
   currentScore = score;
-  transpose = 0;
-  transposeValueEl.textContent = '0';
+  loadedSongId = song.id;
   zoom = 1;
   zoomValueEl.textContent = '100%';
   viewOffsetBeats = 0;
-  loopRegion = null;
-  loopEnabled = false;
   customStartBeat = null;
+  // Force whatever timing/metronome state applyPlaybackState() applies right after this returns
+  // to actually run against the brand-new AudioEngine below, rather than being skipped as
+  // "unchanged" by comparison against the previous song's last-applied values.
+  lastAppliedTiming = null;
+  lastAppliedMetronomeOn = false;
 
   audioEngine = new AudioEngine(score);
   audioEngine.setDuckedVolume(duckVolume);
@@ -319,9 +354,6 @@ async function loadSong(song: SongEntry) {
   });
   pianoRoll.setLoopRegion(null);
 
-  partMix = new Map(score.parts.map((p) => [p.id, 'normal' as PartMixState]));
-  pianoRoll.setPartMix(partMix);
-
   songTitleEl.textContent = score.title;
   playBtn.disabled = false;
   playBtnMini.disabled = false;
@@ -329,9 +361,117 @@ async function loadSong(song: SongEntry) {
   stopBtnMini.disabled = false;
   metronomeBtn.disabled = false;
   loopBtn.disabled = false;
-  updateLoopButton();
   buildPartsPanel(score);
   setViewMode('player');
+}
+
+/** The full shared-session shape reconstructed from this device's own current state. */
+function currentStateSnapshot(): PlaybackState {
+  return {
+    songId: loadedSongId,
+    playing: audioEngine?.isPlaying() ?? false,
+    originBeat: engineBeat(),
+    originServerTimeMs: 0,
+    bpm,
+    transpose,
+    metronomeOn,
+    loopEnabled,
+    loopRegion,
+    partMix: Object.fromEntries(partMix) as Record<string, PartMixState>,
+  };
+}
+
+/**
+ * The single way every control below changes playback/mix/loop state: publish the change and let
+ * it come back through applyPlaybackState(), rather than mutating local state directly. This
+ * mirrors a pattern the shared song library already used (deleting a song updates every device,
+ * including the one that clicked delete, only once Firestore reflects it) -- applied consistently
+ * to every transport control instead of just song deletion. Without Firebase configured there's no
+ * shared session to round-trip through, so state is applied immediately instead (single-device
+ * fallback, matching this app's pre-sync behavior); a "start playing" patch has its sync-buffer
+ * origin timestamp zeroed in that case, so AudioEngine.play() takes its normal "as soon as
+ * possible" path instead of waiting for a sync instant nothing else is listening for.
+ */
+function pushState(patch: Partial<PlaybackState>) {
+  if (isFirebaseConfigured) {
+    void sync.publishPlaybackState(patch).catch((err) => {
+      setImportStatus(`Couldn't sync: ${err instanceof Error ? err.message : String(err)}`, true);
+    });
+  } else {
+    const local = patch.playing ? { ...patch, originServerTimeMs: 0 } : patch;
+    void applyPlaybackState({ ...currentStateSnapshot(), ...local });
+  }
+}
+
+/** The single place that applies shared-session state locally -- see pushState()'s doc comment. */
+async function applyPlaybackState(state: PlaybackState) {
+  if (state.songId !== loadedSongId) {
+    if (!state.songId) return; // nothing selected yet (fresh/empty session)
+    const song = allSongs().find((s) => s.id === state.songId);
+    if (!song) {
+      pendingSongId = state.songId;
+      setImportStatus('Waiting for the shared song to finish syncing…');
+      return;
+    }
+    pendingSongId = null;
+    await loadSongLocally(song);
+  }
+
+  bpm = state.bpm;
+  document.querySelectorAll<HTMLButtonElement>('.bpm-btn').forEach((b) => b.classList.toggle('active', b.getAttribute('data-bpm') === String(bpm)));
+  transpose = state.transpose;
+  transposeValueEl.textContent = transpose > 0 ? `+${transpose}` : String(transpose);
+  pianoRoll?.setTranspose(transpose);
+  loopEnabled = state.loopEnabled;
+  loopRegion = state.loopRegion;
+  pianoRoll?.setLoopRegion(loopRegion);
+  updateLoopButton();
+  partMix = new Map(Object.entries(state.partMix));
+  pianoRoll?.setPartMix(partMix);
+  for (const [partId, mixState] of partMix) audioEngine?.setPartMixState(partId, mixState);
+  syncPartRowClasses();
+
+  if (!audioEngine) return;
+
+  if (state.metronomeOn !== lastAppliedMetronomeOn) {
+    lastAppliedMetronomeOn = state.metronomeOn;
+    metronomeOn = state.metronomeOn;
+    metronomeBtn.classList.toggle('active', metronomeOn);
+    audioEngine.setMetronomeEnabled(metronomeOn);
+  }
+
+  const timingChanged =
+    !lastAppliedTiming ||
+    lastAppliedTiming.playing !== state.playing ||
+    lastAppliedTiming.originBeat !== state.originBeat ||
+    lastAppliedTiming.originServerTimeMs !== state.originServerTimeMs ||
+    lastAppliedTiming.bpm !== state.bpm ||
+    lastAppliedTiming.transpose !== state.transpose;
+  lastAppliedTiming = {
+    playing: state.playing,
+    originBeat: state.originBeat,
+    originServerTimeMs: state.originServerTimeMs,
+    bpm: state.bpm,
+    transpose: state.transpose,
+  };
+  if (!timingChanged) return;
+
+  viewOffsetBeats = 0;
+  if (!state.playing) {
+    audioEngine.stop();
+    audioEngine.setPausedBeat(state.originBeat);
+    customStartBeat = state.originBeat > 0 ? state.originBeat : null;
+    syncPlayButtons(false);
+    stopRenderLoop();
+    renderNow();
+    return;
+  }
+  // A zero originServerTimeMs is the single-device-fallback sentinel from pushState() above --
+  // no shared instant to translate, so AudioEngine.play() falls back to its own "now" default.
+  const startAtEpochMs = state.originServerTimeMs > 0 ? state.originServerTimeMs - sync.getServerTimeOffsetMs() : undefined;
+  audioEngine.play(state.originBeat, state.bpm, state.transpose, startAtEpochMs);
+  syncPlayButtons(true);
+  startRenderLoop();
 }
 
 function buildPartsPanel(score: Score) {
@@ -363,23 +503,20 @@ function syncPartRowClasses() {
  * Solo button, which just ducks/dims the others). Clicking the same voice again restores everyone.
  */
 function toggleTrueSolo(partId: string) {
-  if (!audioEngine || !pianoRoll || !currentScore) return;
+  if (!currentScore) return;
   const alreadyIsolated =
     partMix.get(partId) !== 'muted' && currentScore.parts.every((p) => p.id === partId || partMix.get(p.id) === 'muted');
+  const newMix: Record<string, PartMixState> = {};
   for (const p of currentScore.parts) {
-    const next: PartMixState = alreadyIsolated || p.id === partId ? 'normal' : 'muted';
-    partMix.set(p.id, next);
-    audioEngine.setPartMixState(p.id, next);
+    newMix[p.id] = alreadyIsolated || p.id === partId ? 'normal' : 'muted';
   }
-  pianoRoll.setPartMix(partMix);
-  syncPartRowClasses();
-  renderNow();
+  pushState({ partMix: newMix });
 }
 
 partsPanelEl.addEventListener('click', (e) => {
   const target = e.target as HTMLElement;
   const row = target.closest<HTMLElement>('.part-row');
-  if (!row || !audioEngine || !pianoRoll) return;
+  if (!row) return;
   const partId = row.getAttribute('data-part')!;
   const action = target.getAttribute('data-action') as PartMixState | null;
 
@@ -390,11 +527,7 @@ partsPanelEl.addEventListener('click', (e) => {
 
   const current = partMix.get(partId) ?? 'normal';
   const next: PartMixState = current === action ? 'normal' : action;
-  partMix.set(partId, next);
-  audioEngine.setPartMixState(partId, next);
-  pianoRoll.setPartMix(partMix);
-  syncPartRowClasses();
-  renderNow();
+  pushState({ partMix: { ...Object.fromEntries(partMix), [partId]: next } });
 });
 
 /** Keeps the header's compact play button and the transport's full one showing the same state. */
@@ -407,9 +540,7 @@ function syncPlayButtons(playing: boolean) {
 function togglePlay() {
   if (!audioEngine || !currentScore || playBtn.disabled) return;
   if (audioEngine.isPlaying()) {
-    audioEngine.pause();
-    syncPlayButtons(false);
-    stopRenderLoop();
+    pushState({ playing: false, originBeat: audioEngine.getCurrentBeat(), originServerTimeMs: 0 });
   } else {
     let fromBeat = audioEngine.getPausedBeat();
     if (loopRegion) {
@@ -417,10 +548,7 @@ function togglePlay() {
     } else if (fromBeat >= currentScore.totalBeats) {
       fromBeat = 0;
     }
-    viewOffsetBeats = 0;
-    audioEngine.play(fromBeat, bpm, transpose);
-    syncPlayButtons(true);
-    startRenderLoop();
+    pushState({ playing: true, originBeat: fromBeat, originServerTimeMs: sync.computeFutureOriginServerTimeMs() });
   }
 }
 playBtn.addEventListener('click', togglePlay);
@@ -437,12 +565,7 @@ function stopPlayback() {
   const alreadyAtTarget = !wasPlaying && Math.abs(priorPausedBeat - target) < 0.01;
   const resetBeat = alreadyAtTarget ? 0 : target;
 
-  audioEngine.stop();
-  stopRenderLoop();
-  audioEngine.setPausedBeat(resetBeat);
-  viewOffsetBeats = 0;
-  syncPlayButtons(false);
-  renderNow();
+  pushState({ playing: false, originBeat: resetBeat, originServerTimeMs: 0 });
 }
 stopBtn.addEventListener('click', stopPlayback);
 stopBtnMini.addEventListener('click', stopPlayback);
@@ -457,9 +580,7 @@ window.addEventListener('keydown', (e) => {
 
 metronomeBtn.addEventListener('click', () => {
   if (!audioEngine) return;
-  metronomeOn = !metronomeOn;
-  audioEngine.setMetronomeEnabled(metronomeOn);
-  metronomeBtn.classList.toggle('active', metronomeOn);
+  pushState({ metronomeOn: !metronomeOn });
 });
 
 function updateLoopButton() {
@@ -476,16 +597,16 @@ function updateLoopButton() {
 }
 loopBtn.addEventListener('click', () => {
   if (!currentScore) return;
-  loopEnabled = !loopEnabled;
-  updateLoopButton();
+  pushState({ loopEnabled: !loopEnabled });
 });
 
 document.querySelectorAll<HTMLButtonElement>('.bpm-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
-    bpm = parseInt(btn.getAttribute('data-bpm')!, 10);
-    document.querySelectorAll('.bpm-btn').forEach((b) => b.classList.toggle('active', b === btn));
+    const newBpm = parseInt(btn.getAttribute('data-bpm')!, 10);
     if (audioEngine?.isPlaying()) {
-      audioEngine.play(audioEngine.getCurrentBeat(), bpm, transpose);
+      pushState({ bpm: newBpm, playing: true, originBeat: audioEngine.getCurrentBeat(), originServerTimeMs: sync.computeFutureOriginServerTimeMs() });
+    } else {
+      pushState({ bpm: newBpm });
     }
   });
 });
@@ -502,13 +623,11 @@ document.querySelector(`.duck-btn[data-duck="${duckVolume}"]`)?.classList.add('a
 
 function applyTranspose(delta: number) {
   if (!audioEngine || !pianoRoll) return;
-  transpose = Math.max(MIN_TRANSPOSE, Math.min(MAX_TRANSPOSE, transpose + delta));
-  transposeValueEl.textContent = transpose > 0 ? `+${transpose}` : String(transpose);
-  pianoRoll.setTranspose(transpose);
+  const newTranspose = Math.max(MIN_TRANSPOSE, Math.min(MAX_TRANSPOSE, transpose + delta));
   if (audioEngine.isPlaying()) {
-    audioEngine.play(audioEngine.getCurrentBeat(), bpm, transpose);
+    pushState({ transpose: newTranspose, playing: true, originBeat: audioEngine.getCurrentBeat(), originServerTimeMs: sync.computeFutureOriginServerTimeMs() });
   } else {
-    renderNow();
+    pushState({ transpose: newTranspose });
   }
 }
 transposeDownBtn.addEventListener('click', () => applyTranspose(-1));
@@ -563,10 +682,12 @@ function seekToBeat(beat: number) {
   const clamped = Math.max(0, Math.min(currentScore.totalBeats, beat));
   const oldEngineBeat = engineBeat();
   if (audioEngine.isPlaying()) {
-    audioEngine.play(clamped, bpm, transpose);
+    pushState({ playing: true, originBeat: clamped, originServerTimeMs: sync.computeFutureOriginServerTimeMs() });
   } else {
-    audioEngine.setPausedBeat(clamped);
+    pushState({ playing: false, originBeat: clamped, originServerTimeMs: 0 });
   }
+  // View-position compensation only, so the screen doesn't visibly jump for the person who just
+  // tapped -- purely local, independent of the authoritative position change published above.
   viewOffsetBeats += oldEngineBeat - clamped;
   clampViewOffset();
   renderNow();
@@ -574,9 +695,7 @@ function seekToBeat(beat: number) {
 
 function clearLoopRegion() {
   if (!loopRegion) return;
-  loopRegion = null;
-  pianoRoll?.setLoopRegion(null);
-  updateLoopButton();
+  pushState({ loopRegion: null });
 }
 
 function finalizeLoopSelection(beatA: number, beatB: number) {
@@ -584,14 +703,10 @@ function finalizeLoopSelection(beatA: number, beatB: number) {
   const start = Math.max(0, Math.min(beatA, beatB));
   const end = Math.min(currentScore.totalBeats, Math.max(beatA, beatB));
   if (end - start < MIN_LOOP_BEATS) {
-    loopRegion = null;
+    pushState({ loopRegion: null });
   } else {
-    loopRegion = { start, end };
-    loopEnabled = true;
+    pushState({ loopRegion: { start, end }, loopEnabled: true });
   }
-  pianoRoll.setLoopRegion(loopRegion);
-  updateLoopButton();
-  renderNow();
 }
 
 canvas.addEventListener(
@@ -684,8 +799,8 @@ function endDrag(e: PointerEvent) {
       finalizeLoopSelection(loopSelectStartBeat, clientXToBeat(e.clientX));
     } else {
       // A tap (not a drag) in the ruler just sets the start point, same as the old plain click.
+      // seekToBeat's published originBeat is what sets customStartBeat, via applyPlaybackState.
       clearLoopRegion();
-      customStartBeat = loopSelectStartBeat;
       seekToBeat(loopSelectStartBeat);
     }
     loopSelectStartBeat = null;
@@ -824,13 +939,30 @@ canvasResizeObserver.observe(canvas);
     // require request.auth != null, so an unsigned-in read would just hang/get rejected.
     await ensureSignedIn();
     await ensureAccess(); // PIN gate; resolves immediately if already granted on this device
+    sync.startPeriodicCalibration();
     subscribeToSongs(
       (songs) => {
         importedSongs = songs.map((s) => ({ id: s.id, title: s.title, xml: s.xml, format: s.format, imported: true }));
         renderSongList();
+        // A remote songId can arrive before this device's own library listener has caught up
+        // with it (e.g. it was just imported elsewhere) -- re-apply the last state we got once
+        // the library list might actually contain it.
+        if (pendingSongId && lastReceivedPlaybackState && allSongs().some((s) => s.id === pendingSongId)) {
+          void applyPlaybackState(lastReceivedPlaybackState);
+        }
       },
       (err) => {
         setImportStatus(`Shared library unavailable: ${err instanceof Error ? err.message : String(err)}`, true);
+      },
+    );
+    sync.subscribePlaybackState(
+      (state) => {
+        if (!state) return;
+        lastReceivedPlaybackState = state;
+        void applyPlaybackState(state);
+      },
+      (err) => {
+        setImportStatus(`Shared session unavailable: ${err instanceof Error ? err.message : String(err)}`, true);
       },
     );
   } catch (err) {

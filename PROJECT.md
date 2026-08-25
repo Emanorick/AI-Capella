@@ -124,6 +124,17 @@ Solo buttons:
   casually forwarded outside the group; see the code comment in `pinGate.ts` for the exact
   reasoning and its limits.
 
+### Synced multi-device playback
+- Every connected device is a full remote control for one shared playback session: hitting
+  Play/Pause/Stop, changing BPM, transpose, or the metronome, seeking via the ruler, changing
+  mute/solo, marking a loop region, or picking a different song on *any* device applies to
+  *every* connected device — including starting audio at (as close as technically possible to)
+  the same real-world instant, not just the same logical position. Tempo is a synced field like
+  everything else: any device can change it, but the value is always identical everywhere.
+- Not synced (personal viewing preference, stays per-device): zoom level, vertical scroll
+  position, and the solo-ducking volume level.
+- See §4.7 for how the cross-device timing actually works.
+
 ---
 
 ## 3. Project layout
@@ -142,6 +153,7 @@ AI-Capella/
 │   ├── audioEngine.ts         # Web Audio synthesis + playback scheduling
 │   ├── palette.ts             # deterministic per-voice color assignment
 │   ├── library.ts             # Firestore-backed shared song storage, PIN verification, .mxl unzip
+│   ├── sync.ts                 # multi-device shared playback session: clock calibration + pub/sub
 │   ├── firebase.ts            # Firebase app/auth/Firestore initialization, anonymous sign-in
 │   ├── firebaseConfig.ts      # Firebase web app config (not secret; see file comment)
 │   ├── pinGate.ts             # the full-screen PIN prompt overlay
@@ -296,6 +308,11 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
 - Changing BPM, transpose, or the metronome toggle mid-playback all just call `play()` again
   from the current beat — full re-schedule, not an incremental patch — which is simple and, in
   practice, imperceptible.
+- `play()` takes an optional `startAtEpochMs`: a wall-clock instant (`Date.now()`-style) to
+  begin at, translated into this device's own `AudioContext` clock, instead of the default "as
+  soon as possible." This is what §4.7's multi-device sync uses to make every device start at
+  the same real moment; if that instant has already passed by the time `play()` runs, playback
+  joins already in progress from wherever it would be right now rather than starting late.
 
 ### 4.5 Input handling (`main.ts`)
 
@@ -347,6 +364,76 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
   actual access control is "authenticated (even anonymously) clients can read/write," which the
   PIN does nothing to restrict.
 
+### 4.7 Synced multi-device playback (`sync.ts`, `main.ts`)
+
+One Firestore doc, `sessions/live`, holds the entire shared transport state — `songId`, `bpm`,
+`transpose`, `metronomeOn`, `loopEnabled`/`loopRegion`, `partMix`, and the play/pause origin
+(`playing`, `originBeat`, `originServerTimeMs`). Every connected device subscribes to it via
+`subscribePlaybackState()`.
+
+**The hard part: making Play land at the same real instant, not just the same logical beat.**
+Broadcasting "play now" doesn't work — Firestore's realtime updates don't arrive at every
+device at the same moment (latency varies, worse on the long-polling fallback `firebase.ts`
+already falls back to on restrictive networks), so "start as soon as the update arrives" would
+make devices start audibly out of sync with each other. Instead, a device that presses Play
+broadcasts a **future** instant (`computeFutureOriginServerTimeMs()`, `Date.now() + offset +
+750ms`) rather than "now," and every device — including the one that pressed Play — translates
+that shared instant into its own `AudioContext` clock and schedules `AudioEngine.play()`'s
+`startAtEpochMs` to begin exactly then (see §4.4). The 750ms buffer just needs to comfortably
+exceed normal propagation latency without feeling laggy.
+
+**Clock calibration.** Translating a shared server-time instant into "when is that on *my*
+clock" requires knowing the offset between this device's `Date.now()` and true server time —
+device clocks aren't perfectly synced, and can drift or jump (laptop sleep, mobile tab
+suspension). `calibrateClockOffset()` does an NTP-style round-trip measurement: write a
+per-*device* Firestore doc (keyed by a `crypto.randomUUID()` persisted in `localStorage` — a
+*shared* calibration doc would let two devices' concurrent writes corrupt each other's
+round-trip reading) with a `serverTimestamp()`, read it straight back from the server
+(`getDocFromServer`, bypassing the local cache, which would just echo the write instantly and
+defeat the measurement), and estimate the server clock at the midpoint of the round trip.
+`startPeriodicCalibration()` runs this on load, every 5 minutes, and on `visibilitychange`.
+
+**State ownership.** Every control in `main.ts` — Play/Pause/Stop, BPM, transpose, seek,
+metronome, loop, mute/solo, song selection — calls `pushState()` with a patch and does nothing
+else locally; `applyPlaybackState()`, driven only by the `onSnapshot` callback (including the
+writer's own near-instant optimistic echo), is the single place that actually mutates local
+state and calls into `audioEngine`/`pianoRoll`. This is the same pattern the shared song
+library already used for deletion (every device, including the one that clicked delete, only
+updates once Firestore reflects it), applied consistently to the whole transport instead of
+just one action. A consequence: a late joiner or a reconnect needs no special-case code at
+all — the first snapshot after subscribing runs through the exact same function, which
+recomputes the live position from a possibly-minutes-old `originServerTimeMs` anchor and joins
+already in sync.
+
+Two write shapes matter for correctness:
+- **Timing writes** (anything that starts, stops, or moves playback, or changes BPM/transpose
+  while playing) always carry the full `{playing, originBeat, originServerTimeMs, bpm,
+  transpose}` group in one call, never split across separate updates. This is the single most
+  important correctness rule in the design: Firestore's per-field merge means two devices'
+  *partial* concurrent writes could combine a winning `bpm` from one with a losing `originBeat`
+  from another into an incoherent state. Sending the whole group atomically means whichever
+  write lands last, it lands whole.
+- **Simple writes** (mute/solo, loop region, metronome, BPM/transpose while paused) just touch
+  the field(s) that changed.
+- `applyPlaybackState()` also diffs incoming timing fields against what it last applied and
+  only touches `AudioEngine` when they actually changed — an update that only changed, say,
+  mute/solo must *not* trigger a reschedule, or every remote mix change would audibly retrigger
+  every currently-sounding note (`AudioEngine.play()` always clears and re-attacks the full
+  schedule; mute/solo alone is applied as a plain gain change via `setPartMixState()`, which
+  needs no reschedule at all).
+
+**Without Firebase configured**, `pushState()` applies changes immediately and locally instead
+of publishing (single-device fallback, matching the app's pre-sync behavior) — a "start
+playing" patch has its origin timestamp zeroed in that case, which makes `AudioEngine.play()`
+take its normal "as soon as possible" path instead of waiting for a sync instant nothing else
+is listening for.
+
+**Not synced**, and deliberately so: loop/end-of-piece wraparound stays fully local per device
+(each device is already clock-synced to the same anchor, so they cross a boundary within a
+couple of animation frames of each other regardless — good enough for a rehearsal tool without
+the real complexity of anchor-based drift-free loop math), and zoom/scroll/duck-volume remain
+personal per-device preferences, never written to the shared doc at all.
+
 ---
 
 ## 5. Development
@@ -389,3 +476,15 @@ needs to reference its own bundled assets, like the sample song's URL, for the s
   a real accompanist.
 - **No offline mode.** Firestore's shared library requires a network connection; the bundled
   sample song is the only thing guaranteed to work with Firebase unreachable.
+- **One shared session, not multiple rooms.** Synced playback (§4.7) is a single global
+  `sessions/live` doc — every connected device is in the same session, with no concept of
+  separate rehearsal rooms. Any device picking a song or changing playback state retargets
+  everyone else immediately, with no confirmation step.
+- **No presence UI.** There's no indication of who else is connected or how many devices are in
+  the shared session.
+- **Small built-in delay on synced timing changes.** Play, seek, and BPM/transpose changes made
+  while playing carry a ~750ms buffer before they take effect, so every device has time to
+  receive and schedule the change before it happens. Loop/end-of-piece wraparound is not
+  anchor-corrected across devices — it stays a local per-device boundary check, which converges
+  closely in practice (every device is already clock-synced to the same anchor) but isn't
+  drift-proof over very long loop-practice sessions.
