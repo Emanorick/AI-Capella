@@ -25,6 +25,7 @@ export interface MeasureInfo {
   startBeat: number; // quarter-note beats
   beats: number; // time signature numerator
   beatType: number; // time signature denominator
+  fifths: number; // key signature, circle-of-fifths count: positive = sharps, negative = flats
 }
 
 export interface SlurArc {

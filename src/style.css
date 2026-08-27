@@ -303,14 +303,14 @@ body {
 
 #play-btn-mini,
 #stop-btn-mini {
-  width: 26px;
-  height: 26px;
+  width: 34px;
+  height: 34px;
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: transparent;
   color: rgba(255, 255, 255, 0.85);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 15px;
   line-height: 1;
   flex-shrink: 0;
 }
@@ -337,15 +337,15 @@ body {
 }
 
 #settings-toggle {
-  width: 26px;
-  height: 18px;
+  width: 44px;
+  height: 26px;
   border-radius: 0 0 6px 6px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-top: none;
   background: #14161e;
   color: rgba(255, 255, 255, 0.75);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1;
 }
 
@@ -354,8 +354,17 @@ body {
   color: #eef0f5;
 }
 
+/* Animated collapse/expand: the JS handler sets an explicit max-height (measured from the
+   panel's real scrollHeight, not guessed) before toggling this class, so the transition always
+   animates to/from the panel's actual content height instead of a fixed value that could clip a
+   larger ensemble's wrapped controls on a narrow screen. */
+#settings-panel {
+  overflow: hidden;
+  transition: max-height 0.25s ease;
+}
+
 #settings-panel.collapsed {
-  display: none;
+  max-height: 0 !important;
 }
 
 #parts-panel {
@@ -545,6 +554,25 @@ body {
   cursor: default;
 }
 
+.measure-step-btn {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: transparent;
+  color: #eef0f5;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.measure-step-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .bpm-btn.active,
 .duck-btn.active {
   background: #4fa8ff;
@@ -615,6 +643,16 @@ body {
 
   #transport {
     gap: 12px;
+  }
+
+  #song-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  #header-right {
+    justify-content: space-between;
   }
 }
 

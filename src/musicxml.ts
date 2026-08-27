@@ -43,6 +43,7 @@ export function parseMusicXML(xmlText: string): Score {
     let divisions = 1;
     let beats = 4;
     let beatType = 4;
+    let fifths = 0;
     let measureStartBeat = 0;
     let cursor = 0;
     let lastNoteStart = 0;
@@ -67,6 +68,8 @@ export function parseMusicXML(xmlText: string): Score {
           case 'attributes': {
             const divText = child.querySelector('divisions')?.textContent;
             if (divText) divisions = parseFloat(divText) || 1;
+            const fifthsText = child.querySelector('key > fifths')?.textContent;
+            if (fifthsText) fifths = parseInt(fifthsText, 10) || 0;
             const timeEl = child.querySelector('time');
             if (timeEl) {
               const b = timeEl.querySelector('beats')?.textContent;
@@ -158,7 +161,7 @@ export function parseMusicXML(xmlText: string): Score {
 
       const measureDurationBeats = beats * (4 / beatType);
       if (!measuresBuilt) {
-        measures.push({ number: measureNumber, startBeat: measureStartBeat, beats, beatType });
+        measures.push({ number: measureNumber, startBeat: measureStartBeat, beats, beatType, fifths });
       }
       measureStartBeat += measureDurationBeats;
     }

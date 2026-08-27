@@ -3,7 +3,7 @@ import { parseMusicXML } from './musicxml';
 import { parseMIDI } from './midi';
 import { AudioEngine, type PartMixState } from './audioEngine';
 import { PianoRoll, RULER_HEIGHT_PX, type LoopRegion } from './pianoRoll';
-import { StaffView } from './staffView';
+import { StaffView, STAFF_RULER_HEIGHT_PX } from './staffView';
 import { colorForPartIndex } from './palette';
 import { measureAtBeat, type Score } from './score';
 import { deleteImportedSong, readScoreFile, saveImportedSong, subscribeToSongs, type SongFormat } from './library';
@@ -85,8 +85,10 @@ app.innerHTML = `
         </div>
         <div class="transport-group" id="measure-group">
           <span class="transport-label">Measure</span>
+          <button id="measure-prev-btn" class="measure-step-btn" disabled title="Hold to jump back faster">&minus;</button>
           <input id="measure-input" type="number" min="1" step="1" inputmode="numeric" disabled />
           <button id="measure-go-btn" disabled>Go</button>
+          <button id="measure-next-btn" class="measure-step-btn" disabled title="Hold to jump forward faster">&plus;</button>
         </div>
         <div class="transport-group" id="transpose-group">
           <span class="transport-label">Transpose</span>
@@ -139,6 +141,8 @@ const zoomOutBtn = document.querySelector<HTMLButtonElement>('#zoom-out')!;
 const zoomInBtn = document.querySelector<HTMLButtonElement>('#zoom-in')!;
 const measureInput = document.querySelector<HTMLInputElement>('#measure-input')!;
 const measureGoBtn = document.querySelector<HTMLButtonElement>('#measure-go-btn')!;
+const measurePrevBtn = document.querySelector<HTMLButtonElement>('#measure-prev-btn')!;
+const measureNextBtn = document.querySelector<HTMLButtonElement>('#measure-next-btn')!;
 const canvas = document.querySelector<HTMLCanvasElement>('#roll')!;
 const staffCanvas = document.querySelector<HTMLCanvasElement>('#staff')!;
 const viewToggleBtn = document.querySelector<HTMLButtonElement>('#view-toggle-btn')!;
@@ -163,6 +167,9 @@ let previewNoteTimeout: number | null = null;
 let partMix = new Map<string, PartMixState>();
 let loopRegion: LoopRegion | null = null;
 let loopEnabled = false;
+// Whether the next Play should count-in (see PlaybackState.freshStart's doc comment in sync.ts).
+// Kept in sync via applyPlaybackState the same way metronomeOn/loopEnabled are.
+let freshStart = true;
 let rafId: number | null = null;
 let renderPending = false;
 let canvasLeft = 0;
@@ -204,7 +211,14 @@ function setViewMode(mode: 'landing' | 'library' | 'player') {
     renderNow();
   }
 }
-libraryBackBtn.addEventListener('click', () => setViewMode('library'));
+libraryBackBtn.addEventListener('click', () => {
+  // Publishes a normal synced Stop -- in Ensemble mode this stops every device, not just this
+  // one, matching the expectation that leaving to browse the library shouldn't leave a song
+  // silently still playing for the rest of the group. Safe no-op if nothing is loaded/playing
+  // (stopPlayback's own guard).
+  stopPlayback();
+  setViewMode('library');
+});
 
 const MODE_STORAGE_KEY = 'ai-capella-mode';
 // Solo = fully local, no shared playback session at all (even though Firebase may be
@@ -252,13 +266,31 @@ if (storedMode === 'solo' || storedMode === 'ensemble') {
   void runBootstrap();
 }
 
-settingsToggleBtn.addEventListener('click', () => {
-  const collapsed = settingsPanelEl.classList.toggle('collapsed');
-  settingsToggleBtn.innerHTML = collapsed ? '&#9656;' : '&#9662;';
-  settingsToggleBtn.title = collapsed ? 'Show settings' : 'Hide settings';
-  settingsToggleBtn.setAttribute('aria-expanded', String(!collapsed));
+// Shared by the settings-toggle button and the mobile swipe-up/down gesture below. Sets the
+// panel's max-height from its measured scrollHeight (rather than a guessed fixed value, which
+// risks clipping a larger ensemble's wrapped controls on a narrow phone) before toggling the
+// collapsed class, so the CSS max-height transition animates smoothly instead of snapping.
+function toggleSettingsPanel() {
+  const collapsed = settingsPanelEl.classList.contains('collapsed');
+  settingsPanelEl.style.maxHeight = settingsPanelEl.scrollHeight + 'px';
+  if (collapsed) {
+    settingsPanelEl.classList.remove('collapsed');
+  } else {
+    // Forces the browser to apply the just-set max-height (the panel's full height) in one frame
+    // before adding 'collapsed' sets it to 0 in the next -- without this the two style writes
+    // would coalesce and there'd be nothing for the transition to animate from.
+    requestAnimationFrame(() => settingsPanelEl.classList.add('collapsed'));
+  }
+  settingsToggleBtn.innerHTML = collapsed ? '&#9662;' : '&#9656;';
+  settingsToggleBtn.title = collapsed ? 'Hide settings' : 'Show settings';
+  settingsToggleBtn.setAttribute('aria-expanded', String(collapsed));
+}
+settingsToggleBtn.addEventListener('click', toggleSettingsPanel);
+settingsPanelEl.addEventListener('transitionend', (e) => {
+  if (e.propertyName !== 'max-height') return;
   // Collapsing/expanding changes how much vertical space the canvas has.
   pianoRoll?.resize();
+  staffView?.resize();
   updateCanvasRect();
   renderNow();
 });
@@ -399,6 +431,11 @@ function selectSong(song: SongEntry) {
     metronomeOn: false,
     loopEnabled: false,
     loopRegion: null,
+    // Explicit, not omitted -- publishPlaybackState is a merge write, and a fresh song should
+    // always be a fresh start regardless of whatever count-in/freshStart state was left over.
+    countInBeats: 0,
+    countInPulseBeats: 1,
+    freshStart: true,
   });
 }
 
@@ -437,6 +474,7 @@ async function loadSongLocally(song: SongEntry) {
   // with its own fresh, all-normal mix.
   partMix = new Map(score.parts.map((p) => [p.id, 'normal' as PartMixState]));
   pianoRoll.setPartMix(partMix);
+  staffView?.setPartMix(partMix);
 
   songTitleEl.textContent = score.title;
   playBtn.disabled = false;
@@ -447,6 +485,8 @@ async function loadSongLocally(song: SongEntry) {
   loopBtn.disabled = false;
   measureInput.disabled = false;
   measureGoBtn.disabled = false;
+  measurePrevBtn.disabled = false;
+  measureNextBtn.disabled = false;
   measureInput.max = String(score.measures.at(-1)?.number ?? 1);
   buildPartsPanel(score);
   setViewMode('player');
@@ -466,6 +506,7 @@ function currentStateSnapshot(): PlaybackState {
     loopRegion,
     countInBeats: 0,
     countInPulseBeats: 1,
+    freshStart,
   };
 }
 
@@ -530,10 +571,14 @@ async function applyPlaybackState(state: PlaybackState) {
   transpose = state.transpose;
   transposeValueEl.textContent = transpose > 0 ? `+${transpose}` : String(transpose);
   pianoRoll?.setTranspose(transpose);
+  staffView?.setTranspose(transpose);
   loopEnabled = state.loopEnabled;
   loopRegion = state.loopRegion;
   pianoRoll?.setLoopRegion(loopRegion);
   updateLoopButton();
+  // No side effect of its own (only read later, synchronously, inside togglePlay) -- kept
+  // unconditional/undedup'd so it's never staler than necessary.
+  freshStart = state.freshStart;
 
   if (!audioEngine) return;
 
@@ -620,6 +665,7 @@ function toggleTrueSolo(partId: string) {
     audioEngine.setPartMixState(p.id, next);
   }
   pianoRoll.setPartMix(partMix);
+  staffView?.setPartMix(partMix);
   syncPartRowClasses();
   renderNow();
 }
@@ -641,6 +687,7 @@ partsPanelEl.addEventListener('click', (e) => {
   partMix.set(partId, next);
   audioEngine.setPartMixState(partId, next);
   pianoRoll.setPartMix(partMix);
+  staffView?.setPartMix(partMix);
   syncPartRowClasses();
   renderNow();
 });
@@ -655,7 +702,9 @@ function syncPlayButtons(playing: boolean) {
 function togglePlay() {
   if (!audioEngine || !currentScore || playBtn.disabled) return;
   if (audioEngine.isPlaying()) {
-    pushState({ playing: false, originBeat: audioEngine.getCurrentBeat(), originServerTimeMs: 0 });
+    // A plain Pause -- resuming from here later should NOT count in, only a genuinely fresh start
+    // should (see freshStart's doc comment in sync.ts).
+    pushState({ playing: false, originBeat: audioEngine.getCurrentBeat(), originServerTimeMs: 0, freshStart: false });
   } else {
     let fromBeat = audioEngine.getPausedBeat();
     if (loopRegion) {
@@ -666,11 +715,13 @@ function togglePlay() {
     // A fresh Play with the metronome on gets a synced count-in ("Einzählen") -- one measure's
     // worth of clicks at the target measure's own time signature, so 6/8 etc. count in dotted-
     // eighth pulses rather than misreading the beats numerator as quarter-note pulses. Only a
-    // genuinely fresh Play does this -- BPM/transpose changes and seeks while already playing
-    // explicitly zero it (see those call sites) so an ordinary tempo tweak never re-triggers one.
+    // genuinely fresh Play does this (metronome on AND freshStart) -- BPM/transpose changes and
+    // seeks while already playing explicitly zero countInBeats (see those call sites), and a
+    // plain Pause->Play resume never has freshStart set, so an ordinary tempo tweak or resuming
+    // where you left off never re-triggers one.
     const measure = measureAtBeat(currentScore, fromBeat);
     const countInPulseBeats = measure ? 4 / measure.beatType : 1;
-    const countInBeats = metronomeOn && measure ? measure.beats : 0;
+    const countInBeats = metronomeOn && measure && freshStart ? measure.beats : 0;
     const extraLeadMs = countInBeats > 0 ? countInBeats * countInPulseBeats * (60_000 / bpm) : 0;
     void publishPlayingAt(fromBeat, { countInBeats, countInPulseBeats }, extraLeadMs);
   }
@@ -689,7 +740,7 @@ function stopPlayback() {
   const alreadyAtTarget = !wasPlaying && Math.abs(priorPausedBeat - target) < 0.01;
   const resetBeat = alreadyAtTarget ? 0 : target;
 
-  pushState({ playing: false, originBeat: resetBeat, originServerTimeMs: 0 });
+  pushState({ playing: false, originBeat: resetBeat, originServerTimeMs: 0, freshStart: true });
 }
 stopBtn.addEventListener('click', stopPlayback);
 stopBtnMini.addEventListener('click', stopPlayback);
@@ -743,12 +794,62 @@ function jumpToMeasure() {
   if (!currentScore) return;
   const n = parseInt(measureInput.value, 10);
   const measure = currentScore.measures.find((m) => m.number === n);
-  if (measure) seekToBeat(measure.startBeat);
+  if (measure) seekToBeat(measure.startBeat, { recenterView: true });
 }
 measureGoBtn.addEventListener('click', jumpToMeasure);
 measureInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') jumpToMeasure();
 });
+
+// Plus/minus stepper for the measure number, with press-and-hold acceleration: a single tap
+// moves one measure, but holding down repeats and speeds up over time -- the confirmed mobile
+// substitute for typing a measure number, since numeric keyboards are slow to reach on a phone.
+// Each step immediately jumps and recenters the view (same as pressing Go), so rapid taps or a
+// hold both give live feedback rather than only updating the number field.
+const STEPPER_INITIAL_DELAY_MS = 400;
+const STEPPER_MIN_INTERVAL_MS = 60;
+const STEPPER_ACCELERATION = 0.75;
+let stepperTimeoutId: number | null = null;
+
+function stepMeasure(delta: number) {
+  if (!currentScore) return;
+  const maxN = currentScore.measures.at(-1)?.number ?? 1;
+  const current = parseInt(measureInput.value, 10) || 1;
+  const next = Math.min(Math.max(current + delta, 1), maxN);
+  if (next === current) return;
+  measureInput.value = String(next);
+  jumpToMeasure();
+}
+
+function startMeasureStepperHold(delta: number) {
+  stepMeasure(delta);
+  let intervalMs = STEPPER_INITIAL_DELAY_MS;
+  const scheduleNext = () => {
+    stepperTimeoutId = window.setTimeout(() => {
+      stepMeasure(delta);
+      intervalMs = Math.max(STEPPER_MIN_INTERVAL_MS, intervalMs * STEPPER_ACCELERATION);
+      scheduleNext();
+    }, intervalMs);
+  };
+  scheduleNext();
+}
+
+function stopMeasureStepperHold() {
+  if (stepperTimeoutId != null) {
+    clearTimeout(stepperTimeoutId);
+    stepperTimeoutId = null;
+  }
+}
+
+for (const [btn, delta] of [
+  [measurePrevBtn, -1],
+  [measureNextBtn, 1],
+] as const) {
+  btn.addEventListener('pointerdown', () => startMeasureStepperHold(delta));
+  btn.addEventListener('pointerup', stopMeasureStepperHold);
+  btn.addEventListener('pointerleave', stopMeasureStepperHold);
+  btn.addEventListener('pointercancel', stopMeasureStepperHold);
+}
 
 document.querySelectorAll<HTMLButtonElement>('.duck-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -773,9 +874,10 @@ transposeDownBtn.addEventListener('click', () => applyTranspose(-1));
 transposeUpBtn.addEventListener('click', () => applyTranspose(1));
 
 function applyZoom(factor: number) {
-  if (!pianoRoll) return;
+  if (!pianoRoll && !staffView) return;
   zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor));
-  pianoRoll.setZoom(zoom);
+  pianoRoll?.setZoom(zoom);
+  staffView?.setZoom(zoom);
   zoomValueEl.textContent = `${Math.round(zoom * 100)}%`;
   clampViewOffset();
   renderNow();
@@ -816,7 +918,13 @@ function panByBeats(deltaBeats: number) {
  * Sets where the next Play (or an already-playing transport) should be, without moving the
  * view: the beat under the click stays under the same screen x, so scrolling never jumps.
  */
-function seekToBeat(beat: number) {
+/**
+ * `recenterView`, when true (Measure-jump-Go), deliberately snaps the view to the new position
+ * instead of holding it still -- the point of that control is navigation, "take me there." When
+ * false (default; ruler/staff-ruler grid-lock tap), the view stays exactly where it was so the
+ * screen doesn't jump for someone who's just marking a start point while reading elsewhere.
+ */
+function seekToBeat(beat: number, opts?: { recenterView?: boolean }) {
   if (!audioEngine || !currentScore || !pianoRoll) return;
   const clamped = Math.max(0, Math.min(currentScore.totalBeats, beat));
   const oldEngineBeat = engineBeat();
@@ -824,11 +932,15 @@ function seekToBeat(beat: number) {
     // See the BPM handler's comment: explicitly zeroed so a stale count-in never reattaches.
     void publishPlayingAt(clamped, { countInBeats: 0, countInPulseBeats: 1 });
   } else {
-    pushState({ playing: false, originBeat: clamped, originServerTimeMs: 0 });
+    pushState({ playing: false, originBeat: clamped, originServerTimeMs: 0, freshStart: true });
   }
-  // View-position compensation only, so the screen doesn't visibly jump for the person who just
-  // tapped -- purely local, independent of the authoritative position change published above.
-  viewOffsetBeats += oldEngineBeat - clamped;
+  if (opts?.recenterView) {
+    viewOffsetBeats = 0;
+  } else {
+    // View-position compensation only, so the screen doesn't visibly jump for the person who just
+    // tapped -- purely local, independent of the authoritative position change published above.
+    viewOffsetBeats += oldEngineBeat - clamped;
+  }
   clampViewOffset();
   renderNow();
 }
@@ -872,11 +984,17 @@ canvas.addEventListener(
 let dragPointerId: number | null = null;
 let dragStartX = 0;
 let dragStartY = 0;
+let dragStartTime = 0;
 let dragLastX = 0;
 let dragLastY = 0;
 let dragMoved = false;
 let dragAxis: 'x' | 'y' | null = null;
 let loopSelectStartBeat: number | null = null;
+
+// A vertical drag this fast and this short is a deliberate flick, not a scroll -- used below to
+// toggle the mobile settings panel on a quick swipe, without needing a dedicated gesture zone.
+const SWIPE_MAX_MS = 300;
+const SWIPE_MIN_DY_PX = 40;
 
 function clientXToBeat(clientX: number): number {
   return pianoRoll!.xToBeat(clientX - canvasLeft, displayBeat());
@@ -887,6 +1005,7 @@ canvas.addEventListener('pointerdown', (e) => {
   dragPointerId = e.pointerId;
   dragStartX = e.clientX;
   dragStartY = e.clientY;
+  dragStartTime = performance.now();
   dragLastX = e.clientX;
   dragLastY = e.clientY;
   dragMoved = false;
@@ -947,6 +1066,16 @@ function endDrag(e: PointerEvent) {
       seekToBeat(snapped);
     }
     loopSelectStartBeat = null;
+  } else if (dragMoved && dragAxis === 'y') {
+    // A quick vertical flick anywhere on the canvas collapses/expands the mobile settings panel
+    // -- the pointermove handler above already applied a bit of vertical scroll live, before this
+    // gesture could be classified as a swipe; leaving that small scroll in place (rather than
+    // buffering and un-applying it) is an accepted trade-off for a cosmetic edge case.
+    const elapsedMs = performance.now() - dragStartTime;
+    const totalDy = e.clientY - dragStartY;
+    if (elapsedMs < SWIPE_MAX_MS && Math.abs(totalDy) > SWIPE_MIN_DY_PX) {
+      toggleSettingsPanel();
+    }
   } else if (!dragMoved && currentScore && pianoRoll) {
     // A tap in the note area (not the ruler) only previews whatever note is under it -- it never
     // moves playback, so casual clicks or short scrolls while playing can't jump the position.
@@ -1111,6 +1240,20 @@ staffCanvas.addEventListener(
   },
   { passive: false },
 );
+
+// Grid-lock click-to-seek in the staff view's own ruler strip, mirroring the piano roll's ruler
+// tap. A plain click suffices (no drag/loop-region support here, by design -- see StaffView's
+// class doc comment) since nothing else on this canvas handles pointerdown/drag today.
+staffCanvas.addEventListener('click', (e) => {
+  if (!staffView || !currentScore) return;
+  const rect = staffCanvas.getBoundingClientRect();
+  const localY = e.clientY - rect.top;
+  if (localY >= STAFF_RULER_HEIGHT_PX) return;
+  const localX = e.clientX - rect.left;
+  const beat = staffView.xToBeat(localX, displayBeat());
+  const snapped = measureAtBeat(currentScore, beat)?.startBeat ?? beat;
+  seekToBeat(snapped);
+});
 
 /**
  * Invoked once the app's mode (Solo vs. Ensemble, or "no backend at all") is resolved -- either

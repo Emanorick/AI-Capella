@@ -51,7 +51,9 @@ The app opens on a **library view**: a scrollable list of songs (a bundled sampl
 anything imported into the shared library), with drag-and-drop or a file picker to import
 more. Picking a song switches to the **player view** — the piano roll, transport controls,
 and per-voice mixer for that song. A "← Library" button goes back without losing your place
-(each song reloads fresh when reopened).
+(each song reloads fresh when reopened) and always **stops playback** first — including, in
+Ensemble mode, for every other connected device, not just the one that clicked it — so nobody
+gets left with music playing to an empty player view.
 
 ### The piano roll
 - Canvas-based, not DOM/SVG — this matters at the note counts and frame rates involved (see
@@ -67,11 +69,19 @@ and per-voice mixer for that song. A "← Library" button goes back without losi
   design correction after early versions let any click seek, which made scrolling/clicking
   during playback unreliable. A plain tap (not a drag) always **snaps to the start of
   whichever measure it landed in** ("grid locking"), rather than an arbitrary fractional beat —
-  a slightly-off tap still lands exactly on a measure boundary.
-- **Jump to measure**: a small numeric field in the transport bar seeks straight to any measure
-  number, for scores too long to comfortably scroll through by hand. Behaves exactly like a
-  ruler tap at that measure's start (moves the actual playback position, synced across devices
-  in Ensemble mode) — not a separate "just look" browsing mode.
+  a slightly-off tap still lands exactly on a measure boundary. Grid-locking only moves the red
+  playback-start line; it deliberately does **not** recenter the view — the view only ever
+  snaps to follow the playhead once playback actually starts. The sheet music view (below) has
+  its own equivalent ruler strip for the same grid-locking gesture.
+- **Jump to measure**: seeks straight to any measure number, for scores too long to comfortably
+  scroll through by hand — and, unlike a plain ruler tap, **does** recenter the view on the
+  target measure once you go there, since the whole point is to jump somewhere off-screen. On
+  desktop this is a numeric field plus a **Go** button; on mobile, typing a number is
+  cumbersome, so a **+/− stepper** flanks the field instead — a single tap steps one measure
+  (and jumps/recenters immediately), while press-and-hold repeats and accelerates over time
+  (starting at 400ms between steps, speeding up to 60ms), so reaching a distant measure doesn't
+  require dozens of individual taps. Both paths move the actual playback position, synced
+  across devices in Ensemble mode — not a separate "just look" browsing mode.
 - **Click-to-preview**: clicking a note anywhere in the main area plays that note's pitch
   (through the same synth used for playback, respecting the current transpose) and shows its
   name (e.g. "E3") in a small label above it for about a second, then the label fades. This
@@ -99,10 +109,18 @@ An alternative, toggleable view (the "Sheet Music" / "Piano Roll" button in the 
 for anyone who reads traditional notation more comfortably than a piano roll — each voice gets
 its **own five-line staff, stacked vertically** (never overlaid on a shared staff — SATB voices
 sharing a pitch would be unreadable that way), in that part's color, on a black background,
-with shared barlines connecting every staff into one system. It's a *view*, not an alternate
-control surface: no click-to-seek or loop-drag of its own, since the shared transport bar
-(including jump-to-measure, above) already reaches everything. See §4.8 for the rendering
-approach and its deliberate scope limits (clef assignment, note-duration shapes, no beaming).
+with shared barlines connecting every staff into one system. Real key and time signatures are
+shown (with accidentals only drawn where they actually differ from the key or an earlier note
+in the same measure — not a redundant sharp/flat on every occurrence), ties render as actual
+connected noteheads with a tie curve rather than one elongated note, and rests fill in the
+silent gaps. It mirrors the piano roll's mute/solo/true-solo (a true-soloed voice hides every
+other staff entirely; a regular Solo dims the rest and hides their lyrics), zoom, transpose (a
+real, key-signature-aware transposition — not just a note here — see §4.8), and lyrics. It's
+mostly a *view*, not an alternate control surface — no loop-drag of its own — but it does have
+its own ruler strip for the same grid-lock tap-to-seek gesture the piano roll's ruler has,
+since scrolling to a spot in one view and wanting to start playback there shouldn't require
+switching back. See §4.8 for the rendering approach and its remaining scope limits (clef
+assignment, note-duration shapes, no beaming).
 
 ### Playback & transport
 - Play/Pause and Stop are available both in the full transport bar and as compact buttons in
@@ -122,10 +140,13 @@ approach and its deliberate scope limits (clef assignment, note-duration shapes,
   measure at the target tempo/time signature (correctly spaced for compound meters like 6/8,
   not just simple ones) before the music actually starts — accented first click, synced across
   every device in Ensemble mode so everyone hears the same count and the music starts for
-  everyone at once right after. Only a genuinely fresh Play triggers it; a BPM/transpose change
-  or a seek while already playing never re-triggers a count-in mid-piece. A late-joining device
-  (or one whose update simply arrives too late) skips the count-in and joins the music already
-  in progress, same as it would for a plain synced Play.
+  everyone at once right after. Only a genuinely **fresh** playback start triggers it — after a
+  Stop, at the very start of a piece, or after a grid-lock/measure-jump seek — never a plain
+  Pause→Play resume from wherever playback was paused, and never a BPM/transpose change or a
+  seek while already playing. This is tracked by a `freshStart` flag (`sync.ts`), separate from
+  the count-in fields themselves — see §4.7. A late-joining device (or one whose update simply
+  arrives too late) skips the count-in and joins the music already in progress, same as it
+  would for a plain synced Play.
 - **Loop**: either loop the whole piece, or drag across the ruler to mark a specific region
   and loop just that (useful for hammering a tricky bar repeatedly). The Loop button toggles
   whether hitting the boundary wraps around or just stops there.
@@ -401,6 +422,23 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
   one. Deliberately not applied to loop-region dragging: snapping both drag endpoints to their
   own containing measure's start could collapse a short drag entirely inside one measure to a
   zero-length region.
+- **`seekToBeat(beat, opts?)`** distinguishes a grid-lock tap from a deliberate jump via an
+  optional `recenterView` flag: a plain ruler tap (piano roll or sheet music) only moves the red
+  playback-start line, leaving the view exactly where it was, while Measure-jump-Go passes
+  `recenterView: true` so the view actually snaps to the target — the two gestures have
+  different intents (mark a start point while still looking at the current spot, vs. actually
+  go look at a different part of the piece).
+- **Mobile settings-panel collapse is animated, not instant.** `#settings-panel`'s collapsed
+  state is a CSS `max-height` transition rather than `display: none`, with the *target* height
+  read from the panel's own `scrollHeight` in JS right before toggling (not a guessed fixed
+  pixel value, which risks clipping a larger ensemble's wrapped controls on a narrow phone).
+  `pianoRoll`/`staffView` are only resized and re-rendered once the transition actually finishes
+  (`transitionend`), not mid-animation. A fast vertical swipe (under 300ms, over 40px) anywhere
+  on the piano roll canvas toggles the same collapse — reusing the existing pointer-drag
+  axis-lock state machine, with a small accepted trade-off: the drag's own live vertical scroll
+  has already applied a few pixels of pan by the time the gesture is recognized as a swipe
+  rather than a scroll, since axis-locking happens continuously as the gesture is still in
+  progress.
 
 ### 4.6 Shared library & access (`firebase.ts`, `library.ts`, `pinGate.ts`)
 
@@ -436,8 +474,9 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
 
 One Firestore doc, `sessions/live`, holds the entire shared transport state — `songId`, `bpm`,
 `transpose`, `metronomeOn`, `loopEnabled`/`loopRegion`, the play/pause origin (`playing`,
-`originBeat`, `originServerTimeMs`), and `countInBeats`/`countInPulseBeats` (the count-in
-described in §2/§4.4). Every connected device subscribes to it via `subscribePlaybackState()`.
+`originBeat`, `originServerTimeMs`), `countInBeats`/`countInPulseBeats` (the count-in described
+in §2/§4.4), and `freshStart` (whether the *next* Play should count in at all — see below).
+Every connected device subscribes to it via `subscribePlaybackState()`.
 Mute/solo/true-solo is deliberately *not* in this doc — see "Not synced" below. Only active in
 **Ensemble mode** (`syncEnabled()` = `isFirebaseConfigured && sessionMode === 'ensemble'`,
 `sessionMode` set from the landing screen/`localStorage`, see §2) — in **Solo mode**,
@@ -458,6 +497,18 @@ target measure's own time signature. A count-in also needs real *lead time* befo
 start instant — `computeFutureOriginServerTimeMs()` takes an `extraLeadMs` parameter for
 exactly this, since the fixed 750ms sync buffer alone is nowhere near long enough to fit a
 multi-second count-in before playback begins.
+
+`freshStart` follows the same required-field, same merge-write-staleness reasoning: it's `true`
+after a Stop, a paused seek (a ruler/staff-ruler grid-lock tap or Measure-jump-Go), or a fresh
+song selection, and `false` after a plain Pause — every site that publishes `playing: false`
+sets it explicitly. `togglePlay()`'s Play branch reads it (alongside `metronomeOn` and a valid
+target measure) to decide whether *this* Play actually counts in — a Pause→Play resume from
+wherever playback stopped should never re-trigger the count-in, only a genuinely new start
+should. Read locally, not round-tripped through a publish/subscribe cycle for the read itself.
+One easy-to-miss detail: `currentStateSnapshot()` — the full-state fallback `pushState()` uses
+in Solo mode (no Firebase) — must also read the live `freshStart` variable rather than a
+hardcoded value, or Solo mode (the app's default, no-backend mode) would silently reset
+`freshStart` to `true` on every interaction and the whole feature would do nothing there.
 
 **The hard part: making Play land at the same real instant, not just the same logical beat.**
 Broadcasting "play now" doesn't work — Firestore's realtime updates don't arrive at every
@@ -578,15 +629,81 @@ speculatively.
 choral octavo), never overlaid on a shared staff — a hard requirement, since SATB voices sharing
 or nearly sharing a pitch would be unreadable overlaid even in different colors. Barlines are
 drawn once per measure, spanning from the top staff to the bottom staff, so the stack reads as
-one synchronized system rather than N unrelated staves. Renders at the score's **printed
-pitches always, ignoring the app's transpose setting** — real notated transposition would also
-change the key signature, which isn't modeled here; the piano roll remains the transposed
-reference (§6).
+one synchronized system rather than N unrelated staves.
 
-Clef glyphs are small hand-drawn shapes (an ellipse+dot for treble, dots+a hook for bass), not a
-Unicode music-symbol character — this app bundles no music font, and Unicode clef characters
-render as missing-glyph boxes on many systems without one. Recognizable at a glance as "this is
-treble/bass," not calligraphic.
+Clef glyphs are small hand-drawn bezier-curve shapes (a stylized G-clef spiral for treble; two
+dots flanking a hook for bass), not a Unicode music-symbol character — this app bundles no music
+font, and Unicode clef characters render as missing-glyph boxes on many systems without one.
+Recognizable at a glance as "this is treble/bass," not calligraphic. Each note's notehead is
+nudged a few pixels right of its exact beat position (`NOTE_X_OFFSET_PX`) so a note starting
+exactly on a barline doesn't visually sit on top of the barline itself.
+
+**Key signature** (`fifths`, from MusicXML's `<key><fifths>`, parsed the same
+carry-forward-across-measures way as `beats`/`beatType` — see `MeasureInfo.fifths`) and **time
+signature** are drawn right after the clef, using a fixed table of verified staff positions for
+each possible sharp/flat count per clef. They're pinned to a fixed screen position like the
+clef, tracking whichever measure currently governs the left edge of the visible viewport, rather
+than being anchored to the beat where a signature change happens — correct for the overwhelming
+common case (one key/time signature for the whole piece) and, for a piece with a genuine
+mid-piece change, updates as you scroll past the change point; a change occurring *inside* the
+visible viewport isn't also marked inline at its own beat position (a known limitation, §6).
+
+**Accidental-awareness**: an accidental is only drawn on a note when its alter actually differs
+from what the key signature (or an earlier note of the same letter+octave earlier in the same
+measure) already implies — not on every altered note unconditionally, which would clutter a
+piece with a real key signature. This bookkeeping deliberately walks every note in a part in
+beat order, not just the ones currently on-screen, so scrolling to a mid-measure position can't
+skip an earlier same-measure note that already established an accidental (which would show a
+wrong accidental, or a missing one, on the first visible note) — only the actual canvas drawing
+is skipped for off-screen notes, not the bookkeeping.
+
+**Ties** are rendered as real notation, not one elongated notehead. MusicXML ties are still
+merged into a single `NoteEvent` with an extended `durationBeats` at parse time (§4.2, for
+piano-roll/audio purposes) — but `StaffView` splits that merged duration back into individually-
+notatable segments (`splitIntoNotatedSegments`): forcing a split at every barline crossing (a
+note can't cross one in real notation, same as MusicXML itself), and within a barline-clipped
+span, greedily picking the *largest* standard duration that fits without exceeding it (not the
+*nearest*, which is what the existing `classifyDuration` picks and would overflow past what's
+actually left). Each segment gets its own notehead/stem/flags, connected to the next by a
+shallow tie curve. This is what fixes a concretely observed bug where a tied note (e.g. the
+"Butterfly" arrangement's opening notes) rendered as a single illegibly-long note instead of
+readable rhythm.
+
+**Rests** fill in the inferred silent gaps in each part's own note list — notes sharing a
+startBeat count as one chord/event, using the latest end-time among them, so a gap is only
+reported once everything sounding at that point has actually finished. Each gap is split with
+the same `splitIntoNotatedSegments` ties use, so a rest spanning a barline correctly becomes two
+(or more) rest glyphs rather than one that visually crosses the barline. Scoped to one
+monophonic voice per part — true for typical SATB choir writing, this app's primary use case; a
+genuinely multi-voice part (MusicXML `<backup>`/`<forward>` producing overlapping non-chord
+content within one part) may infer incorrect/overlapping gaps (§6). Glyphs are hand-drawn, in
+the same spirit as the clef/flag shapes: a small rectangle hanging from the 4th line for a whole
+rest, the same rectangle sitting on the middle line for a half rest, a bold zigzag for a quarter
+rest, and a dot with one/two/three hook curves (reusing the notehead flags' curve shape) for
+eighth/16th/32nd rests.
+
+**Transpose is fully modeled here**, not ignored — both the key signature and every note's
+spelling shift together when the app's transpose control is used, driven by the same
+circle-of-fifths math: `fifthsShift = ((7×semitones) mod 12 + 12) mod 12`, normalized into
+roughly −5..+6 (the conventional flat-side tie-break, e.g. +1 semitone lands on Db major's 5
+flats rather than C♯ major's 7 sharps). The note-respelling **letter shift is derived from that
+same fifths shift**, not independently rounded from the semitone count — a naive independent
+rounding can pick the *opposite* enharmonic side from the one the fifths shift already chose for
+the key signature (verified concretely at ±6 semitones, the tritone case), which would show a
+sharp-heavy key signature next to flat-spelled notes. `TRANSPOSE_TABLE` holds the verified
+fifths-shift/letter-shift pair for every semitone count in the app's ±7 range; respelling then
+shifts a note's letter by that amount and solves for whichever `alter` hits the exact target
+pitch, so the spelling always matches both the transposed key signature and the real sounding
+pitch.
+
+**Note duration shape** (filled vs. hollow notehead, stem, flag count) is classified from the
+nearest standard duration to a segment's continuous `durationBeats` value (including dotted
+variants) — the only duration representation the rest of the app carries below the segment
+level, so this is inherently a best-fit approximation for whatever `splitIntoNotatedSegments`
+already produced, not a re-derivation of the source file's actual notated rhythm. Unbeamed:
+consecutive eighth/16th notes each get their own flagged stem rather than being grouped under a
+beam — full beam-grouping (grouping rules, cross-barline handling) is a materially larger
+typesetting problem, left as a possible follow-up rather than built speculatively.
 
 ---
 
@@ -653,11 +770,20 @@ needs to reference its own bundled assets, like the sample song's URL, for the s
   clock-synced to the same anchor) but isn't drift-proof over very long loop-practice sessions.
 - **Sheet music view is a simplified, best-effort renderer, not engraving software.** No beam
   grouping (each unbeamed note gets its own flagged stem), a heuristic (not parsed) clef per
-  part, hand-drawn approximate clef glyphs rather than real notation-font glyphs, MIDI-imported
-  songs get a fixed sharps-preferred spelling rather than the file's actual intended spelling
-  (which MIDI has no way to encode), and it always shows the score's printed pitches regardless
-  of the app's transpose setting (real notated transposition would also change the key
-  signature, which isn't modeled) — use the piano roll for a transposed reference. See §4.8.
+  part, hand-drawn approximate clef/rest glyphs rather than real notation-font glyphs, and
+  MIDI-imported songs get a fixed sharps-preferred spelling rather than the file's actual
+  intended spelling (which MIDI has no way to encode). Transpose *is* fully modeled (key
+  signature and note spelling both shift correctly together, §4.8) — this is no longer a
+  limitation as of the second feedback round.
+- **Mid-piece key/time signature changes aren't marked inline at their own beat.** The key and
+  time signature shown are pinned to a fixed screen position (like the clef) and track whichever
+  measure currently governs the left edge of the visible viewport — correct for the very common
+  case of one signature for the whole piece, and they do update as you scroll past a genuine
+  mid-piece change, but the change itself isn't also flagged inline at the beat where it happens.
+- **Rest inference assumes one monophonic voice per part.** True for typical SATB choir writing
+  (this app's primary use case), but a part with genuinely overlapping simultaneous voices
+  (MusicXML `<backup>`/`<forward>` producing overlapping non-chord content within one part) may
+  show incorrect or overlapping rests. See §4.8.
 - **Metronome-active-but-silent reports are not conclusively fixed**, only investigated —
   see §4.4's note on what was found (a removed dead-code landmine) and the diagnostics shipped
   alongside it in case it recurs.

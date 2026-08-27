@@ -37,6 +37,13 @@ export interface PlaybackState {
   // reattach itself to a later BPM/transpose/seek update.
   countInBeats: number;
   countInPulseBeats: number;
+  // Whether the NEXT Play should count-in, if the metronome is on: true after a Stop, a paused
+  // seek (ruler/staff-ruler grid-lock tap or Measure-jump-Go), or a fresh song selection -- false
+  // after a plain Pause, so resuming playback from wherever it was paused never counts in. Same
+  // required-field reasoning as countInBeats/countInPulseBeats above: every playing:false publish
+  // must set this explicitly or a merge write would leave it at its previous (possibly stale)
+  // value.
+  freshStart: boolean;
 }
 
 function getDeviceId(): string {
@@ -162,6 +169,7 @@ export function subscribePlaybackState(callback: (state: PlaybackState | null) =
         loopRegion: (data.loopRegion as LoopRegion | null) ?? null,
         countInBeats: (data.countInBeats as number) ?? 0,
         countInPulseBeats: (data.countInPulseBeats as number) ?? 1,
+        freshStart: (data.freshStart as boolean) ?? true,
       });
     },
     onError,

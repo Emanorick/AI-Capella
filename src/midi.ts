@@ -278,10 +278,12 @@ function buildMeasures(changes: TimeSigChange[], totalBeats: number): MeasureInf
       changeIdx++;
       current = sorted[changeIdx];
     }
-    measures.push({ number, startBeat: cursor, beats: current.beats, beatType: current.beatType });
+    // MIDI files carry no key signature usable here (a <key> meta event exists but this parser
+    // doesn't read one) -- fifths: 0 renders as no accidentals, the correct neutral default.
+    measures.push({ number, startBeat: cursor, beats: current.beats, beatType: current.beatType, fifths: 0 });
     cursor += current.beats * (4 / current.beatType);
     number++;
   }
-  if (!measures.length) measures.push({ number: 1, startBeat: 0, beats: current.beats, beatType: current.beatType });
+  if (!measures.length) measures.push({ number: 1, startBeat: 0, beats: current.beats, beatType: current.beatType, fifths: 0 });
   return measures;
 }
