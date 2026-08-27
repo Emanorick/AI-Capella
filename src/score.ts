@@ -10,6 +10,14 @@ export interface NoteEvent {
   durationBeats: number;
   lyric?: string;
   measureNumber: number;
+  // Original notated pitch spelling (e.g. F# vs Gb), when known -- MusicXML imports carry this
+  // straight from the source file's <pitch>; `midi` alone can't distinguish enharmonic spellings.
+  // Absent for MIDI imports, which have no spelling in the source to preserve (see staffView.ts's
+  // fallback for that case). Only consumed by the sheet-music view -- playback and the piano roll
+  // use `midi` alone, as before.
+  step?: string;
+  alter?: number;
+  octave?: number;
 }
 
 export interface MeasureInfo {

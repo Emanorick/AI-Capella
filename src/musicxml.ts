@@ -114,7 +114,7 @@ export function parseMusicXML(xmlText: string): Score {
                     openTieNotes.delete(midi);
                   }
                 } else {
-                  const noteEvent: NoteEvent = { partId, midi, startBeat, durationBeats, lyric: lyric || undefined, measureNumber };
+                  const noteEvent: NoteEvent = { partId, midi, startBeat, durationBeats, lyric: lyric || undefined, measureNumber, step, alter, octave };
                   notes.push(noteEvent);
                   if (tieTypes.has('start')) openTieNotes.set(midi, noteEvent);
                 }

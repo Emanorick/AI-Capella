@@ -3,6 +3,7 @@ import { parseMusicXML } from './musicxml';
 import { parseMIDI } from './midi';
 import { AudioEngine, type PartMixState } from './audioEngine';
 import { PianoRoll, RULER_HEIGHT_PX, type LoopRegion } from './pianoRoll';
+import { StaffView } from './staffView';
 import { colorForPartIndex } from './palette';
 import { measureAtBeat, type Score } from './score';
 import { deleteImportedSong, readScoreFile, saveImportedSong, subscribeToSongs, type SongFormat } from './library';
@@ -43,6 +44,12 @@ const PREVIEW_NOTE_LABEL_MS = 1200;
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
+  <div id="landing">
+    <h1>AI-Capella</h1>
+    <p id="landing-subtitle">Practicing alone, or rehearsing together?</p>
+    <button id="mode-solo-btn">Solo<span>Just this device -- nothing shared</span></button>
+    <button id="mode-ensemble-btn">Ensemble<span>Synced playback with everyone else</span></button>
+  </div>
   <aside id="library">
     <h1>AI-Capella</h1>
     <h2>Library</h2>
@@ -50,6 +57,7 @@ app.innerHTML = `
     <button id="import-btn">+ Import score</button>
     <input id="import-input" type="file" accept=".musicxml,.xml,.mxl,.mid,.midi" multiple hidden />
     <div id="import-status"></div>
+    <button id="switch-mode-btn" title="Switch between Solo and Ensemble mode"></button>
   </aside>
   <main id="workspace">
     <header id="song-header">
@@ -70,9 +78,15 @@ app.innerHTML = `
         <button id="stop-btn" disabled title="Stop and reset to the start">&#9632;</button>
         <button id="metronome-btn" disabled>Metronome</button>
         <button id="loop-btn" disabled title="Drag the ruler above the roll to set a loop">Loop</button>
+        <button id="view-toggle-btn" disabled title="Switch between piano roll and sheet music">Sheet Music</button>
         <div class="transport-group" id="bpm-group">
           <span class="transport-label">BPM</span>
           ${BPM_PRESETS.map((b) => `<button class="bpm-btn" data-bpm="${b}">${b}</button>`).join('')}
+        </div>
+        <div class="transport-group" id="measure-group">
+          <span class="transport-label">Measure</span>
+          <input id="measure-input" type="number" min="1" step="1" inputmode="numeric" disabled />
+          <button id="measure-go-btn" disabled>Go</button>
         </div>
         <div class="transport-group" id="transpose-group">
           <span class="transport-label">Transpose</span>
@@ -96,6 +110,7 @@ app.innerHTML = `
       <button id="settings-toggle" title="Hide settings" aria-expanded="true">&#9662;</button>
     </div>
     <canvas id="roll"></canvas>
+    <canvas id="staff" class="hidden"></canvas>
   </main>
 `;
 
@@ -122,11 +137,21 @@ const transposeUpBtn = document.querySelector<HTMLButtonElement>('#transpose-up'
 const zoomValueEl = document.querySelector<HTMLSpanElement>('#zoom-value')!;
 const zoomOutBtn = document.querySelector<HTMLButtonElement>('#zoom-out')!;
 const zoomInBtn = document.querySelector<HTMLButtonElement>('#zoom-in')!;
+const measureInput = document.querySelector<HTMLInputElement>('#measure-input')!;
+const measureGoBtn = document.querySelector<HTMLButtonElement>('#measure-go-btn')!;
 const canvas = document.querySelector<HTMLCanvasElement>('#roll')!;
+const staffCanvas = document.querySelector<HTMLCanvasElement>('#staff')!;
+const viewToggleBtn = document.querySelector<HTMLButtonElement>('#view-toggle-btn')!;
 
 let currentScore: Score | null = null;
 let audioEngine: AudioEngine | null = null;
 let pianoRoll: PianoRoll | null = null;
+let staffView: StaffView | null = null;
+// Which view is currently visible -- a personal display preference like zoom, not synced across
+// devices. The staff view is read-only (see StaffView's doc comment): it just displays and
+// follows the shared beat position; every transport control lives on the shared bar regardless of
+// which view is showing.
+let activeView: 'roll' | 'staff' = 'roll';
 let bpm = 100;
 let duckVolume = 0.25;
 let transpose = 0;
@@ -151,7 +176,7 @@ let canvasTop = 0;
 let loadedSongId: string | null = null;
 let pendingSongId: string | null = null; // set when a remote songId isn't in our library list yet
 let lastReceivedPlaybackState: PlaybackState | null = null;
-let lastAppliedTiming: { playing: boolean; originBeat: number; originServerTimeMs: number; bpm: number; transpose: number } | null = null;
+let lastAppliedTiming: { playing: boolean; originBeat: number; originServerTimeMs: number; bpm: number; transpose: number; countInBeats: number; countInPulseBeats: number } | null = null;
 let lastAppliedMetronomeOn = false;
 
 function updateCanvasRect() {
@@ -161,20 +186,71 @@ function updateCanvasRect() {
 }
 updateCanvasRect();
 
-/** The app opens on the library so you can browse/import scores; picking one switches to the player. */
-function setViewMode(mode: 'library' | 'player') {
+/**
+ * The app opens on a landing screen (Solo vs. Ensemble, only when there's a shared backend to
+ * choose between) the first time, then the library so you can browse/import scores; picking a
+ * song switches to the player.
+ */
+function setViewMode(mode: 'landing' | 'library' | 'player') {
+  app.classList.toggle('mode-landing', mode === 'landing');
   app.classList.toggle('mode-library', mode === 'library');
   app.classList.toggle('mode-player', mode === 'player');
   if (mode === 'player') {
     // The canvas was hidden (display:none) while in library mode, so its layout size wasn't
     // knowable until now.
     pianoRoll?.resize();
+    staffView?.resize();
     updateCanvasRect();
     renderNow();
   }
 }
-setViewMode('library');
 libraryBackBtn.addEventListener('click', () => setViewMode('library'));
+
+const MODE_STORAGE_KEY = 'ai-capella-mode';
+// Solo = fully local, no shared playback session at all (even though Firebase may be
+// configured) -- for practicing alone without nudging anyone else's playback. Ensemble = today's
+// behavior, the single shared session. The shared song *library* stays available either way; only
+// playback sync is gated by this choice. Resolved once at startup (see the bootstrap below) and
+// changed only via the "switch mode" control, which just reloads -- there's no in-place teardown
+// of an active Firestore subscription.
+let sessionMode: 'solo' | 'ensemble' = 'solo';
+function syncEnabled(): boolean {
+  return isFirebaseConfigured && sessionMode === 'ensemble';
+}
+
+const switchModeBtn = document.querySelector<HTMLButtonElement>('#switch-mode-btn')!;
+switchModeBtn.textContent = 'Switch mode';
+switchModeBtn.addEventListener('click', () => {
+  localStorage.removeItem(MODE_STORAGE_KEY);
+  location.reload();
+});
+
+function chooseMode(mode: 'solo' | 'ensemble') {
+  sessionMode = mode;
+  localStorage.setItem(MODE_STORAGE_KEY, mode);
+  setViewMode('library');
+  void runBootstrap();
+}
+document.querySelector<HTMLButtonElement>('#mode-solo-btn')!.addEventListener('click', () => chooseMode('solo'));
+document.querySelector<HTMLButtonElement>('#mode-ensemble-btn')!.addEventListener('click', () => chooseMode('ensemble'));
+
+// Mode resolution: a stored choice skips straight to the library; with no stored choice, show the
+// landing screen only if there's actually a backend to choose Ensemble on -- otherwise Ensemble is
+// meaningless and Solo is the only real option, so skip straight to the library as before this
+// feature existed.
+const storedMode = localStorage.getItem(MODE_STORAGE_KEY);
+if (storedMode === 'solo' || storedMode === 'ensemble') {
+  sessionMode = storedMode;
+  setViewMode('library');
+  void runBootstrap();
+} else if (isFirebaseConfigured) {
+  switchModeBtn.style.display = 'none'; // nothing to switch to yet -- no mode has been chosen
+  setViewMode('landing');
+} else {
+  switchModeBtn.style.display = 'none'; // no backend at all -- there's no other mode to switch to
+  setViewMode('library');
+  void runBootstrap();
+}
 
 settingsToggleBtn.addEventListener('click', () => {
   const collapsed = settingsPanelEl.classList.toggle('collapsed');
@@ -347,11 +423,15 @@ async function loadSongLocally(song: SongEntry) {
 
   audioEngine = new AudioEngine(score);
   audioEngine.setDuckedVolume(duckVolume);
-  pianoRoll = new PianoRoll(canvas, score, (partId) => {
+  const partColor = (partId: string) => {
     const idx = score.parts.findIndex((p) => p.id === partId);
     return colorForPartIndex(idx);
-  });
+  };
+  pianoRoll = new PianoRoll(canvas, score, partColor);
   pianoRoll.setLoopRegion(null);
+  staffView = new StaffView(staffCanvas, score, partColor);
+  staffView.resize();
+  viewToggleBtn.disabled = false;
 
   // Mute/solo isn't synced (see PlaybackState's doc comment) -- every device starts a new song
   // with its own fresh, all-normal mix.
@@ -365,6 +445,9 @@ async function loadSongLocally(song: SongEntry) {
   stopBtnMini.disabled = false;
   metronomeBtn.disabled = false;
   loopBtn.disabled = false;
+  measureInput.disabled = false;
+  measureGoBtn.disabled = false;
+  measureInput.max = String(score.measures.at(-1)?.number ?? 1);
   buildPartsPanel(score);
   setViewMode('player');
 }
@@ -381,6 +464,8 @@ function currentStateSnapshot(): PlaybackState {
     metronomeOn,
     loopEnabled,
     loopRegion,
+    countInBeats: 0,
+    countInPulseBeats: 1,
   };
 }
 
@@ -398,12 +483,15 @@ function currentStateSnapshot(): PlaybackState {
  * comment in sync.ts -- so they mutate state directly instead of going through here.
  */
 function pushState(patch: Partial<PlaybackState>) {
-  if (isFirebaseConfigured) {
+  if (syncEnabled()) {
     void sync.publishPlaybackState(patch).catch((err) => {
       setImportStatus(`Couldn't sync: ${err instanceof Error ? err.message : String(err)}`, true);
     });
   } else {
-    const local = patch.playing ? { ...patch, originServerTimeMs: 0 } : patch;
+    // The sync-buffer skip below only applies when there's no count-in: a count-in still needs
+    // real scheduling room even with nobody else to sync with, so it keeps a real future instant
+    // instead of collapsing to "now."
+    const local = patch.playing && !patch.countInBeats ? { ...patch, originServerTimeMs: 0 } : patch;
     void applyPlaybackState({ ...currentStateSnapshot(), ...local });
   }
 }
@@ -414,11 +502,13 @@ function pushState(patch: Partial<PlaybackState>) {
  * first (see sync.ensureCalibrated's doc comment), so the very first Play right after the app
  * loads doesn't compute its sync target against a default, unmeasured offset. Callers stay
  * synchronous and fire this without awaiting it, so it never delays anything else the calling
- * handler does locally (e.g. seekToBeat's own view-position compensation).
+ * handler does locally (e.g. seekToBeat's own view-position compensation). `extraLeadMs` (a
+ * count-in's real duration) pushes the music's start instant further out so the count-in has room
+ * to play before it -- see sync.computeFutureOriginServerTimeMs's doc comment.
  */
-async function publishPlayingAt(originBeat: number, extra: Partial<PlaybackState> = {}) {
+async function publishPlayingAt(originBeat: number, extra: Partial<PlaybackState> = {}, extraLeadMs = 0) {
   await sync.ensureCalibrated();
-  pushState({ ...extra, playing: true, originBeat, originServerTimeMs: sync.computeFutureOriginServerTimeMs() });
+  pushState({ ...extra, playing: true, originBeat, originServerTimeMs: sync.computeFutureOriginServerTimeMs(extraLeadMs) });
 }
 
 /** The single place that applies shared-session state locally -- see pushState()'s doc comment. */
@@ -460,13 +550,17 @@ async function applyPlaybackState(state: PlaybackState) {
     lastAppliedTiming.originBeat !== state.originBeat ||
     lastAppliedTiming.originServerTimeMs !== state.originServerTimeMs ||
     lastAppliedTiming.bpm !== state.bpm ||
-    lastAppliedTiming.transpose !== state.transpose;
+    lastAppliedTiming.transpose !== state.transpose ||
+    lastAppliedTiming.countInBeats !== state.countInBeats ||
+    lastAppliedTiming.countInPulseBeats !== state.countInPulseBeats;
   lastAppliedTiming = {
     playing: state.playing,
     originBeat: state.originBeat,
     originServerTimeMs: state.originServerTimeMs,
     bpm: state.bpm,
     transpose: state.transpose,
+    countInBeats: state.countInBeats,
+    countInPulseBeats: state.countInPulseBeats,
   };
   if (!timingChanged) return;
 
@@ -483,7 +577,7 @@ async function applyPlaybackState(state: PlaybackState) {
   // A zero originServerTimeMs is the single-device-fallback sentinel from pushState() above --
   // no shared instant to translate, so AudioEngine.play() falls back to its own "now" default.
   const startAtEpochMs = state.originServerTimeMs > 0 ? state.originServerTimeMs - sync.getServerTimeOffsetMs() : undefined;
-  audioEngine.play(state.originBeat, state.bpm, state.transpose, startAtEpochMs);
+  audioEngine.play(state.originBeat, state.bpm, state.transpose, startAtEpochMs, state.countInBeats, state.countInPulseBeats);
   syncPlayButtons(true);
   startRenderLoop();
 }
@@ -569,7 +663,16 @@ function togglePlay() {
     } else if (fromBeat >= currentScore.totalBeats) {
       fromBeat = 0;
     }
-    void publishPlayingAt(fromBeat);
+    // A fresh Play with the metronome on gets a synced count-in ("Einzählen") -- one measure's
+    // worth of clicks at the target measure's own time signature, so 6/8 etc. count in dotted-
+    // eighth pulses rather than misreading the beats numerator as quarter-note pulses. Only a
+    // genuinely fresh Play does this -- BPM/transpose changes and seeks while already playing
+    // explicitly zero it (see those call sites) so an ordinary tempo tweak never re-triggers one.
+    const measure = measureAtBeat(currentScore, fromBeat);
+    const countInPulseBeats = measure ? 4 / measure.beatType : 1;
+    const countInBeats = metronomeOn && measure ? measure.beats : 0;
+    const extraLeadMs = countInBeats > 0 ? countInBeats * countInPulseBeats * (60_000 / bpm) : 0;
+    void publishPlayingAt(fromBeat, { countInBeats, countInPulseBeats }, extraLeadMs);
   }
 }
 playBtn.addEventListener('click', togglePlay);
@@ -625,13 +728,27 @@ document.querySelectorAll<HTMLButtonElement>('.bpm-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     const newBpm = parseInt(btn.getAttribute('data-bpm')!, 10);
     if (audioEngine?.isPlaying()) {
-      void publishPlayingAt(audioEngine.getCurrentBeat(), { bpm: newBpm });
+      // Explicitly zeroed, not omitted: publishPlaybackState is a merge write, so an omitted
+      // field would keep whatever count-in the last fresh Play set, silently reattaching a
+      // several-second count-in-then-delay to an ordinary BPM change.
+      void publishPlayingAt(audioEngine.getCurrentBeat(), { bpm: newBpm, countInBeats: 0, countInPulseBeats: 1 });
     } else {
       pushState({ bpm: newBpm });
     }
   });
 });
 document.querySelector(`.bpm-btn[data-bpm="${bpm}"]`)?.classList.add('active');
+
+function jumpToMeasure() {
+  if (!currentScore) return;
+  const n = parseInt(measureInput.value, 10);
+  const measure = currentScore.measures.find((m) => m.number === n);
+  if (measure) seekToBeat(measure.startBeat);
+}
+measureGoBtn.addEventListener('click', jumpToMeasure);
+measureInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') jumpToMeasure();
+});
 
 document.querySelectorAll<HTMLButtonElement>('.duck-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -646,7 +763,8 @@ function applyTranspose(delta: number) {
   if (!audioEngine || !pianoRoll) return;
   const newTranspose = Math.max(MIN_TRANSPOSE, Math.min(MAX_TRANSPOSE, transpose + delta));
   if (audioEngine.isPlaying()) {
-    void publishPlayingAt(audioEngine.getCurrentBeat(), { transpose: newTranspose });
+    // See the BPM handler's comment: explicitly zeroed so a stale count-in never reattaches.
+    void publishPlayingAt(audioEngine.getCurrentBeat(), { transpose: newTranspose, countInBeats: 0, countInPulseBeats: 1 });
   } else {
     pushState({ transpose: newTranspose });
   }
@@ -703,7 +821,8 @@ function seekToBeat(beat: number) {
   const clamped = Math.max(0, Math.min(currentScore.totalBeats, beat));
   const oldEngineBeat = engineBeat();
   if (audioEngine.isPlaying()) {
-    void publishPlayingAt(clamped);
+    // See the BPM handler's comment: explicitly zeroed so a stale count-in never reattaches.
+    void publishPlayingAt(clamped, { countInBeats: 0, countInPulseBeats: 1 });
   } else {
     pushState({ playing: false, originBeat: clamped, originServerTimeMs: 0 });
   }
@@ -821,8 +940,11 @@ function endDrag(e: PointerEvent) {
     } else {
       // A tap (not a drag) in the ruler just sets the start point, same as the old plain click.
       // seekToBeat's published originBeat is what sets customStartBeat, via applyPlaybackState.
+      // Snapped to the containing measure's start ("grid locking") so a slightly-off tap always
+      // lands exactly on a measure boundary instead of wherever the pixel happened to map to.
+      const snapped = currentScore ? (measureAtBeat(currentScore, loopSelectStartBeat)?.startBeat ?? loopSelectStartBeat) : loopSelectStartBeat;
       clearLoopRegion();
-      seekToBeat(loopSelectStartBeat);
+      seekToBeat(snapped);
     }
     loopSelectStartBeat = null;
   } else if (!dragMoved && currentScore && pianoRoll) {
@@ -871,6 +993,10 @@ function setPositionText(text: string) {
 
 function updatePositionDisplay(beat: number) {
   if (!currentScore) return;
+  if (audioEngine?.isCountingIn()) {
+    setPositionText('Count-in…');
+    return;
+  }
   const measure = measureAtBeat(currentScore, beat);
   if (!measure) {
     setPositionText('—');
@@ -881,10 +1007,16 @@ function updatePositionDisplay(beat: number) {
   setPositionText(`Measure ${measure.number} · Beat ${Math.min(beatInMeasure, measure.beats)}/${measure.beats}`);
 }
 
+/** Renders only whichever view is currently visible -- the hidden one costs nothing per frame. */
+function renderActiveView(displayBeatValue: number, playheadBeatValue: number) {
+  if (activeView === 'staff') staffView?.render(displayBeatValue, playheadBeatValue);
+  else pianoRoll?.render(displayBeatValue, playheadBeatValue);
+}
+
 function renderNow() {
   if (!pianoRoll || !audioEngine) return;
   const beat = displayBeat();
-  pianoRoll.render(beat, engineBeat());
+  renderActiveView(beat, engineBeat());
   updatePositionDisplay(beat);
 }
 
@@ -909,13 +1041,13 @@ function renderLoop() {
     audioEngine.setPausedBeat(resetBeat);
     viewOffsetBeats = 0;
     syncPlayButtons(false);
-    pianoRoll.render(resetBeat, resetBeat);
+    renderActiveView(resetBeat, resetBeat);
     updatePositionDisplay(resetBeat);
     rafId = null;
     return;
   }
 
-  pianoRoll.render(beat + viewOffsetBeats, beat);
+  renderActiveView(beat + viewOffsetBeats, beat);
   updatePositionDisplay(beat + viewOffsetBeats);
   rafId = requestAnimationFrame(renderLoop);
 }
@@ -931,6 +1063,7 @@ function stopRenderLoop() {
 
 window.addEventListener('resize', () => {
   pianoRoll?.resize();
+  staffView?.resize();
   updateCanvasRect();
   renderNow();
 });
@@ -942,13 +1075,50 @@ window.addEventListener('resize', () => {
 // content. ResizeObserver watches the canvas's own box directly, so it catches every case.
 const canvasResizeObserver = new ResizeObserver(() => {
   pianoRoll?.resize();
+  staffView?.resize();
   updateCanvasRect();
   renderNow();
 });
 canvasResizeObserver.observe(canvas);
+canvasResizeObserver.observe(staffCanvas);
 
-(async () => {
-  // The app opens on the library view (see setViewMode above); no song is auto-loaded.
+viewToggleBtn.addEventListener('click', () => {
+  activeView = activeView === 'roll' ? 'staff' : 'roll';
+  canvas.classList.toggle('hidden', activeView !== 'roll');
+  staffCanvas.classList.toggle('hidden', activeView !== 'staff');
+  viewToggleBtn.textContent = activeView === 'roll' ? 'Sheet Music' : 'Piano Roll';
+  // The just-shown canvas may not have had a correct backing-store size while hidden
+  // (display:none elements report a zero layout box), so resize before rendering into it.
+  pianoRoll?.resize();
+  staffView?.resize();
+  updateCanvasRect();
+  renderNow();
+});
+
+staffCanvas.addEventListener(
+  'wheel',
+  (e) => {
+    if (!staffView) return;
+    e.preventDefault();
+    if (e.shiftKey) {
+      panByBeats(e.deltaX / staffView.getPixelsPerBeat());
+    } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      panByBeats(e.deltaX / staffView.getPixelsPerBeat());
+    } else if (e.deltaY !== 0) {
+      staffView.scrollByPixels(e.deltaY);
+      scheduleRender();
+    }
+  },
+  { passive: false },
+);
+
+/**
+ * Invoked once the app's mode (Solo vs. Ensemble, or "no backend at all") is resolved -- either
+ * immediately at startup (a stored choice, or no backend to choose on) or from the landing
+ * screen's buttons. Sets up the shared song library (available in both modes) and, only in
+ * Ensemble mode, the shared playback session.
+ */
+async function runBootstrap() {
   if (!isFirebaseConfigured) {
     importBtn.disabled = true;
     importBtn.title = 'Shared library not configured yet';
@@ -960,7 +1130,6 @@ canvasResizeObserver.observe(canvas);
     // require request.auth != null, so an unsigned-in read would just hang/get rejected.
     await ensureSignedIn();
     await ensureAccess(); // PIN gate; resolves immediately if already granted on this device
-    sync.startPeriodicCalibration();
     subscribeToSongs(
       (songs) => {
         importedSongs = songs.map((s) => ({ id: s.id, title: s.title, xml: s.xml, format: s.format, imported: true }));
@@ -976,17 +1145,20 @@ canvasResizeObserver.observe(canvas);
         setImportStatus(`Shared library unavailable: ${err instanceof Error ? err.message : String(err)}`, true);
       },
     );
-    sync.subscribePlaybackState(
-      (state) => {
-        if (!state) return;
-        lastReceivedPlaybackState = state;
-        void applyPlaybackState(state);
-      },
-      (err) => {
-        setImportStatus(`Shared session unavailable: ${err instanceof Error ? err.message : String(err)}`, true);
-      },
-    );
+    if (syncEnabled()) {
+      sync.startPeriodicCalibration();
+      sync.subscribePlaybackState(
+        (state) => {
+          if (!state) return;
+          lastReceivedPlaybackState = state;
+          void applyPlaybackState(state);
+        },
+        (err) => {
+          setImportStatus(`Shared session unavailable: ${err instanceof Error ? err.message : String(err)}`, true);
+        },
+      );
+    }
   } catch (err) {
     setImportStatus(`Couldn't connect to the shared library: ${err instanceof Error ? err.message : String(err)}`, true);
   }
-})();
+}

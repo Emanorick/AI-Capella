@@ -28,6 +28,15 @@ export interface PlaybackState {
   metronomeOn: boolean;
   loopEnabled: boolean;
   loopRegion: LoopRegion | null;
+  // How many count-in clicks (if any) precede originBeat's actual music, and how many
+  // quarter-beats apart each one is (e.g. 0.5 for a 6/8 measure's dotted-eighth pulse) -- both
+  // required (not optional) rather than defaulting an omitted field to 0/1: publishPlaybackState
+  // does a *merge* write, so a field left out of a patch keeps its previous value in the shared
+  // doc rather than resetting -- every publish that starts playback without an intentional
+  // count-in must explicitly zero these, or a stale count-in from an earlier Play would silently
+  // reattach itself to a later BPM/transpose/seek update.
+  countInBeats: number;
+  countInPulseBeats: number;
 }
 
 function getDeviceId(): string {
@@ -117,9 +126,14 @@ export async function ensureCalibrated(): Promise<void> {
   if (calibrationAttempted) await calibrationAttempted;
 }
 
-/** The instant a "start playing" broadcast should target, in server time. */
-export function computeFutureOriginServerTimeMs(): number {
-  return Date.now() + offsetMs + PLAY_SYNC_BUFFER_MS;
+/**
+ * The instant a "start playing" broadcast should target, in server time. `extraLeadMs` pushes
+ * that instant further into the future -- needed for a count-in, whose clicks have to fit in the
+ * gap before the music actually starts; the fixed PLAY_SYNC_BUFFER_MS alone is nowhere near long
+ * enough for that (a one-measure count-in can easily take several seconds).
+ */
+export function computeFutureOriginServerTimeMs(extraLeadMs = 0): number {
+  return Date.now() + offsetMs + PLAY_SYNC_BUFFER_MS + extraLeadMs;
 }
 
 /** Live-subscribes to the shared playback session; fires immediately and on every change from any device. */
@@ -146,6 +160,8 @@ export function subscribePlaybackState(callback: (state: PlaybackState | null) =
         metronomeOn: (data.metronomeOn as boolean) ?? false,
         loopEnabled: (data.loopEnabled as boolean) ?? false,
         loopRegion: (data.loopRegion as LoopRegion | null) ?? null,
+        countInBeats: (data.countInBeats as number) ?? 0,
+        countInPulseBeats: (data.countInPulseBeats as number) ?? 1,
       });
     },
     onError,

@@ -37,6 +37,15 @@ files anywhere — the "recording" is just a MusicXML file, synthesized live eve
 
 ## 2. What it does (feature tour)
 
+### Landing screen: Solo vs. Ensemble
+The very first time the app loads (only when a shared backend is configured — otherwise this
+step is skipped entirely), it asks: **Solo** or **Ensemble**? Solo is fully local — nothing
+about playback is shared with anyone else, for practicing alone without nudging anyone else's
+position. Ensemble is the synced-playback experience described below. The choice is
+remembered (`localStorage`) so it's only asked once; a "Switch mode" link in the library
+sidebar clears it and reloads back to this screen. Either way, the shared song library itself
+is always available — Solo only opts out of shared *playback*, not shared *songs*. See §4.7.
+
 ### Library / player split
 The app opens on a **library view**: a scrollable list of songs (a bundled sample plus
 anything imported into the shared library), with drag-and-drop or a file picker to import
@@ -56,7 +65,13 @@ and per-voice mixer for that song. A "← Library" button goes back without losi
   playback — it can only *preview* a note (see below) — so casual scrolling or tapping while
   the piece plays can never accidentally jump the playback position. This was a deliberate
   design correction after early versions let any click seek, which made scrolling/clicking
-  during playback unreliable.
+  during playback unreliable. A plain tap (not a drag) always **snaps to the start of
+  whichever measure it landed in** ("grid locking"), rather than an arbitrary fractional beat —
+  a slightly-off tap still lands exactly on a measure boundary.
+- **Jump to measure**: a small numeric field in the transport bar seeks straight to any measure
+  number, for scores too long to comfortably scroll through by hand. Behaves exactly like a
+  ruler tap at that measure's start (moves the actual playback position, synced across devices
+  in Ensemble mode) — not a separate "just look" browsing mode.
 - **Click-to-preview**: clicking a note anywhere in the main area plays that note's pitch
   (through the same synth used for playback, respecting the current transpose) and shows its
   name (e.g. "E3") in a small label above it for about a second, then the label fades. This
@@ -79,6 +94,16 @@ and per-voice mixer for that song. A "← Library" button goes back without losi
   seamless bar and plays back with a single attack, not a retrigger. **Slurs** are drawn as an
   arched curve in the voice's own color.
 
+### Sheet music view
+An alternative, toggleable view (the "Sheet Music" / "Piano Roll" button in the transport bar)
+for anyone who reads traditional notation more comfortably than a piano roll — each voice gets
+its **own five-line staff, stacked vertically** (never overlaid on a shared staff — SATB voices
+sharing a pitch would be unreadable that way), in that part's color, on a black background,
+with shared barlines connecting every staff into one system. It's a *view*, not an alternate
+control surface: no click-to-seek or loop-drag of its own, since the shared transport bar
+(including jump-to-measure, above) already reaches everything. See §4.8 for the rendering
+approach and its deliberate scope limits (clef assignment, note-duration shapes, no beaming).
+
 ### Playback & transport
 - Play/Pause and Stop are available both in the full transport bar and as compact buttons in
   the header, so they stay reachable even with the settings panel collapsed.
@@ -93,6 +118,14 @@ and per-voice mixer for that song. A "← Library" button goes back without losi
   position at the new speed without a perceptible jump.
 - **Metronome**: an optional click on every beat pulse (accented on downbeats), synthesized
   the same way as the notes.
+- **Count-in ("Einzählen")**: pressing Play with the metronome on first counts out one full
+  measure at the target tempo/time signature (correctly spaced for compound meters like 6/8,
+  not just simple ones) before the music actually starts — accented first click, synced across
+  every device in Ensemble mode so everyone hears the same count and the music starts for
+  everyone at once right after. Only a genuinely fresh Play triggers it; a BPM/transpose change
+  or a seek while already playing never re-triggers a count-in mid-piece. A late-joining device
+  (or one whose update simply arrives too late) skips the count-in and joins the music already
+  in progress, same as it would for a plain synced Play.
 - **Loop**: either loop the whole piece, or drag across the ruler to mark a specific region
   and loop just that (useful for hammering a tricky bar repeatedly). The Loop button toggles
   whether hitting the boundary wraps around or just stops there.
@@ -152,6 +185,7 @@ AI-Capella/
 │   ├── midi.ts                # Standard MIDI file → Score parser
 │   ├── score.ts              # the Score data model + small pure helpers
 │   ├── pianoRoll.ts           # canvas rendering: the piano roll itself
+│   ├── staffView.ts           # canvas rendering: the alternate sheet-music view
 │   ├── audioEngine.ts         # Web Audio synthesis + playback scheduling
 │   ├── palette.ts             # deterministic per-voice color assignment
 │   ├── library.ts             # Firestore-backed shared song storage, PIN verification, .mxl unzip
@@ -315,6 +349,32 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
   soon as possible." This is what §4.7's multi-device sync uses to make every device start at
   the same real moment; if that instant has already passed by the time `play()` runs, playback
   joins already in progress from wherever it would be right now rather than starting late.
+- `play()` also takes optional `countInBeats`/`countInPulseBeats`: when set, that many
+  metronome-style clicks (first one accented, spaced `countInPulseBeats` quarter-beats apart —
+  the pulse spacing, not just the raw beats count, so a 6/8 count-in clicks 6 correctly-spaced
+  eighths rather than 6 quarter-beats) are scheduled ending exactly at the music's start
+  instant. If there isn't actually room before that instant (a late-joining/late-delivered
+  device), the count-in is silently skipped rather than started late — same principle as the
+  "join already in progress" behavior above. `isCountingIn()` reports whether one is currently
+  playing, so `main.ts` can show a "Count-in…" label instead of the normal position readout.
+- **Click/pop fix.** Every scheduled oscillator/gain pair is tracked as a `Voice`
+  (`scheduledVoices`), and `clearSchedule()` — called at the top of every `play()`/`pause()`/
+  `stop()`, including the re-schedule calls above, which is why this used to click on almost
+  any mid-playback control change — fades each voice's gain to (near-)zero
+  (`cancelAndHoldAtTime` + a short `linearRampToValueAtTime`) *before* stopping its
+  oscillators, instead of calling `.stop()` immediately on whatever the waveform happened to be
+  doing. An abrupt stop mid-waveform is a textbook Web Audio discontinuity — audible as a
+  click/pop, exactly matching feedback that playback "sometimes clicks or clips... like when
+  you plug a cable into a speaker." A second, related bug in the note envelope itself (a
+  sustain-hold automation event landing *before* the decay ramp's own end time, which Web Audio
+  resolves by holding flat at peak volume and then jumping straight to the sustain level instead
+  of actually decaying, for most notes under ~0.4s) is fixed alongside it.
+- **Metronome-active-but-silent reports**: investigated but not conclusively reproduced from
+  reading the code alone. A dead, unreachable `resume()` method with the exact shape of that bug
+  (sets `playing = true` without rescheduling anything) has been removed, and `setMetronomeEnabled`/
+  `scheduleMetronomeInRange` now log via `console.debug` on every call — if this recurs, check
+  the browser console for whether the flag/scheduling actually desynced or the call never
+  happened at all.
 
 ### 4.5 Input handling (`main.ts`)
 
@@ -335,6 +395,12 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
 - `setPositionText()` skips the DOM write entirely when the displayed string hasn't changed
   (which is most frames, since the "Measure N · Beat M" text only changes once per beat) —
   another avoided source of unnecessary style/layout invalidation during playback.
+- A ruler tap's raw pixel-derived beat is snapped to `measureAtBeat()`'s containing measure's
+  `startBeat` before it's used — floor semantics (a tap anywhere in measure 5 snaps to measure
+  5's start, not measure 6's), reusing the existing beat→measure lookup rather than adding a new
+  one. Deliberately not applied to loop-region dragging: snapping both drag endpoints to their
+  own containing measure's start could collapse a short drag entirely inside one measure to a
+  zero-length region.
 
 ### 4.6 Shared library & access (`firebase.ts`, `library.ts`, `pinGate.ts`)
 
@@ -369,10 +435,29 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
 ### 4.7 Synced multi-device playback (`sync.ts`, `main.ts`)
 
 One Firestore doc, `sessions/live`, holds the entire shared transport state — `songId`, `bpm`,
-`transpose`, `metronomeOn`, `loopEnabled`/`loopRegion`, and the play/pause origin (`playing`,
-`originBeat`, `originServerTimeMs`). Every connected device subscribes to it via
-`subscribePlaybackState()`. Mute/solo/true-solo is deliberately *not* in this doc — see "Not
-synced" below.
+`transpose`, `metronomeOn`, `loopEnabled`/`loopRegion`, the play/pause origin (`playing`,
+`originBeat`, `originServerTimeMs`), and `countInBeats`/`countInPulseBeats` (the count-in
+described in §2/§4.4). Every connected device subscribes to it via `subscribePlaybackState()`.
+Mute/solo/true-solo is deliberately *not* in this doc — see "Not synced" below. Only active in
+**Ensemble mode** (`syncEnabled()` = `isFirebaseConfigured && sessionMode === 'ensemble'`,
+`sessionMode` set from the landing screen/`localStorage`, see §2) — in **Solo mode**,
+`pushState()` applies every change immediately and locally instead, the same fallback path used
+when there's no Firebase backend at all, and the calibration/subscription setup in the
+bootstrap is skipped entirely. The shared song *library* (a different Firestore collection,
+`subscribeToSongs()`) is unconditional on `isFirebaseConfigured` alone, unaffected by this —
+Solo mode only opts out of playback sync.
+
+`countInBeats`/`countInPulseBeats` are **required fields, not optional ones**, specifically
+because `publishPlaybackState()` is a Firestore *merge* write: a field left out of a patch keeps
+its previous value in the shared doc rather than resetting. Every `publishPlayingAt()` call that
+starts playback without an intentional count-in (BPM/transpose-while-playing, seek-while-playing)
+explicitly zeroes both fields — omitting them would let a stale count-in from an earlier fresh
+Play silently reattach itself to an ordinary tempo tweak, turning it into a multi-second
+count-in-then-delay. Only `togglePlay()`'s actual Play branch computes a real value, from the
+target measure's own time signature. A count-in also needs real *lead time* before the music's
+start instant — `computeFutureOriginServerTimeMs()` takes an `extraLeadMs` parameter for
+exactly this, since the fixed 750ms sync buffer alone is nowhere near long enough to fit a
+multi-second count-in before playback begins.
 
 **The hard part: making Play land at the same real instant, not just the same logical beat.**
 Broadcasting "play now" doesn't work — Firestore's realtime updates don't arrive at every
@@ -455,6 +540,54 @@ is listening for.
 - **Zoom, scroll position, and solo-ducking volume** remain personal per-device preferences,
   never written to the shared doc at all.
 
+### 4.8 Sheet music view (`staffView.ts`)
+
+A second, independent renderer (`StaffView`, same constructor shape as `PianoRoll` —
+`canvas, score, partColor`, reusing `colorForPartIndex`/the `partColor` callback as-is) owning
+its own `<canvas>`, toggled with the piano roll's rather than replacing it. Deliberately *not*
+sharing `PianoRoll`'s code: the two are different enough (staff positions vs. piano-key rows,
+noteheads/stems vs. proportional bars) that a shared base would mostly be indirection.
+Deliberately simpler than `PianoRoll`'s pipeline too — no offscreen content buffer, it redraws
+directly every frame — since this view is read-only (no click-to-seek/loop-drag of its own; see
+§2) and meant primarily for reading rather than driving playback, where `PianoRoll`'s buffering
+exists specifically to keep long continuous-scroll playback sessions smooth.
+
+**Pitch spelling.** `NoteEvent` carries optional `step`/`alter`/`octave` — MusicXML's `<pitch>`
+is already parsed in `musicxml.ts` but previously only the derived MIDI number survived; the
+original spelling is now threaded through too, so accidentals render correctly (F♯ vs. G♭)
+without needing to parse or guess a key signature. MIDI imports have no source spelling to
+preserve, so `staffView.ts` falls back to a fixed sharps-preferred chromatic table for those —
+noted as a known limitation (§6): MIDI-imported songs' notation isn't always the "correct"
+enharmonic spelling, only a reasonable one.
+
+**Layout.** Diatonic staff position is computed from `(step, octave)` via a simple letter-index
+formula (`octave*7 + letterIndex`), independent of accidental — the standard trick that makes
+adjacent-letter steps exactly half a line-spacing apart regardless of sharps/flats. Ledger lines
+are derived from the same position. **Clef per part** is a heuristic, since no clef is parsed
+anywhere in this app's pipeline: each part's average MIDI pitch decides treble vs. bass at
+construction time. **Note duration shape** (filled vs. hollow notehead, stem, flag count) is
+classified from the nearest standard duration to the note's continuous `durationBeats` value
+(including dotted variants) — the only duration representation the rest of the app carries, so
+this is inherently a best-fit approximation, not a re-derivation of the source file's actual
+notated rhythm. Unbeamed: consecutive eighth/16th notes each get their own flagged stem rather
+than being grouped under a beam — full beam-grouping (grouping rules, cross-barline handling) is
+a materially larger typesetting problem, left as a possible follow-up rather than built
+speculatively.
+
+**Each voice gets its own staff, stacked vertically** (top to bottom in score order, like a
+choral octavo), never overlaid on a shared staff — a hard requirement, since SATB voices sharing
+or nearly sharing a pitch would be unreadable overlaid even in different colors. Barlines are
+drawn once per measure, spanning from the top staff to the bottom staff, so the stack reads as
+one synchronized system rather than N unrelated staves. Renders at the score's **printed
+pitches always, ignoring the app's transpose setting** — real notated transposition would also
+change the key signature, which isn't modeled here; the piano roll remains the transposed
+reference (§6).
+
+Clef glyphs are small hand-drawn shapes (an ellipse+dot for treble, dots+a hook for bass), not a
+Unicode music-symbol character — this app bundles no music font, and Unicode clef characters
+render as missing-glyph boxes on many systems without one. Recognizable at a glance as "this is
+treble/bass," not calligraphic.
+
 ---
 
 ## 5. Development
@@ -505,15 +638,26 @@ needs to reference its own bundled assets, like the sample song's URL, for the s
   a real accompanist.
 - **No offline mode.** Firestore's shared library requires a network connection; the bundled
   sample song is the only thing guaranteed to work with Firebase unreachable.
-- **One shared session, not multiple rooms.** Synced playback (§4.7) is a single global
-  `sessions/live` doc — every connected device is in the same session, with no concept of
-  separate rehearsal rooms. Any device picking a song or changing playback state retargets
-  everyone else immediately, with no confirmation step.
+- **One shared Ensemble session, not multiple rooms.** Choosing Ensemble (§2/§4.7) joins the
+  single global `sessions/live` doc — every device in Ensemble mode is in the *same* session,
+  with no concept of separate rehearsal rooms for different sub-groups. Any device picking a
+  song or changing playback state retargets everyone else immediately, with no confirmation
+  step. Solo mode is the only per-device opt-out, not a way to join a different, smaller group.
 - **No presence UI.** There's no indication of who else is connected or how many devices are in
   the shared session.
 - **Small built-in delay on synced timing changes.** Play, seek, and BPM/transpose changes made
-  while playing carry a ~750ms buffer before they take effect, so every device has time to
-  receive and schedule the change before it happens. Loop/end-of-piece wraparound is not
-  anchor-corrected across devices — it stays a local per-device boundary check, which converges
-  closely in practice (every device is already clock-synced to the same anchor) but isn't
-  drift-proof over very long loop-practice sessions.
+  while playing carry a ~750ms buffer before they take effect (longer when a count-in is
+  involved — see §4.7), so every device has time to receive and schedule the change before it
+  happens. Loop/end-of-piece wraparound is not anchor-corrected across devices — it stays a
+  local per-device boundary check, which converges closely in practice (every device is already
+  clock-synced to the same anchor) but isn't drift-proof over very long loop-practice sessions.
+- **Sheet music view is a simplified, best-effort renderer, not engraving software.** No beam
+  grouping (each unbeamed note gets its own flagged stem), a heuristic (not parsed) clef per
+  part, hand-drawn approximate clef glyphs rather than real notation-font glyphs, MIDI-imported
+  songs get a fixed sharps-preferred spelling rather than the file's actual intended spelling
+  (which MIDI has no way to encode), and it always shows the score's printed pitches regardless
+  of the app's transpose setting (real notated transposition would also change the key
+  signature, which isn't modeled) — use the piano roll for a transposed reference. See §4.8.
+- **Metronome-active-but-silent reports are not conclusively fixed**, only investigated —
+  see §4.4's note on what was found (a removed dead-code landmine) and the diagnostics shipped
+  alongside it in case it recurs.

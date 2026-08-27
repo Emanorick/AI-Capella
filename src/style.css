@@ -60,6 +60,71 @@ body {
   display: none;
 }
 
+/* Landing view: shown once, before a Solo/Ensemble choice has been made (and never again once
+   one has, unless "Switch mode" is used) -- hidden by default so it never flashes on a normal
+   library/player load. */
+#landing {
+  display: none;
+}
+
+#app.mode-landing {
+  align-items: center;
+  justify-content: center;
+}
+
+#app.mode-landing #landing {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+  width: 100%;
+  max-width: 420px;
+  padding: 40px;
+  text-align: center;
+}
+
+#app.mode-landing #library,
+#app.mode-landing #workspace {
+  display: none;
+}
+
+#landing h1 {
+  font-size: 28px;
+  margin: 0;
+}
+
+#landing-subtitle {
+  margin: 0 0 8px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+#landing button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 16px 20px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.05);
+  color: #eef0f5;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: left;
+}
+
+#landing button:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+#landing button span {
+  font-size: 12px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.55);
+}
+
 #library {
   width: 220px;
   flex-shrink: 0;
@@ -160,6 +225,22 @@ body {
 
 #import-status.error {
   color: #ff6b7d;
+}
+
+#switch-mode-btn {
+  width: 100%;
+  margin-top: 10px;
+  padding: 6px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+#switch-mode-btn:hover {
+  color: rgba(255, 255, 255, 0.7);
 }
 
 #library.drag-over {
@@ -288,10 +369,10 @@ body {
 .part-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   background: rgba(255, 255, 255, 0.05);
   border-radius: 8px;
-  padding: 4px 8px;
+  padding: 6px 10px;
   font-size: 13px;
   cursor: pointer;
 }
@@ -312,13 +393,13 @@ body {
 }
 
 .mix-btn {
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
+  width: 30px;
+  height: 34px;
+  border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: transparent;
   color: rgba(255, 255, 255, 0.7);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
   line-height: 1;
@@ -388,7 +469,8 @@ body {
 }
 
 #metronome-btn,
-#loop-btn {
+#loop-btn,
+#view-toggle-btn {
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: transparent;
   color: #eef0f5;
@@ -411,7 +493,8 @@ body {
 }
 
 #metronome-btn:disabled,
-#loop-btn:disabled {
+#loop-btn:disabled,
+#view-toggle-btn:disabled {
   opacity: 0.4;
   cursor: default;
 }
@@ -435,7 +518,8 @@ body {
 #transpose-down,
 #transpose-up,
 #zoom-out,
-#zoom-in {
+#zoom-in,
+#measure-go-btn {
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: transparent;
   color: #eef0f5;
@@ -443,6 +527,22 @@ body {
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
+}
+
+#measure-input {
+  width: 52px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: transparent;
+  color: #eef0f5;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+#measure-go-btn:disabled,
+#measure-input:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .bpm-btn.active,
@@ -480,6 +580,19 @@ body {
 
 #roll.dragging {
   cursor: grabbing;
+}
+
+#staff {
+  flex: 1;
+  width: 100%;
+  display: block;
+  touch-action: none;
+  user-select: none;
+  min-height: 0;
+}
+
+.hidden {
+  display: none !important;
 }
 
 @media (max-width: 720px) {
