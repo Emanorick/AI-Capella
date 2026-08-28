@@ -900,30 +900,31 @@ export class StaffView {
 
         if (shape.hasStem) {
           const stemX = stemUp ? segX + NOTEHEAD_RADIUS_PX : segX - NOTEHEAD_RADIUS_PX;
-          const stemEndY = stemUp ? y - STEM_LENGTH_PX : y + STEM_LENGTH_PX;
+          // 32nd notes (3 flags) get a longer stem than the standard length -- three stacked
+          // flags need more vertical room to read as distinct rather than visually overloaded.
+          const extraStemPx = shape.flags >= 3 ? 8 : 0;
+          const stemEndY = stemUp ? y - (STEM_LENGTH_PX + extraStemPx) : y + (STEM_LENGTH_PX + extraStemPx);
           ctx.lineWidth = 1.3;
           ctx.beginPath();
           ctx.moveTo(stemX, y);
           ctx.lineTo(stemX, stemEndY);
           ctx.stroke();
 
-          // A closed two-bezier hook: bulges out from the stem then tapers back to a point
-          // further down it, reading as a proper flag rather than the symmetric lens shape a
-          // single quadratic curve back to the start point produces. First-draft aesthetic guess,
-          // meant to be visually iterated once rendered, same as the clef glyphs above.
+          // A slim, classical hook: hugs close to the stem (a few px of horizontal reach, not
+          // the wide bulb an earlier draft produced) and tapers to a point further down it.
           for (let i = 0; i < shape.flags; i++) {
-            const flagY = stemEndY + (stemUp ? 1 : -1) * i * 8;
+            const flagY = stemEndY + (stemUp ? 1 : -1) * i * 7;
             ctx.beginPath();
             ctx.moveTo(stemX, flagY);
             ctx.bezierCurveTo(
-              stemX + (stemUp ? 2 : -2), flagY + (stemUp ? 4 : -4),
-              stemX + (stemUp ? 12 : -12), flagY + (stemUp ? 3 : -3),
-              stemX + (stemUp ? 10 : -10), flagY + (stemUp ? 14 : -14),
+              stemX + (stemUp ? 1 : -1), flagY + (stemUp ? 3 : -3),
+              stemX + (stemUp ? 5 : -5), flagY + (stemUp ? 2 : -2),
+              stemX + (stemUp ? 4 : -4), flagY + (stemUp ? 10 : -10),
             );
             ctx.bezierCurveTo(
-              stemX + (stemUp ? 6 : -6), flagY + (stemUp ? 10 : -10),
-              stemX + (stemUp ? 2 : -2), flagY + (stemUp ? 12 : -12),
-              stemX, flagY + (stemUp ? 18 : -18),
+              stemX + (stemUp ? 2.5 : -2.5), flagY + (stemUp ? 8 : -8),
+              stemX + (stemUp ? 1 : -1), flagY + (stemUp ? 11 : -11),
+              stemX, flagY + (stemUp ? 16 : -16),
             );
             ctx.closePath();
             ctx.fill();
