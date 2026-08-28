@@ -1,0 +1,19 @@
+{
+  "name": "functions",
+  "private": true,
+  "engines": {
+    "node": "20"
+  },
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "deploy": "npm run build && firebase deploy --only functions:omrTestPage"
+  },
+  "dependencies": {
+    "firebase-functions": "^6.0.1",
+    "@anthropic-ai/sdk": "^0.122.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}
