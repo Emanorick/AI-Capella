@@ -18,6 +18,13 @@ const STAFF_HEIGHT_PX = LINE_SPACING_PX * 4; // 5 lines, 4 gaps
 const MIN_STAFF_GAP_PX = 44; // minimum space between one staff's bottom line and the next staff's top line (room for ledger lines)
 const NOTEHEAD_RADIUS_PX = 4.2;
 const STEM_LENGTH_PX = 30;
+// Note flag geometry (eighth/16th/32nd), chosen from a rendered side-by-side comparison of
+// several candidate shapes -- a stroked curve (not filled) whose tip sits at a fixed angle off
+// the stem rather than curling back toward it, scaled to 80% of the compared size.
+const FLAG_STROKE_WIDTH_PX = 1.6;
+const FLAG_DROP_PX = 12.8; // vertical extent of one flag's curve
+const FLAG_SPACING_PX = 5.6; // vertical gap between stacked flags (16th/32nd notes)
+const FLAG_EXIT_ANGLE = (30 * Math.PI) / 180; // off vertical, measured from the stem
 const DIMMED_ALPHA = 0.5; // matches PianoRoll's dimmed-part alpha
 // A note starting exactly at a measure's startBeat would otherwise land its notehead center
 // exactly on the barline (both computed via the same beatToX) -- nudged right so it visually sits
@@ -902,7 +909,7 @@ export class StaffView {
           const stemX = stemUp ? segX + NOTEHEAD_RADIUS_PX : segX - NOTEHEAD_RADIUS_PX;
           // 32nd notes (3 flags) get a longer stem than the standard length -- three stacked
           // flags need more vertical room to read as distinct rather than visually overloaded.
-          const extraStemPx = shape.flags >= 3 ? 8 : 0;
+          const extraStemPx = shape.flags >= 3 ? 6 : 0;
           const stemEndY = stemUp ? y - (STEM_LENGTH_PX + extraStemPx) : y + (STEM_LENGTH_PX + extraStemPx);
           ctx.lineWidth = 1.3;
           ctx.beginPath();
@@ -910,25 +917,24 @@ export class StaffView {
           ctx.lineTo(stemX, stemEndY);
           ctx.stroke();
 
-          // A slim, classical hook: hugs close to the stem (a few px of horizontal reach, not
-          // the wide bulb an earlier draft produced) and tapers to a point further down it.
+          // A single stroked curve (no fill) off the stem -- reads as a genuinely thin flag
+          // rather than a filled shape. The tip is placed geometrically at FLAG_EXIT_ANGLE off
+          // vertical (not just eyeballed), so it swings clearly away from the stem instead of
+          // curling back toward it, and holds that angle regardless of the flag's own size.
+          ctx.strokeStyle = color;
+          ctx.lineWidth = FLAG_STROKE_WIDTH_PX;
+          ctx.lineCap = 'round';
           for (let i = 0; i < shape.flags; i++) {
-            const flagY = stemEndY + (stemUp ? 1 : -1) * i * 7;
+            const flagY = stemEndY + (stemUp ? 1 : -1) * i * FLAG_SPACING_PX;
+            const dir = stemUp ? 1 : -1;
+            const endX = stemX + dir * FLAG_DROP_PX * Math.tan(FLAG_EXIT_ANGLE);
+            const endY = flagY + dir * FLAG_DROP_PX;
             ctx.beginPath();
             ctx.moveTo(stemX, flagY);
-            ctx.bezierCurveTo(
-              stemX + (stemUp ? 1 : -1), flagY + (stemUp ? 3 : -3),
-              stemX + (stemUp ? 5 : -5), flagY + (stemUp ? 2 : -2),
-              stemX + (stemUp ? 4 : -4), flagY + (stemUp ? 10 : -10),
-            );
-            ctx.bezierCurveTo(
-              stemX + (stemUp ? 2.5 : -2.5), flagY + (stemUp ? 8 : -8),
-              stemX + (stemUp ? 1 : -1), flagY + (stemUp ? 11 : -11),
-              stemX, flagY + (stemUp ? 16 : -16),
-            );
-            ctx.closePath();
-            ctx.fill();
+            ctx.quadraticCurveTo(stemX + dir * 9.6, flagY + dir * 3.2, endX, endY);
+            ctx.stroke();
           }
+          ctx.lineCap = 'butt'; // restore canvas default -- nothing downstream else sets its own
         }
       }
 
