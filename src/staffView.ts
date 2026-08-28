@@ -4,6 +4,13 @@ import type { PartMixState } from './audioEngine';
 export const BASE_PIXELS_PER_BEAT = 70;
 export const STAFF_RULER_HEIGHT_PX = 22; // matches PianoRoll's ruler height, for a consistent look when toggling views
 const PLAYHEAD_X_RATIO = 0.2;
+// On a narrow (mobile-width) canvas, the default ratio puts the playhead line close enough to the
+// clef/key-signature glyphs (fixed pixel positions near the left edge) to feel crowded -- matches
+// the same 720px breakpoint style.css already uses for "mobile" layout, since there's no separate
+// isMobile flag anywhere in this codebase; cssWidth itself is the right signal regardless of cause
+// (device width or a resized desktop window). First-draft ratio, meant to be visually iterated.
+const MOBILE_BREAKPOINT_PX = 720;
+const MOBILE_PLAYHEAD_X_RATIO = 0.32;
 const MAX_DPR = 2;
 const LINE_SPACING_PX = 9; // distance between two adjacent staff lines
 const HALF_SPACE_PX = LINE_SPACING_PX / 2; // vertical distance per diatonic step
@@ -17,6 +24,15 @@ const DIMMED_ALPHA = 0.5; // matches PianoRoll's dimmed-part alpha
 // just after the barline instead. Applied only in drawNote's own local x, never in beatToX itself
 // (which barlines/the playhead/ruler labels all also depend on, unmodified).
 const NOTE_X_OFFSET_PX = 6;
+// Fixed distance below the staff's bottom line for every lyric in that staff, rather than each
+// lyric following its own note's pitch -- so a lyric line reads at one consistent height instead
+// of bouncing up and down with the melody. Not 30: the next staff's clef glyph reaches up to
+// bottomLineY + MIN_STAFF_GAP_PX(44) - 9 = bottomLineY + 35, so this needs headroom below that.
+// Accepted trade-off, not fixable by tuning this constant: an extreme low note (e.g. after a
+// large negative transpose) can sit below this fixed line, putting its lyric above/near its own
+// notehead instead of under it -- inherent to "one fixed height per staff" vs. an unbounded
+// ledger-line range.
+const LYRIC_BASELINE_OFFSET_PX = 26;
 
 const LETTER_INDEX: Record<string, number> = { C: 0, D: 1, E: 2, F: 3, G: 4, A: 5, B: 6 };
 
@@ -281,6 +297,23 @@ function splitIntoNotatedSegments(startBeat: number, durationBeats: number, meas
 }
 
 /**
+ * Turns a NoteEvent's preserved tieSegments (the individual duration of each originally
+ * tied-together <note> write) into the same {startBeat, durationBeats}[] shape
+ * splitIntoNotatedSegments produces -- but without any of its barline-clipping logic, since each
+ * original <note> element, by construction, could never cross a measure boundary in MusicXML
+ * (that's literally why ties exist), so these segments are inherently already barline-safe.
+ */
+function segmentsFromTieLengths(startBeat: number, lengths: number[]): { startBeat: number; durationBeats: number }[] {
+  const segments: { startBeat: number; durationBeats: number }[] = [];
+  let cursor = startBeat;
+  for (const len of lengths) {
+    segments.push({ startBeat: cursor, durationBeats: len });
+    cursor += len;
+  }
+  return segments;
+}
+
+/**
  * Infers the silent gaps in one part's part-writing: any span where nothing is sounding, between
  * notes or before the first/after the last. Notes sharing a startBeat (a chord/homophonic layer)
  * count as one event, using the latest end-time among them, so a gap is only reported once
@@ -450,7 +483,8 @@ export class StaffView {
   }
 
   private playheadX(): number {
-    return this.cssWidth * PLAYHEAD_X_RATIO;
+    const ratio = this.cssWidth < MOBILE_BREAKPOINT_PX ? MOBILE_PLAYHEAD_X_RATIO : PLAYHEAD_X_RATIO;
+    return this.cssWidth * ratio;
   }
 
   /**
@@ -488,18 +522,6 @@ export class StaffView {
       x += 7;
     }
     return x + 4;
-  }
-
-  /** Draws the stacked numerator/denominator time signature; xStart is just past the key signature. */
-  private drawTimeSignature(ctx: CanvasRenderingContext2D, beats: number, beatType: number, topY: number, bottomLineY: number, color: string, xStart: number) {
-    ctx.fillStyle = color;
-    ctx.font = 'bold 13px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const midY = (topY + bottomLineY) / 2;
-    ctx.fillText(String(beats), xStart, midY - LINE_SPACING_PX);
-    ctx.fillText(String(beatType), xStart, midY + LINE_SPACING_PX);
-    ctx.textAlign = 'start';
   }
 
   private beatToX(beat: number, displayBeat: number): number {
@@ -583,13 +605,25 @@ export class StaffView {
       ctx.lineTo(x, bottom);
       ctx.stroke();
     }
-    // Final barline at the end of the piece.
+    // Final barline at the end of the piece: a classical thin+thick double bar. Culled in
+    // pixel-space (matching the on-screen checks used elsewhere in this file, e.g. drawNote's
+    // `x < -20 || x > this.cssWidth + 20`) -- a pre-existing bug here compared this same endX
+    // (pixel-space, from beatToX) against startBeat/endBeat (beat-space), a unit mismatch that
+    // could make the final barline fail to draw, or draw off-screen, depending on the piece's
+    // beat range vs. the viewport's pixel width.
     const endX = this.beatToX(this.score.totalBeats, displayBeat);
-    if (endX >= startBeat - 4 && endX <= endBeat + this.pixelsPerBeat) {
+    if (endX >= -4 && endX <= this.cssWidth + this.pixelsPerBeat) {
+      ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(endX, top);
       ctx.lineTo(endX, bottom);
       ctx.stroke();
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(endX + 4, top);
+      ctx.lineTo(endX + 4, bottom);
+      ctx.stroke();
+      ctx.lineWidth = 1; // restore -- good practice even though nothing downstream currently relies on it
     }
   }
 
@@ -622,8 +656,7 @@ export class StaffView {
 
     const effectiveMeasure = this.measureAtOrBefore(startBeat);
     if (effectiveMeasure) {
-      const afterKeySig = this.drawKeySignature(ctx, this.transposedFifths(effectiveMeasure.fifths), layout.clef, bottomLineY, color, 26);
-      this.drawTimeSignature(ctx, effectiveMeasure.beats, effectiveMeasure.beatType, layout.topY, bottomLineY, color, afterKeySig + 6);
+      this.drawKeySignature(ctx, this.transposedFifths(effectiveMeasure.fifths), layout.clef, bottomLineY, color, 26);
     }
 
     // Accidental-awareness bookkeeping (which pitches this measure already has an accidental
@@ -833,7 +866,15 @@ export class StaffView {
     // A tie-merged note (see NoteEvent's doc comment) is split back into individually-notatable
     // segments here -- each drawn as its own notehead/stem/flags, connected by a tie curve, so a
     // long held note reads as real rhythmic notation instead of one illegibly-elongated notehead.
-    const segments = splitIntoNotatedSegments(note.startBeat, note.durationBeats, this.score.measures);
+    // Prefer the ORIGINAL tie-note boundaries the source file actually notated (tieSegments) when
+    // available -- this preserves the engraver's own rhythmic choices even when they'd
+    // mathematically collapse into one "clean" value (e.g. two tied eighths summing to exactly
+    // one quarter would otherwise render as a single undivided notehead, losing the tie). Falls
+    // back to the mathematical largest-fits split for MIDI imports (no tie concept in the source)
+    // and any non-tied note with an unusually long single duration.
+    const segments = note.tieSegments
+      ? segmentsFromTieLengths(note.startBeat, note.tieSegments)
+      : splitIntoNotatedSegments(note.startBeat, note.durationBeats, this.score.measures);
     let prevSegX: number | null = null;
     for (const seg of segments) {
       const segX = this.beatToX(seg.startBeat, displayBeat) + NOTE_X_OFFSET_PX;
@@ -866,11 +907,25 @@ export class StaffView {
           ctx.lineTo(stemX, stemEndY);
           ctx.stroke();
 
+          // A closed two-bezier hook: bulges out from the stem then tapers back to a point
+          // further down it, reading as a proper flag rather than the symmetric lens shape a
+          // single quadratic curve back to the start point produces. First-draft aesthetic guess,
+          // meant to be visually iterated once rendered, same as the clef glyphs above.
           for (let i = 0; i < shape.flags; i++) {
-            const flagY = stemEndY + (stemUp ? 1 : -1) * i * 7;
+            const flagY = stemEndY + (stemUp ? 1 : -1) * i * 8;
             ctx.beginPath();
             ctx.moveTo(stemX, flagY);
-            ctx.quadraticCurveTo(stemX + (stemUp ? 11 : -11), flagY + (stemUp ? 8 : -8), stemX, flagY + (stemUp ? 16 : -16));
+            ctx.bezierCurveTo(
+              stemX + (stemUp ? 2 : -2), flagY + (stemUp ? 4 : -4),
+              stemX + (stemUp ? 12 : -12), flagY + (stemUp ? 3 : -3),
+              stemX + (stemUp ? 10 : -10), flagY + (stemUp ? 14 : -14),
+            );
+            ctx.bezierCurveTo(
+              stemX + (stemUp ? 6 : -6), flagY + (stemUp ? 10 : -10),
+              stemX + (stemUp ? 2 : -2), flagY + (stemUp ? 12 : -12),
+              stemX, flagY + (stemUp ? 18 : -18),
+            );
+            ctx.closePath();
             ctx.fill();
           }
         }
@@ -880,17 +935,19 @@ export class StaffView {
       prevSegX = segX;
     }
 
-    // Lyric, directly below the notehead -- white (not the part's color) so it stays legible
-    // against any of the six-or-so voice colors, drawn straight to the canvas each frame (no
-    // bitmap cache, unlike PianoRoll's buffered pipeline -- this view already redraws directly
-    // every frame and the note density here doesn't need one). Skipped for dimmed (ducked) parts
-    // entirely, matching PianoRoll's dimmed-lyric-skip precedent, not just faded.
+    // Lyric, at a fixed height below the staff (LYRIC_BASELINE_OFFSET_PX) rather than following
+    // this note's own pitch, so a whole lyric line reads level -- white (not the part's color) so
+    // it stays legible against any of the six-or-so voice colors, drawn straight to the canvas
+    // each frame (no bitmap cache, unlike PianoRoll's buffered pipeline -- this view already
+    // redraws directly every frame and the note density here doesn't need one). Skipped for
+    // dimmed (ducked) parts entirely, matching PianoRoll's dimmed-lyric-skip precedent, not just
+    // faded.
     if (note.lyric && !dimmed) {
       ctx.font = '11px system-ui, sans-serif';
       ctx.fillStyle = 'rgba(255,255,255,0.92)';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      ctx.fillText(note.lyric, firstX, y + 10);
+      ctx.fillText(note.lyric, firstX, bottomLineY + LYRIC_BASELINE_OFFSET_PX);
       // Reset -- these aren't touched at the top of drawNote, so a leftover value here would
       // otherwise silently affect the next note's ledger-line/accidental drawing.
       ctx.textAlign = 'start';

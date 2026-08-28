@@ -6,7 +6,7 @@ import { PianoRoll, RULER_HEIGHT_PX, type LoopRegion } from './pianoRoll';
 import { StaffView, STAFF_RULER_HEIGHT_PX } from './staffView';
 import { colorForPartIndex } from './palette';
 import { measureAtBeat, type Score } from './score';
-import { deleteImportedSong, readScoreFile, saveImportedSong, subscribeToSongs, type SongFormat } from './library';
+import { deleteImportedSong, readScoreFile, saveImportedSong, subscribeToSongs, updateSongMetadata, type SongFormat } from './library';
 import { ensureSignedIn, isFirebaseConfigured } from './firebase';
 import { ensureAccess } from './pinGate';
 import * as sync from './sync';
@@ -19,6 +19,7 @@ interface SongEntry {
   xml?: string; // imported songs, already in memory
   format?: SongFormat; // only meaningful alongside `xml`; built-in songs are always MusicXML
   imported?: boolean;
+  partNameOverrides?: Record<string, string>;
 }
 
 // import.meta.env.BASE_URL (not a bare "/...") since the app is served from a subpath on
@@ -181,6 +182,11 @@ let canvasTop = 0;
 // metronome, say, must NOT reschedule playback, or every remote toggle would audibly retrigger
 // every currently-sounding note. See applyPlaybackState().
 let loadedSongId: string | null = null;
+// The full SongEntry for whatever's currently loaded -- used to know its format (for hiding the
+// Sheet Music toggle on a MIDI import, task 3) and its imported/Firestore-id status (for gating
+// rename editing to only actual library entries, task 4). loadedSongId alone isn't enough for
+// either.
+let currentSong: SongEntry | null = null;
 let pendingSongId: string | null = null; // set when a remote songId isn't in our library list yet
 let lastReceivedPlaybackState: PlaybackState | null = null;
 let lastAppliedTiming: { playing: boolean; originBeat: number; originServerTimeMs: number; bpm: number; transpose: number; countInBeats: number; countInPulseBeats: number } | null = null;
@@ -446,7 +452,14 @@ async function loadSongLocally(song: SongEntry) {
   // Built-in songs (fetched by URL) and imported MusicXML/.mxl files are MusicXML text; MIDI
   // imports were already parsed into a Score at import time and stored as its JSON serialization.
   const score: Score = song.format === 'score' ? (JSON.parse(xmlText) as Score) : parseMusicXML(xmlText);
+  if (song.partNameOverrides) {
+    for (const part of score.parts) {
+      const override = song.partNameOverrides[part.id];
+      if (override) part.name = override;
+    }
+  }
   currentScore = score;
+  currentSong = song;
   loadedSongId = song.id;
   zoom = 1;
   zoomValueEl.textContent = '100%';
@@ -469,6 +482,11 @@ async function loadSongLocally(song: SongEntry) {
   staffView = new StaffView(staffCanvas, score, partColor);
   staffView.resize();
   viewToggleBtn.disabled = false;
+  // MIDI imports have no real notated spelling -- only a heuristic chromatic fallback (see
+  // staffView.ts) -- so the sheet-music view isn't offered for them at all. Force back to the
+  // piano roll if the previous song was left showing the staff view.
+  viewToggleBtn.classList.toggle('hidden', song.format === 'score');
+  if (song.format === 'score' && activeView === 'staff') setActiveView('roll');
 
   // Mute/solo isn't synced (see PlaybackState's doc comment) -- every device starts a new song
   // with its own fresh, all-normal mix.
@@ -627,6 +645,58 @@ async function applyPlaybackState(state: PlaybackState) {
   startRenderLoop();
 }
 
+/**
+ * Swaps `el` for an inline text input, prefilled with `initialValue` and focused/selected; Enter
+ * or blur commits (calling `onCommit` only if the value is non-empty and actually changed),
+ * Escape reverts. `el` itself is put back in place before `onCommit` runs, so the caller can
+ * safely mutate it (e.g. set its text) once the write it kicks off actually succeeds.
+ */
+function startInlineEdit(el: HTMLElement, initialValue: string, onCommit: (value: string) => void) {
+  const input = document.createElement('input');
+  input.className = 'inline-edit-input';
+  input.value = initialValue;
+  el.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (commit: boolean) => {
+    if (done) return;
+    done = true;
+    const value = input.value.trim();
+    input.replaceWith(el);
+    if (commit && value && value !== initialValue) onCommit(value);
+  };
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      input.blur();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      finish(false);
+    }
+  });
+}
+
+// Renaming only writes to Firestore for actual shared-library songs (currentSong.imported) --
+// the bundled built-in sample has no Firestore doc to write to. Immediate, no confirmation step,
+// matching the app's existing trust model (any device can already import/delete library songs
+// the same way). #song-title and #parts-panel have no live onSnapshot subscription of their own
+// (only the library sidebar does) -- so the local text is only updated here, once the write
+// actually succeeds, rather than waiting on a round-trip that will never arrive for this
+// already-open view.
+songTitleEl.addEventListener('dblclick', () => {
+  if (!currentSong?.imported || !currentScore) return;
+  startInlineEdit(songTitleEl, currentScore.title, (value) => {
+    void updateSongMetadata(currentSong!.id, { title: value })
+      .then(() => {
+        songTitleEl.textContent = value;
+        if (currentScore) currentScore.title = value;
+      })
+      .catch((err) => console.warn('[AI-Capella] Failed to rename song:', err));
+  });
+});
+
 function buildPartsPanel(score: Score) {
   partsPanelEl.innerHTML = score.parts
     .map((p, idx) => {
@@ -690,6 +760,23 @@ partsPanelEl.addEventListener('click', (e) => {
   staffView?.setPartMix(partMix);
   syncPartRowClasses();
   renderNow();
+});
+
+// Event delegation, not a per-span listener -- buildPartsPanel fully replaces partsPanelEl's
+// innerHTML on every song load, which would orphan a direct listener.
+partsPanelEl.addEventListener('dblclick', (e) => {
+  const nameEl = (e.target as HTMLElement).closest<HTMLElement>('.part-name');
+  const partId = nameEl?.closest<HTMLElement>('.part-row')?.getAttribute('data-part');
+  const part = currentScore?.parts.find((p) => p.id === partId);
+  if (!nameEl || !part || !currentSong?.imported) return;
+  startInlineEdit(nameEl, part.name, (value) => {
+    void updateSongMetadata(currentSong!.id, { partName: { partId: part.id, name: value } })
+      .then(() => {
+        part.name = value;
+        nameEl.textContent = value;
+      })
+      .catch((err) => console.warn('[AI-Capella] Failed to rename voice:', err));
+  });
 });
 
 /** Keeps the header's compact play button and the transport's full one showing the same state. */
@@ -790,8 +877,21 @@ document.querySelectorAll<HTMLButtonElement>('.bpm-btn').forEach((btn) => {
 });
 document.querySelector(`.bpm-btn[data-bpm="${bpm}"]`)?.classList.add('active');
 
+// Proactively keeps the field's value in-range instead of relying on the native min/max
+// validation -- an out-of-range value on a number input triggers the browser's own visual
+// "invalid" feedback (a shake/wobble on mobile Safari in particular), which our own code has no
+// control over and can't suppress after the fact. Clamping before that value is ever committed
+// avoids it ever happening.
+function clampMeasureInput() {
+  if (!currentScore) return;
+  const maxN = currentScore.measures.at(-1)?.number ?? 1;
+  const n = Math.min(Math.max(parseInt(measureInput.value, 10) || 1, 1), maxN);
+  measureInput.value = String(n);
+}
+
 function jumpToMeasure() {
   if (!currentScore) return;
+  clampMeasureInput();
   const n = parseInt(measureInput.value, 10);
   const measure = currentScore.measures.find((m) => m.number === n);
   if (measure) seekToBeat(measure.startBeat, { recenterView: true });
@@ -800,6 +900,7 @@ measureGoBtn.addEventListener('click', jumpToMeasure);
 measureInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') jumpToMeasure();
 });
+measureInput.addEventListener('change', clampMeasureInput);
 
 // Plus/minus stepper for the measure number, with press-and-hold acceleration: a single tap
 // moves one measure, but holding down repeats and speeds up over time -- the confirmed mobile
@@ -1095,6 +1196,10 @@ function endDrag(e: PointerEvent) {
         renderNow();
       }, PREVIEW_NOTE_LABEL_MS);
     } else {
+      const keyboardMidi = pianoRoll.hitTestKeyboard(e.clientX - canvasLeft, e.clientY - canvasTop, displayBeat());
+      // The keyboard strip near beat 0 (see pianoRoll.ts) isn't a real NoteEvent -- just plays the
+      // tone, no preview label (nothing at its own beat position to anchor one to).
+      if (keyboardMidi != null) audioEngine?.previewNote(keyboardMidi);
       pianoRoll.setPreviewNote(null);
     }
     // Unlike during playback (where the render loop repaints every frame regardless), nothing
@@ -1211,8 +1316,8 @@ const canvasResizeObserver = new ResizeObserver(() => {
 canvasResizeObserver.observe(canvas);
 canvasResizeObserver.observe(staffCanvas);
 
-viewToggleBtn.addEventListener('click', () => {
-  activeView = activeView === 'roll' ? 'staff' : 'roll';
+function setActiveView(view: 'roll' | 'staff') {
+  activeView = view;
   canvas.classList.toggle('hidden', activeView !== 'roll');
   staffCanvas.classList.toggle('hidden', activeView !== 'staff');
   viewToggleBtn.textContent = activeView === 'roll' ? 'Sheet Music' : 'Piano Roll';
@@ -1222,6 +1327,10 @@ viewToggleBtn.addEventListener('click', () => {
   staffView?.resize();
   updateCanvasRect();
   renderNow();
+}
+
+viewToggleBtn.addEventListener('click', () => {
+  setActiveView(activeView === 'roll' ? 'staff' : 'roll');
 });
 
 staffCanvas.addEventListener(
@@ -1275,7 +1384,7 @@ async function runBootstrap() {
     await ensureAccess(); // PIN gate; resolves immediately if already granted on this device
     subscribeToSongs(
       (songs) => {
-        importedSongs = songs.map((s) => ({ id: s.id, title: s.title, xml: s.xml, format: s.format, imported: true }));
+        importedSongs = songs.map((s) => ({ id: s.id, title: s.title, xml: s.xml, format: s.format, imported: true, partNameOverrides: s.partNameOverrides }));
         renderSongList();
         // A remote songId can arrive before this device's own library listener has caught up
         // with it (e.g. it was just imported elsewhere) -- re-apply the last state we got once

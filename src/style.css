@@ -554,6 +554,16 @@ body {
   cursor: default;
 }
 
+.inline-edit-input {
+  font: inherit;
+  color: #eef0f5;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+  padding: 1px 4px;
+  max-width: 100%;
+}
+
 .measure-step-btn {
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: transparent;

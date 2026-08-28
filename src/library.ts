@@ -10,6 +10,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  updateDoc,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -30,6 +31,11 @@ export interface StoredSong {
   xml: string;
   format: SongFormat;
   importedAt: number;
+  // User-renamed voice/part names, keyed by part id -- a side-channel field rather than rewriting
+  // the xml/xmlGz blob itself (far less invasive: no need to re-parse/re-serialize MusicXML or
+  // mutate a JSON Score just to change a label). Applied client-side after parsing, before the
+  // part name is shown anywhere. Absent/undefined for a song with no renamed voices.
+  partNameOverrides?: Record<string, string>;
 }
 
 const SONGS_COLLECTION = 'songs';
@@ -58,6 +64,7 @@ export function subscribeToSongs(callback: (songs: StoredSong[]) => void, onErro
           // MusicXML.
           format: ((data.format as SongFormat | undefined) ?? 'musicxml') as SongFormat,
           importedAt: (data.importedAt as number) ?? 0,
+          partNameOverrides: data.partNameOverrides as Record<string, string> | undefined,
         };
       });
       callback(songs);
@@ -88,6 +95,26 @@ export async function saveImportedSong(song: { title: string; xml: string; forma
 export async function deleteImportedSong(id: string): Promise<void> {
   if (!db) throw new Error('Firebase is not configured');
   await deleteDoc(doc(db, SONGS_COLLECTION, id));
+}
+
+/**
+ * Renames a song's title and/or one voice's displayed name, written immediately (no
+ * confirmation step, matching this app's existing "any device can change shared state" trust
+ * model already used for playback/library changes elsewhere).
+ *
+ * The part-name field is written via a dot-path key (`partNameOverrides.${partId}`), NOT as a
+ * nested object value (`{ partNameOverrides: { [partId]: name } }`) -- Firestore's updateDoc only
+ * merges at the top level of the fields object; a plain nested object there *replaces* the whole
+ * map wholesale. With a real object value, renaming a second voice would silently wipe out every
+ * other voice's already-saved rename the next time this ran. The dot-path form updates just that
+ * one nested key, leaving the rest of the map untouched.
+ */
+export async function updateSongMetadata(id: string, patch: { title?: string; partName?: { partId: string; name: string } }): Promise<void> {
+  if (!db) throw new Error('Firebase is not configured');
+  const fields: Record<string, unknown> = {};
+  if (patch.title !== undefined) fields.title = patch.title;
+  if (patch.partName) fields[`partNameOverrides.${patch.partName.partId}`] = patch.partName.name;
+  await updateDoc(doc(db, SONGS_COLLECTION, id), fields);
 }
 
 async function sha256Hex(text: string): Promise<string> {

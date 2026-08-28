@@ -18,6 +18,15 @@ export interface NoteEvent {
   step?: string;
   alter?: number;
   octave?: number;
+  // The individual duration (in beats) of each originally tied-together <note> write, in order,
+  // summing exactly to durationBeats -- MusicXML can't represent a note crossing a measure
+  // boundary without a tie, so a source file's own tie-note boundaries are meaningful notated
+  // information (which specific notes/rhythms the engraver actually chose), not recoverable from
+  // durationBeats alone once merged (see Score's doc comment below). Absent for MIDI imports (no
+  // tie concept in the source) and for any note that was never part of a tie chain. Only
+  // consumed by the sheet-music view, as the preferred alternative to mathematically re-deriving
+  // a split -- playback and the piano roll use durationBeats alone, as before.
+  tieSegments?: number[];
 }
 
 export interface MeasureInfo {
@@ -42,9 +51,11 @@ export interface Score {
   notes: NoteEvent[];
   measures: MeasureInfo[];
   slurs: SlurArc[];
-  // Ties are not represented separately: a tied MusicXML note (split across a measure boundary,
-  // since a note can't itself cross one in the file format) is merged into a single NoteEvent at
-  // parse time instead, so it renders and plays back as the one continuous note it really is.
+  // A tied MusicXML note (split across a measure boundary, since a note can't itself cross one in
+  // the file format) is always merged into a single NoteEvent at parse time, so it plays back --
+  // and the piano roll renders it -- as the one continuous note it really is. The original
+  // tie-note boundaries aren't discarded, though: they're optionally preserved on the NoteEvent
+  // itself (see its tieSegments field) for the sheet-music view to notate faithfully.
   totalBeats: number;
 }
 

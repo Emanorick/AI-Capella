@@ -84,10 +84,13 @@ gets left with music playing to an empty player view.
   across devices in Ensemble mode — not a separate "just look" browsing mode.
 - **Click-to-preview**: clicking a note anywhere in the main area plays that note's pitch
   (through the same synth used for playback, respecting the current transpose) and shows its
-  name (e.g. "E3") in a small label above it for about a second, then the label fades. This
-  replaced an earlier design that kept a full piano keyboard down the left edge — the keyboard
-  was removed entirely in favor of this click-to-identify interaction, which turned out to be
-  both simpler and more useful.
+  name (e.g. "E3") in a small label above it for about a second, then the label fades. An
+  earlier design kept a full piano keyboard permanently down the left edge; that was removed in
+  favor of this click-to-identify interaction. A simplified keyboard strip is back, in a
+  different, less intrusive form: a light/dark band per semitone row drawn once, immediately
+  before the piece's very first beat (not a persistent sidebar) — it scrolls out of view like
+  any other content once you scroll past the start, and clicking a key plays its pitch the same
+  way clicking a note does. See §4.3.
 - **Barely-visible semitone gridlines** run behind the notes so you can gauge interval
   distance at a glance without them competing visually with the beat/measure gridlines.
 - **Vertical scrolling**: if a piece's full pitch range doesn't fit the viewport at a
@@ -109,18 +112,26 @@ An alternative, toggleable view (the "Sheet Music" / "Piano Roll" button in the 
 for anyone who reads traditional notation more comfortably than a piano roll — each voice gets
 its **own five-line staff, stacked vertically** (never overlaid on a shared staff — SATB voices
 sharing a pitch would be unreadable that way), in that part's color, on a black background,
-with shared barlines connecting every staff into one system. Real key and time signatures are
-shown (with accidentals only drawn where they actually differ from the key or an earlier note
-in the same measure — not a redundant sharp/flat on every occurrence), ties render as actual
-connected noteheads with a tie curve rather than one elongated note, and rests fill in the
-silent gaps. It mirrors the piano roll's mute/solo/true-solo (a true-soloed voice hides every
-other staff entirely; a regular Solo dims the rest and hides their lyrics), zoom, transpose (a
-real, key-signature-aware transposition — not just a note here — see §4.8), and lyrics. It's
-mostly a *view*, not an alternate control surface — no loop-drag of its own — but it does have
-its own ruler strip for the same grid-lock tap-to-seek gesture the piano roll's ruler has,
-since scrolling to a spot in one view and wanting to start playback there shouldn't require
-switching back. See §4.8 for the rendering approach and its remaining scope limits (clef
-assignment, note-duration shapes, no beaming).
+with shared barlines connecting every staff into one system, closing in a classical thin+thick
+double bar at the very end of the piece. Real key signatures are shown (with accidentals only
+drawn where they actually differ from the key or an earlier note in the same measure — not a
+redundant sharp/flat on every occurrence); the time signature is deliberately **not** shown (an
+earlier version drew it next to the key signature, but it added clutter without much benefit and
+was removed). Ties render as actual connected noteheads with a tie curve, matching the *original*
+tie-note boundaries the source file notated (not a mathematically re-derived split — see §4.8),
+and rests fill in the silent gaps. Lyrics sit at one fixed height under each staff rather than
+bouncing up and down with each note's own pitch, so a whole line of text reads level. It mirrors
+the piano roll's mute/solo/true-solo (a true-soloed voice hides every other staff entirely; a
+regular Solo dims the rest and hides their lyrics), zoom, transpose (a real, key-signature-aware
+transposition — see §4.8), and lyrics. It's mostly a *view*, not an alternate control surface —
+no loop-drag of its own — but it does have its own ruler strip for the same grid-lock tap-to-seek
+gesture the piano roll's ruler has, since scrolling to a spot in one view and wanting to start
+playback there shouldn't require switching back. **Not offered for MIDI-imported songs** — the
+toggle button is hidden entirely, since a MIDI file carries no real notated pitch spelling (only
+a heuristic chromatic fallback, see §4.8), so there's nothing genuinely "notated" to show. On a
+narrow (mobile-width) screen, the playhead line sits further toward the center than on desktop,
+so it doesn't crowd right up against the clef/key-signature glyphs. See §4.8 for the rendering
+approach and its remaining scope limits (clef assignment, note-duration shapes, no beaming).
 
 ### Playback & transport
 - Play/Pause and Stop are available both in the full transport bar and as compact buttons in
@@ -163,6 +174,19 @@ Solo buttons:
   hides every other voice entirely. Clicking the same voice again restores everyone. This is
   distinct from the Solo button's "duck the rest" behavior — sometimes you want to hear only
   your part with nothing else at all.
+
+### Editable song and voice names
+Double-clicking the song title, or any voice's name in the settings panel, turns it into an
+inline text field — Enter or clicking away commits the change (if it's non-empty and actually
+different), Escape reverts. A committed rename is written straight to Firestore, immediately, no
+confirmation step — the same "any connected device can change shared state" trust model already
+used for importing/deleting library songs. Only available for actual shared-library songs (not
+the bundled built-in sample, which has no Firestore document to write to). A part rename doesn't
+touch the song's stored MusicXML/score data at all — it's a small side-channel override
+(`partNameOverrides`, keyed by part id) applied on top of the parsed part name when a song loads,
+so renaming never risks corrupting the source data. See §4.6 for the Firestore-side details,
+including a real bug the design deliberately avoids (a naive nested-object write would silently
+wipe out every other voice's already-saved rename).
 
 ### Import & shared library
 - Drag-and-drop or file-picker import of `.musicxml`, `.xml`, `.mxl` (MuseScore's
@@ -268,7 +292,12 @@ handles:
   continuous note, so the parser *merges* a tied sequence into a single `NoteEvent` (extending
   its `durationBeats` through each tied segment, chains included) rather than keeping them
   separate and bridging the gap visually. This is what makes a tied note render as one seamless
-  bar and play back with a single attack instead of an audible retrigger at the tie point.
+  bar and play back with a single attack instead of an audible retrigger at the tie point. The
+  original tie-note boundaries aren't thrown away in the process, though: each individual tied
+  `<note>`'s own duration is also appended to the merged `NoteEvent.tieSegments` array (computed
+  the same self-correcting way `durationBeats` itself already was, so the segments always sum
+  exactly to it) — the sheet-music view uses this to notate the *actual* tie the source file
+  specified, rather than re-deriving a plausible-looking split mathematically. See §4.8.
 
 `.mxl` files (MuseScore's default export — a zip containing the MusicXML plus a
 `META-INF/container.xml` manifest) are unzipped client-side in `library.ts` using `fflate`,
@@ -332,6 +361,22 @@ view hasn't been panned away from the actual position — which is always true d
 allowed to browse the score, and the playhead line is computed from `playheadBeat`
 independently, so it correctly drifts away from (or entirely off) its usual spot rather than
 silently relabeling whatever beat the pan happened to land on.
+
+**Piano-key gutter, reintroduced in a non-persistent form.** An earlier version kept a full
+keyboard permanently down the left edge (removed in favor of click-to-preview, see §2); a
+simplified version is back — a light/dark band per semitone row (matching real piano key
+coloring, not literal interlocking key shapes) drawn once immediately before beat 0, painted
+directly into `contentBuffer`/`paintContent` like gridlines or notes rather than as a separate
+pinned overlay. Because it lives in the same beat-space-positioned buffer as everything else, it
+scrolls out of view naturally once playback moves past the piece's start, with no extra pinning
+logic needed, and it redraws for free on every existing buffer-rebuild trigger (zoom, resize,
+etc.) without a new one. Its pixel width is converted to an equivalent beat-width at the buffer's
+current `pixelsPerBeat` (`KEYBOARD_WIDTH_PX / pixelsPerBeat`), so it renders as a consistent
+physical size regardless of zoom level. `hitTestKeyboard()` (used by the same click handler
+`hitTestNote()` already wires up, as a fallback when no actual note is hit) maps a click back to
+a MIDI pitch the same way `hitTestNote()` does, previewing the tone through the same
+`audioEngine.previewNote()` path — just without a note-name label, since a keyboard key isn't a
+real `NoteEvent` with its own beat position to anchor one to.
 
 **Self-correcting buffer bounds.** Before blitting, `render()` verifies the content buffer
 actually covers the full visible width and forces an immediate rebuild if it doesn't — a
@@ -439,6 +484,12 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
   has already applied a few pixels of pan by the time the gesture is recognized as a swipe
   rather than a scroll, since axis-locking happens continuously as the gesture is still in
   progress.
+- **The measure-jump field proactively clamps itself** (`clampMeasureInput()`, both inside
+  `jumpToMeasure()` and on the field's own `change` event) rather than relying on the input's
+  native `min`/`max` validation — an out-of-range value left for the browser's own validation to
+  catch was the likely cause of a reported visual "wobble" on mobile (a native shake animation
+  outside this app's control), so the fix is to never let the field hold an out-of-range value
+  in the first place.
 
 ### 4.6 Shared library & access (`firebase.ts`, `library.ts`, `pinGate.ts`)
 
@@ -469,6 +520,19 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
   this is a *soft* gate against casual link-sharing, not a real security boundary — Firestore's
   actual access control is "authenticated (even anonymously) clients can read/write," which the
   PIN does nothing to restrict.
+- **Renaming** (§2) writes through `updateSongMetadata(id, patch)`, an `updateDoc` on the song's
+  existing document — the app's first update-in-place write; every other write was previously
+  either a brand-new document (`saveImportedSong`) or a full delete. A song title is a plain
+  top-level field write, but a voice rename uses a **dot-path field key**
+  (`` `partNameOverrides.${partId}` ``) rather than writing `{ partNameOverrides: { [partId]:
+  name } }` as a literal nested object — Firestore's `updateDoc` only merges at the top level of
+  the fields object it's given, so a plain object value for a field *replaces* whatever was
+  already stored there wholesale. With a real multi-part choir score, that would mean renaming a
+  second voice silently wiping out every other voice's already-saved rename the next time this
+  ran. The dot-path form updates only that one nested key, leaving the rest of the map alone.
+  `partNameOverrides` itself is applied client-side, once, right after a song's `xml`/`score`
+  blob is parsed and before anything downstream (the parts panel, piano roll, sheet view) reads
+  a part's name — the stored source data is never rewritten just to rename a voice.
 
 ### 4.7 Synced multi-device playback (`sync.ts`, `main.ts`)
 
@@ -634,19 +698,38 @@ one synchronized system rather than N unrelated staves.
 Clef glyphs are small hand-drawn bezier-curve shapes (a stylized G-clef spiral for treble; two
 dots flanking a hook for bass), not a Unicode music-symbol character — this app bundles no music
 font, and Unicode clef characters render as missing-glyph boxes on many systems without one.
-Recognizable at a glance as "this is treble/bass," not calligraphic. Each note's notehead is
-nudged a few pixels right of its exact beat position (`NOTE_X_OFFSET_PX`) so a note starting
-exactly on a barline doesn't visually sit on top of the barline itself.
+Recognizable at a glance as "this is treble/bass," not calligraphic. Note flags (eighth/16th/32nd)
+are a closed two-bezier "hook" shape — bulging out from the stem, then tapering back to a point
+further down it — reading as a proper tapering flag rather than the symmetric lens/blob shape an
+earlier single-quadratic-curve version produced. Each note's notehead is nudged a few pixels
+right of its exact beat position (`NOTE_X_OFFSET_PX`) so a note starting exactly on a barline
+doesn't visually sit on top of the barline itself. The final barline of a piece is a classical
+thin+thick double bar, not a single line.
 
 **Key signature** (`fifths`, from MusicXML's `<key><fifths>`, parsed the same
-carry-forward-across-measures way as `beats`/`beatType` — see `MeasureInfo.fifths`) and **time
-signature** are drawn right after the clef, using a fixed table of verified staff positions for
-each possible sharp/flat count per clef. They're pinned to a fixed screen position like the
-clef, tracking whichever measure currently governs the left edge of the visible viewport, rather
-than being anchored to the beat where a signature change happens — correct for the overwhelming
-common case (one key/time signature for the whole piece) and, for a piece with a genuine
-mid-piece change, updates as you scroll past the change point; a change occurring *inside* the
-visible viewport isn't also marked inline at its own beat position (a known limitation, §6).
+carry-forward-across-measures way as `beats`/`beatType` — see `MeasureInfo.fifths`) is drawn
+right after the clef, using a fixed table of verified staff positions for each possible
+sharp/flat count per clef. It's pinned to a fixed screen position like the clef, tracking
+whichever measure currently governs the left edge of the visible viewport, rather than being
+anchored to the beat where a signature change happens — correct for the overwhelming common case
+(one key signature for the whole piece) and, for a piece with a genuine mid-piece change, updates
+as you scroll past the change point; a change occurring *inside* the visible viewport isn't also
+marked inline at its own beat position (a known limitation, §6). The time signature is
+deliberately **not** drawn (an earlier version showed it stacked just after the key signature;
+removed as unnecessary clutter). On a narrow (mobile-width, under 720px) canvas, the playhead
+line uses a larger `MOBILE_PLAYHEAD_X_RATIO` instead of the default `PLAYHEAD_X_RATIO`, so it
+sits further from the crowded clef/key-signature glyphs near the left edge — the same 720px
+breakpoint `style.css` already uses for its own mobile layout, since there's no separate
+`isMobile` flag anywhere in this codebase; the canvas's own rendered width is already the right
+signal for "is this crowded," regardless of whether that's from an actual phone or just a
+narrowed desktop window.
+
+**Lyrics sit at one fixed height per staff** (`LYRIC_BASELINE_OFFSET_PX` below the staff's bottom
+line), not following each note's own pitch, so a whole lyric line reads level instead of bouncing
+up and down with the melody. Accepted trade-off: an extreme low note (most likely after a large
+negative transpose) can sit below this fixed line, putting its lyric above/near its own notehead
+instead of under it — inherent to "one fixed height per staff" versus an unbounded ledger-line
+range, not fixable by tuning the constant.
 
 **Accidental-awareness**: an accidental is only drawn on a note when its alter actually differs
 from what the key signature (or an earlier note of the same letter+octave earlier in the same
@@ -660,14 +743,22 @@ is skipped for off-screen notes, not the bookkeeping.
 **Ties** are rendered as real notation, not one elongated notehead. MusicXML ties are still
 merged into a single `NoteEvent` with an extended `durationBeats` at parse time (§4.2, for
 piano-roll/audio purposes) — but `StaffView` splits that merged duration back into individually-
-notatable segments (`splitIntoNotatedSegments`): forcing a split at every barline crossing (a
-note can't cross one in real notation, same as MusicXML itself), and within a barline-clipped
-span, greedily picking the *largest* standard duration that fits without exceeding it (not the
-*nearest*, which is what the existing `classifyDuration` picks and would overflow past what's
-actually left). Each segment gets its own notehead/stem/flags, connected to the next by a
-shallow tie curve. This is what fixes a concretely observed bug where a tied note (e.g. the
-"Butterfly" arrangement's opening notes) rendered as a single illegibly-long note instead of
-readable rhythm.
+notatable segments for drawing. It prefers the note's own `tieSegments` (§4.2 — the *original*
+tie-note boundaries the source file actually notated) whenever they're present, via
+`segmentsFromTieLengths`, a plain cumulative-sum expansion with no barline logic needed (each
+original `<note>` element could never cross a measure boundary in MusicXML to begin with, so
+these segments are inherently already barline-safe). This is what makes a tied pair that
+mathematically sums to one "clean" value (e.g. two tied eighths summing to exactly one quarter)
+still render as two connected noteheads with a visible tie, matching the source engraving,
+instead of silently collapsing into one undivided notehead. `splitIntoNotatedSegments` — forcing
+a split at every barline crossing, and within a barline-clipped span greedily picking the
+*largest* standard duration that fits without exceeding it (not the *nearest*, which is what
+`classifyDuration` picks and would overflow past what's actually left) — remains the fallback for
+MIDI imports (no tie concept in the source) and any non-tied note with an unusually long single
+duration. Either way, each resulting segment gets its own notehead/stem/flags, connected to the
+next by a shallow tie curve. This machinery is what fixes a concretely observed bug where a tied
+note (e.g. the "Butterfly" arrangement's opening notes) rendered as a single illegibly-long note
+instead of readable rhythm.
 
 **Rests** fill in the inferred silent gaps in each part's own note list — notes sharing a
 startBeat count as one chord/event, using the latest end-time among them, so a gap is only
@@ -775,15 +866,23 @@ needs to reference its own bundled assets, like the sample song's URL, for the s
   intended spelling (which MIDI has no way to encode). Transpose *is* fully modeled (key
   signature and note spelling both shift correctly together, §4.8) — this is no longer a
   limitation as of the second feedback round.
-- **Mid-piece key/time signature changes aren't marked inline at their own beat.** The key and
-  time signature shown are pinned to a fixed screen position (like the clef) and track whichever
-  measure currently governs the left edge of the visible viewport — correct for the very common
-  case of one signature for the whole piece, and they do update as you scroll past a genuine
-  mid-piece change, but the change itself isn't also flagged inline at the beat where it happens.
+- **Mid-piece key signature changes aren't marked inline at their own beat.** The key signature
+  shown is pinned to a fixed screen position (like the clef) and tracks whichever measure
+  currently governs the left edge of the visible viewport — correct for the very common case of
+  one signature for the whole piece, and it does update as you scroll past a genuine mid-piece
+  change, but the change itself isn't also flagged inline at the beat where it happens.
 - **Rest inference assumes one monophonic voice per part.** True for typical SATB choir writing
   (this app's primary use case), but a part with genuinely overlapping simultaneous voices
   (MusicXML `<backup>`/`<forward>` producing overlapping non-chord content within one part) may
   show incorrect or overlapping rests. See §4.8.
+- **A fixed lyric baseline can sit above an extreme low note.** Sheet-view lyrics are drawn at
+  one consistent height per staff rather than following each note's own pitch (§4.8) — inherent
+  trade-off for an extreme low note (most likely after a large negative transpose): its lyric can
+  end up above/near its own notehead rather than under it, since the fixed line has no way to
+  account for an unbounded ledger-line range.
+- **No sheet-music view for MIDI-imported songs.** The toggle button is hidden entirely for a
+  MIDI import, rather than offering a view built on a heuristic chromatic spelling that isn't
+  necessarily the file's actual intended notation (§4.8).
 - **Metronome-active-but-silent reports are not conclusively fixed**, only investigated —
   see §4.4's note on what was found (a removed dead-code landmine) and the diagnostics shipped
   alongside it in case it recurs.

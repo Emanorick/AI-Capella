@@ -108,16 +108,37 @@ export function parseMusicXML(xmlText: string): Score {
 
                 if (continuesOpenTie) {
                   // Extend the already-pushed NoteEvent through this note's end instead of adding
-                  // a second one -- see openTieNotes' doc comment for why.
+                  // a second one -- see openTieNotes' doc comment for why. newTotal is recomputed
+                  // from the tie-start's own startBeat (not a running sum), which already
+                  // self-corrects for any gap/rounding between consecutive tied notes -- the new
+                  // tieSegments entry uses the same self-correcting math (this segment's real
+                  // length is "however much newTotal grew", not just this note's own raw
+                  // durationBeats) so segments always sum exactly to durationBeats.
                   const open = openTieNotes.get(midi)!;
-                  open.durationBeats = startBeat + durationBeats - open.startBeat;
+                  const newTotal = startBeat + durationBeats - open.startBeat;
+                  if (open.tieSegments) {
+                    const priorSum = open.tieSegments.reduce((a, b) => a + b, 0);
+                    open.tieSegments.push(newTotal - priorSum);
+                  }
+                  open.durationBeats = newTotal;
                   if (tieTypes.has('start')) {
                     openTieNotes.set(midi, open); // chain continues into a further tied note
                   } else {
                     openTieNotes.delete(midi);
                   }
                 } else {
-                  const noteEvent: NoteEvent = { partId, midi, startBeat, durationBeats, lyric: lyric || undefined, measureNumber, step, alter, octave };
+                  const noteEvent: NoteEvent = {
+                    partId,
+                    midi,
+                    startBeat,
+                    durationBeats,
+                    lyric: lyric || undefined,
+                    measureNumber,
+                    step,
+                    alter,
+                    octave,
+                    tieSegments: tieTypes.has('start') ? [durationBeats] : undefined,
+                  };
                   notes.push(noteEvent);
                   if (tieTypes.has('start')) openTieNotes.set(midi, noteEvent);
                 }

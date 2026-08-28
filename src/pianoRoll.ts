@@ -26,6 +26,13 @@ const BUFFER_SPAN_MULTIPLIER = 3; // scrolling-content buffer covers this many v
 const MAX_BUFFER_DEVICE_PX = 8192; // defensive cap on the content buffer's width in device px (see ensureContentBuffer)
 const BUFFER_REBUILD_MARGIN = 0.25; // rebuild once the playhead gets within this fraction of a viewport-width of the buffer's edge
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+// A simplified "keyboard-style gutter" (alternating light/dark bands per semitone row, matching
+// real piano key coloring -- not literal interlocking key polygons, out of scope for the visual
+// gain) drawn once immediately before beat 0, as part of the scrollable content itself rather
+// than a persistent left-edge sidebar (the old, already-removed design) -- it scrolls out of view
+// naturally once the user scrolls past the piece's start, same as any other content.
+const KEYBOARD_WIDTH_PX = 40;
+const BLACK_KEY_PITCH_CLASSES = new Set([1, 3, 6, 8, 10]); // C#, D#, F#, G#, A#
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
@@ -248,6 +255,22 @@ export class PianoRoll {
       }
     }
     return null;
+  }
+
+  /**
+   * Whether a canvas-local point hits the piano-keyboard strip near beat 0 (see
+   * KEYBOARD_WIDTH_PX), and if so, which pitch's key -- for click-to-preview. yToMidi is an
+   * unclamped linear extrapolation, so a click within the keyboard's x-range but above/below the
+   * actual drawn rows (e.g. when the content is shorter than the viewport) is rejected rather
+   * than returning a midi with no visible key.
+   */
+  hitTestKeyboard(x: number, y: number, displayBeat: number): number | null {
+    const keyboardWidthBeats = KEYBOARD_WIDTH_PX / this.pixelsPerBeat;
+    const beat = this.xToBeat(x, displayBeat);
+    if (beat < -keyboardWidthBeats || beat >= 0) return null;
+    const midi = this.yToMidi(y);
+    if (midi < this.minMidi || midi > this.maxMidi) return null;
+    return midi;
   }
 
   render(displayBeat: number, playheadBeat: number) {
@@ -478,6 +501,21 @@ export class PianoRoll {
       const y = this.rowY(midi) - rowHeight;
       ctx.fillStyle = 'rgba(255,255,255,0.03)';
       ctx.fillRect(0, y, widthCss, rowHeight);
+    }
+
+    // Piano keyboard strip, just before beat 0 -- see KEYBOARD_WIDTH_PX's comment. Uses the exact
+    // same rowY/rowHeight as note rows, so it lines up with the pitch gridlines. widthCss-anchored
+    // pixel width converted to beats at the current pixelsPerBeat, so it renders as a consistent
+    // physical size regardless of zoom (recomputed on every rebuild, which zoom changes trigger).
+    const keyboardWidthBeats = KEYBOARD_WIDTH_PX / this.pixelsPerBeat;
+    const keyboardStartX = localBeatToX(-keyboardWidthBeats);
+    const keyboardEndX = localBeatToX(0);
+    if (keyboardEndX > 0 && keyboardStartX < widthCss) {
+      for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
+        const isBlack = BLACK_KEY_PITCH_CLASSES.has(((midi % 12) + 12) % 12);
+        ctx.fillStyle = isBlack ? '#1a1a1a' : '#e8e8e8';
+        ctx.fillRect(keyboardStartX, this.rowY(midi) - rowHeight, keyboardEndX - keyboardStartX, rowHeight);
+      }
     }
 
     // semitone gridlines: a barely-visible line at every pitch row boundary, just enough to give
