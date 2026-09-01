@@ -192,18 +192,26 @@ export class AudioEngine {
   }
 
   setMetronomeEnabled(enabled: boolean) {
-    // Diagnostics for a reported "metronome shows on but stays silent, and won't toggle" bug that
-    // couldn't be reproduced from reading the code alone -- if it recurs, these traces are the
-    // fastest way to see whether the flag/scheduling actually desynced, or something upstream
-    // (the sync/UI layer) never got this call at all.
-    console.debug('[AI-Capella] setMetronomeEnabled', { enabled, playing: this.playing, scheduledUpToBeat: this.scheduledUpToBeat });
     this.metronomeEnabled = enabled;
-    // Skip the reschedule while a count-in is still sounding: play()'s "now + 0.06" local
-    // rescheduling path (no startAtEpochMs here) would cut the count-in short and start the music
-    // immediately, ahead of the synced instant every other device is still counting down to. The
-    // flag change still takes effect once the count-in ends naturally -- tick()'s ordinary
-    // lookahead top-up schedules the live click track (or doesn't) using the fresh value.
-    if (this.playing && !this.isCountingIn()) this.play(this.getCurrentBeat(), 60 / this.secPerBeat, this.lastTranspose);
+    if (!this.playing) return;
+    if (this.isCountingIn()) {
+      // Root cause of a reported "metronome shows on but stays silent, and won't toggle" bug:
+      // a full reschedule here (clearSchedule() + a fresh "now + 0.06" start) would cut the
+      // still-sounding count-in short and lose the synced instant every other device is still
+      // counting down to, so it's deliberately skipped -- but the flag change was then just
+      // dropped, not actually deferred. tick()'s ordinary lookahead top-up does NOT pick it up:
+      // its horizon check is keyed on scheduledUpToBeat, which the *initial* play() call already
+      // pushed up to LOOKAHEAD_SEC (8s) ahead using whatever metronomeEnabled was at that time --
+      // scheduleMetronomeInRange's range starts from that same already-advanced point, so every
+      // beat marker before it is silently skipped forever, never revisited. Toggling during a
+      // count-in produced up to 8 seconds of silence (toggling on) or up to 8 seconds of clicks
+      // that wouldn't stop (toggling off) once the count-in ended. Deferring the reschedule and
+      // applying it from tick() the moment the count-in actually ends (see below) fixes this
+      // without disturbing the count-in itself.
+      this.pendingMetronomeReschedule = true;
+      return;
+    }
+    this.play(this.getCurrentBeat(), 60 / this.secPerBeat, this.lastTranspose);
   }
 
   /** Volume (0-1) for non-soloed parts while at least one part has its Solo button active. */
@@ -230,6 +238,9 @@ export class AudioEngine {
 
   private lastTranspose = 0;
   private lastCountInBeats = 0; // set by play(); isCountingIn() needs this to tell "pre-roll before a count-in" apart from "pre-roll before a plain synced Play"
+  // Set by setMetronomeEnabled() when a toggle arrives mid-count-in and the reschedule it would
+  // normally do has to wait until the count-in actually ends -- see its comment for why.
+  private pendingMetronomeReschedule = false;
 
   private clearSchedule() {
     const now = this.ctx.currentTime;
@@ -271,6 +282,7 @@ export class AudioEngine {
    * principle as the "join already in progress" branch above.
    */
   play(fromBeat: number, bpm: number, transposeSemitones: number, startAtEpochMs?: number, countInBeats = 0, countInPulseBeats = 1) {
+    this.pendingMetronomeReschedule = false; // this call is itself a full reschedule -- nothing left deferred
     this.clearSchedule();
     if (this.ctx.state === 'suspended') this.ctx.resume();
     // A non-finite/non-positive bpm would make every downstream time calculation NaN/Infinity;
@@ -329,6 +341,14 @@ export class AudioEngine {
    */
   tick() {
     if (!this.playing) return;
+    if (this.pendingMetronomeReschedule && !this.isCountingIn()) {
+      // The count-in that blocked this in setMetronomeEnabled() has now actually finished --
+      // apply the deferred toggle with a full reschedule, same as the normal (not-counting-in)
+      // path would have done immediately.
+      this.pendingMetronomeReschedule = false;
+      this.play(this.getCurrentBeat(), 60 / this.secPerBeat, this.lastTranspose);
+      return;
+    }
     const horizonBeats = LOOKAHEAD_REFILL_SEC / this.secPerBeat;
     if (this.scheduledUpToBeat - this.getCurrentBeat() < horizonBeats) this.scheduleAhead(false);
   }
@@ -369,7 +389,6 @@ export class AudioEngine {
   }
 
   private scheduleMetronomeInRange(fromBeatExclusive: number, toBeatExclusive: number) {
-    let scheduledCount = 0;
     for (const marker of this.beatMarkers) {
       if (marker.beat < fromBeatExclusive) continue;
       if (marker.beat >= toBeatExclusive) break;
@@ -377,15 +396,10 @@ export class AudioEngine {
       const start = this.playStartCtxTime + (marker.beat - this.playStartBeat) * this.secPerBeat;
       try {
         this.scheduledVoices.push(playClick(this.ctx, this.metronomeGain, start, marker.isDownbeat));
-        scheduledCount++;
       } catch (err) {
         console.error('Skipping a metronome click that could not be scheduled:', marker, err);
       }
     }
-    // See setMetronomeEnabled's comment -- if a repro turns up, checking whether this ever logs
-    // 0 while metronomeEnabled is true (vs. never being called at all) narrows down where the
-    // stuck-metronome bug actually lives.
-    console.debug('[AI-Capella] scheduleMetronomeInRange', { fromBeatExclusive, toBeatExclusive, scheduledCount });
   }
 
   pause() {

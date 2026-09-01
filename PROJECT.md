@@ -409,7 +409,8 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
   through `play()` again, which reschedules everything from the current position anyway.
 - Changing BPM, transpose, or the metronome toggle mid-playback all just call `play()` again
   from the current beat — full re-schedule, not an incremental patch — which is simple and, in
-  practice, imperceptible.
+  practice, imperceptible. **Exception**: a metronome toggle that arrives while a count-in is
+  still sounding does *not* immediately call `play()` — see below.
 - `play()` takes an optional `startAtEpochMs`: a wall-clock instant (`Date.now()`-style) to
   begin at, translated into this device's own `AudioContext` clock, instead of the default "as
   soon as possible." This is what §4.7's multi-device sync uses to make every device start at
@@ -435,12 +436,28 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
   sustain-hold automation event landing *before* the decay ramp's own end time, which Web Audio
   resolves by holding flat at peak volume and then jumping straight to the sustain level instead
   of actually decaying, for most notes under ~0.4s) is fixed alongside it.
-- **Metronome-active-but-silent reports**: investigated but not conclusively reproduced from
-  reading the code alone. A dead, unreachable `resume()` method with the exact shape of that bug
-  (sets `playing = true` without rescheduling anything) has been removed, and `setMetronomeEnabled`/
-  `scheduleMetronomeInRange` now log via `console.debug` on every call — if this recurs, check
-  the browser console for whether the flag/scheduling actually desynced or the call never
-  happened at all.
+- **Metronome-active-but-silent / can't-toggle bug (found and fixed)**: root cause was
+  `setMetronomeEnabled()`'s handling of a toggle that arrives *while a count-in is still
+  sounding*. It used to just skip the reschedule outright — deliberately, since a full `play()`
+  reschedule right then would cut the still-sounding count-in short and desync it from every
+  other synced device — but the flag change was then silently dropped, not deferred. `tick()`'s
+  ordinary incremental top-up doesn't pick it up either: its horizon check is keyed on
+  `scheduledUpToBeat`, which the count-in's own `play()` call already advanced up to
+  `LOOKAHEAD_SEC` (8s) ahead using whatever `metronomeEnabled` was at that moment —
+  `scheduleMetronomeInRange`'s range starts from that already-advanced point, so every beat
+  marker before it is skipped forever, never revisited. Net effect: toggling the metronome
+  during a count-in could produce up to 8 seconds of silence (toggling on) or up to 8 seconds of
+  clicks that wouldn't stop (toggling off) once the count-in ended — matching the reported
+  "shows on but stays silent, and won't toggle" symptom. **Fix**: a new
+  `pendingMetronomeReschedule` flag. A toggle mid-count-in sets it instead of no-op'ing;
+  `tick()` checks it first on every call and, the moment `isCountingIn()` goes false, applies
+  the deferred toggle via a normal full `play()` reschedule (the same one the non-count-in path
+  already did immediately) — without ever touching the count-in's own already-scheduled clicks.
+  An ordinary toggle outside a count-in is unaffected, still applied immediately as before.
+  Verified with a scripted regression test (mocked Web Audio API, real `AudioEngine` class, a
+  manually-advanceable fake clock) covering toggle-off-mid-count-in, toggle-on-mid-count-in, and
+  the ordinary non-count-in path; the same test fails against the pre-fix code and passes against
+  the fix.
 
 ### 4.5 Input handling (`main.ts`)
 
@@ -883,6 +900,3 @@ needs to reference its own bundled assets, like the sample song's URL, for the s
 - **No sheet-music view for MIDI-imported songs.** The toggle button is hidden entirely for a
   MIDI import, rather than offering a view built on a heuristic chromatic spelling that isn't
   necessarily the file's actual intended notation (§4.8).
-- **Metronome-active-but-silent reports are not conclusively fixed**, only investigated —
-  see §4.4's note on what was found (a removed dead-code landmine) and the diagnostics shipped
-  alongside it in case it recurs.
