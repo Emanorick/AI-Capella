@@ -45,6 +45,11 @@ position. Ensemble is the synced-playback experience described below. The choice
 remembered (`localStorage`) so it's only asked once; a "Switch mode" link in the library
 sidebar clears it and reloads back to this screen. Either way, the shared song library itself
 is always available — Solo only opts out of shared *playback*, not shared *songs*. See §4.7.
+The storage key is versioned (`ai-capella-mode-v2`) specifically so it can be bumped again if
+needed — a device that already has an earlier version's choice stored (e.g. from a developer's
+own testing pass) would otherwise silently skip this screen forever for a real rehearsal
+participant who picks up that same device/browser, never actually seeing the Solo/Ensemble
+choice at all.
 
 ### Library / player split
 The app opens on a **library view**: a scrollable list of songs (a bundled sample plus
@@ -507,6 +512,26 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
   catch was the likely cause of a reported visual "wobble" on mobile (a native shake animation
   outside this app's control), so the fix is to never let the field hold an out-of-range value
   in the first place.
+- **The sheet-music view now supports touch/pointer drag-to-scroll.** `#staff` has always set
+  `touch-action: none` (so a touch drag doesn't fight the browser's own native page-scroll
+  gesture), but until now nothing filled in the JS side of that — the canvas only had a `wheel`
+  handler (mouse/trackpad only) and a plain `click` handler for ruler tap-to-seek, so a phone or
+  tablet had no way to scroll the stacked staves at all once they didn't all fit vertically (a
+  real, confirmed gap, not a perception issue). A `pointerdown`/`pointermove`/`pointerup` set
+  below the ruler strip mirrors the piano roll's axis-locked drag (vertical scroll, horizontal
+  pan via the same shared `displayBeat()`/`viewOffsetBeats` mechanism both views already read
+  from) — without the piano roll's ruler-drag loop-selection or tap-to-preview, which are
+  piano-roll-only features.
+- **Two-finger pinch-to-zoom** (`PinchZoomTracker`) is wired into both canvases' existing pointer
+  handlers, sharing the same `applyZoom()` the +/− zoom buttons use. It tracks every currently-
+  down pointer by id; once exactly two are down, each move reports the ratio of the new
+  inter-finger distance to the *previous move's* (not the gesture's starting distance, which
+  would make the reported ratio cumulative rather than the per-call multiplicative factor
+  `applyZoom()` expects). A second finger landing mid-drag abandons whatever single-pointer
+  gesture (pan, scroll, or a piano-roll ruler loop-selection) was already in progress rather than
+  letting both run at once — the existing single-pointer drag state is reset the moment a pinch
+  starts, and isn't resumed for whichever finger remains once the pinch ends (lifting both and
+  re-touching is an accepted, minor UX cost for keeping the two gestures from fighting).
 
 ### 4.6 Shared library & access (`firebase.ts`, `library.ts`, `pinGate.ts`)
 
@@ -530,7 +555,16 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
   correctly via a fallback to a raw `xml` field.
 - The song list is a **live subscription** (`onSnapshot`), not a one-time fetch — importing or
   deleting a song from any device updates every other open client immediately, with no manual
-  refresh.
+  refresh. A collection `onSnapshot` fires (with the full current result set) on *any* change to
+  *any* doc in it, so `subscribeToSongs` keeps a **per-song decompression cache** across
+  snapshots, keyed by doc id, and only re-gunzips/re-decodes a song via `docChanges()` when that
+  specific doc actually changed — reusing every unchanged song's already-decoded `StoredSong` as-
+  is. Before this, one voice's rename or one new import re-gunzipped and re-decoded *every* song
+  in the library, on *every* connected device, on every single such event — with a roomful of
+  devices all doing that main-thread work simultaneously, this was a real, repeatable cause of a
+  synced-rehearsal-wide stutter/freeze that got worse the more songs (and the more people editing
+  at once) there were — a concrete, confirmed contributor to reported multi-device performance
+  problems.
 - The PIN itself is never stored or transmitted in the clear: `verifyPin()` hashes the entered
   PIN with SHA-256 (`crypto.subtle.digest`) client-side and compares it against a `pinHash`
   field on a single `config/access` Firestore document. As documented directly in the code,
@@ -751,11 +785,24 @@ range, not fixable by tuning the constant.
 **Accidental-awareness**: an accidental is only drawn on a note when its alter actually differs
 from what the key signature (or an earlier note of the same letter+octave earlier in the same
 measure) already implies — not on every altered note unconditionally, which would clutter a
-piece with a real key signature. This bookkeeping deliberately walks every note in a part in
-beat order, not just the ones currently on-screen, so scrolling to a mid-measure position can't
-skip an earlier same-measure note that already established an accidental (which would show a
-wrong accidental, or a missing one, on the first visible note) — only the actual canvas drawing
-is skipped for off-screen notes, not the bookkeeping.
+piece with a real key signature. This bookkeeping needs to see every note from the start of
+whichever measure governs the viewport's left edge, not just the ones currently on-screen, so
+scrolling to a mid-measure position can't skip an earlier same-measure note that already
+established an accidental (which would show a wrong accidental, or a missing one, on the first
+visible note). It does **not** need to start that walk from the very first note of the whole
+piece, though: the per-measure `accidentalMap` is cleared on every measure change regardless of
+what came before, so nothing an earlier measure did can leak into the current one no matter where
+the walk starts, as long as it starts at or before a measure boundary. `firstIndexAtOrAfter`
+binary-searches the part's (startBeat-sorted) note list for the first note at or after that
+measure's start, and the loop `break`s the moment it passes the visible range, rather than
+scanning the remaining notes for the rest of the piece too. Before this, the walk ran from note
+zero of the entire piece on **every single animation frame** during playback — since this view has
+no offscreen-buffer pipeline like `PianoRoll`'s (see above; it redraws directly every frame), that
+was real, measurable per-frame cost that scaled with the piece's total note count, not what was
+actually visible — a concrete, confirmed contributor to reported playback jank specifically in
+this view (a multi-minute arrangement's per-frame cost dropping from "every note in the piece" to
+"roughly what's on screen"). The rests loop gets the same treatment (binary-search to the first
+gap that could still be visible, `break` once past the visible range) for the same reason.
 
 **Ties** are rendered as real notation, not one elongated notehead. MusicXML ties are still
 merged into a single `NoteEvent` with an extended `durationBeats` at parse time (§4.2, for

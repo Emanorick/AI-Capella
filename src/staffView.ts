@@ -252,6 +252,18 @@ function measureIndexAtBeat(measures: MeasureInfo[], beat: number): number {
   return idx;
 }
 
+/** Binary search (notes/gaps are always startBeat-sorted) for the first index at or after `beat`. */
+function firstIndexAtOrAfter(items: { startBeat: number }[], beat: number): number {
+  let lo = 0;
+  let hi = items.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (items[mid].startBeat < beat) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
 /**
  * Splits one (possibly tie-merged) note's duration into individually-notatable segments: forces a
  * split at every barline crossing (a note can't cross one in real notation, same as MusicXML
@@ -667,16 +679,25 @@ export class StaffView {
     }
 
     // Accidental-awareness bookkeeping (which pitches this measure already has an accidental
-    // established for, per standard notation convention) walks every note for this part in
-    // startBeat order, not just the ones on screen -- deliberately decoupled from the viewport
-    // cull below. Otherwise, scrolling to a mid-measure position could skip an earlier same-
-    // measure note that already established an accidental, showing a wrong (missing or extra)
-    // accidental on the first visible note.
+    // established for, per standard notation convention) needs to start from the beginning of
+    // whichever measure governs the viewport's left edge, not the very first note of the whole
+    // piece -- accidentalMap is cleared on every measure change anyway (below), so nothing an
+    // earlier measure did can affect this one regardless of where the walk starts, as long as it
+    // starts at (or before) a measure boundary. Skipping straight to that measure via binary
+    // search (notes are startBeat-sorted), and breaking out once past the visible range, turns
+    // this from an O(every note in the piece) scan into an O(notes actually near the viewport)
+    // one -- on a multi-minute arrangement, redoing the full-piece walk on every single animation
+    // frame while playing was real, measurable per-frame cost (this view has no offscreen-buffer
+    // pipeline like PianoRoll's; it redraws directly every frame, see the class doc comment) and a
+    // concrete contributor to reported playback jank/stutter specifically in this view.
     let currentMeasureNumber = -1;
     let impliedAlter: Record<string, number> = {};
     const accidentalMap = new Map<string, number>();
     const notes = this.notesByPart.get(layout.partId) ?? [];
-    for (const note of notes) {
+    const notesStartIdx = effectiveMeasure ? firstIndexAtOrAfter(notes, effectiveMeasure.startBeat) : 0;
+    for (let i = notesStartIdx; i < notes.length; i++) {
+      const note = notes[i];
+      if (note.startBeat > endBeat) break;
       if (note.measureNumber !== currentMeasureNumber) {
         currentMeasureNumber = note.measureNumber;
         accidentalMap.clear();
@@ -688,13 +709,20 @@ export class StaffView {
       const showAccidental = spelling.alter !== trackedAlter;
       accidentalMap.set(key, spelling.alter);
 
-      if (note.startBeat + note.durationBeats < startBeat - 2 || note.startBeat > endBeat) continue;
+      if (note.startBeat + note.durationBeats < startBeat - 2) continue;
       this.drawNote(ctx, note, bottomLineIndex, bottomLineY, displayBeat, color, dimmed, showAccidental);
     }
 
     const rests = this.restsByPart.get(layout.partId) ?? [];
-    for (const gap of rests) {
-      if (gap.startBeat + gap.durationBeats < startBeat - 2 || gap.startBeat > endBeat) continue;
+    const restsStartIdx = firstIndexAtOrAfter(rests, startBeat - 2);
+    // A rest gap starting well before the cursor can still extend into view (e.g. a whole-measure
+    // rest whose start is far to the left of startBeat) -- back up to the previous gap too, same
+    // reasoning as the `- 2` slack this loop always used before this index skip existed.
+    const restsSearchIdx = restsStartIdx > 0 ? restsStartIdx - 1 : 0;
+    for (let i = restsSearchIdx; i < rests.length; i++) {
+      const gap = rests[i];
+      if (gap.startBeat > endBeat) break;
+      if (gap.startBeat + gap.durationBeats < startBeat - 2) continue;
       this.drawRestGap(ctx, gap, bottomLineY, displayBeat, color);
     }
     ctx.globalAlpha = 1;

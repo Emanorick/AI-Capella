@@ -226,7 +226,12 @@ libraryBackBtn.addEventListener('click', () => {
   setViewMode('library');
 });
 
-const MODE_STORAGE_KEY = 'ai-capella-mode';
+// Bumped (v2) to force every device that already has a stored choice from earlier testing back
+// through the landing screen once -- real rehearsal participants should always land on the
+// Solo/Ensemble choice the first time they actually open the app, not silently inherit whatever
+// mode a developer's own test pass last left on that device/browser. Ordinary persistence
+// (so reopening the app mid-rehearsal doesn't re-ask every time) is unaffected going forward.
+const MODE_STORAGE_KEY = 'ai-capella-mode-v2';
 // Solo = fully local, no shared playback session at all (even though Firebase may be
 // configured) -- for practicing alone without nudging anyone else's playback. Ensemble = today's
 // behavior, the single shared session. The shared song *library* stays available either way; only
@@ -1082,6 +1087,48 @@ canvas.addEventListener(
   { passive: false },
 );
 
+/**
+ * Two-finger pinch-to-zoom, shared by both canvases. Tracks every currently-down pointer by id;
+ * once exactly two are down, each move reports the ratio of the new inter-finger distance to the
+ * previous move's (not the gesture's starting distance -- that would make the reported ratio
+ * cumulative from pinch start rather than incremental per move, and applyZoom() already expects a
+ * per-call multiplicative factor, same as the existing zoom in/out buttons' ZOOM_STEP).
+ */
+class PinchZoomTracker {
+  private points = new Map<number, { x: number; y: number }>();
+  private lastDist: number | null = null;
+
+  get activeCount(): number {
+    return this.points.size;
+  }
+
+  private currentDist(): number | null {
+    const pts = Array.from(this.points.values());
+    return pts.length === 2 ? Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) : null;
+  }
+
+  onPointerDown(e: PointerEvent) {
+    this.points.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    this.lastDist = this.currentDist();
+  }
+
+  /** Returns a zoom ratio to apply once two fingers are down, else null (nothing to do). */
+  onPointerMove(e: PointerEvent): number | null {
+    if (!this.points.has(e.pointerId)) return null;
+    this.points.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const dist = this.currentDist();
+    if (dist == null) return null;
+    const ratio = this.lastDist ? dist / this.lastDist : 1;
+    this.lastDist = dist;
+    return ratio;
+  }
+
+  onPointerUp(e: PointerEvent) {
+    this.points.delete(e.pointerId);
+    this.lastDist = this.currentDist();
+  }
+}
+
 let dragPointerId: number | null = null;
 let dragStartX = 0;
 let dragStartY = 0;
@@ -1101,8 +1148,20 @@ function clientXToBeat(clientX: number): number {
   return pianoRoll!.xToBeat(clientX - canvasLeft, displayBeat());
 }
 
+const rollPinch = new PinchZoomTracker();
+
 canvas.addEventListener('pointerdown', (e) => {
   if (!pianoRoll || !currentScore) return;
+  rollPinch.onPointerDown(e);
+  if (rollPinch.activeCount >= 2) {
+    // A second finger just came down mid-drag -- abandon whatever single-pointer gesture (pan,
+    // scroll, or a ruler loop-selection) was in progress and hand off to the pinch instead, rather
+    // than letting both run at once.
+    dragPointerId = null;
+    loopSelectStartBeat = null;
+    canvas.classList.remove('dragging');
+    return;
+  }
   dragPointerId = e.pointerId;
   dragStartX = e.clientX;
   dragStartY = e.clientY;
@@ -1123,6 +1182,11 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 canvas.addEventListener('pointermove', (e) => {
+  const pinchRatio = rollPinch.onPointerMove(e);
+  if (pinchRatio != null) {
+    applyZoom(pinchRatio);
+    return;
+  }
   if (dragPointerId !== e.pointerId || !pianoRoll) return;
   const totalDx = e.clientX - dragStartX;
   const totalDy = e.clientY - dragStartY;
@@ -1150,6 +1214,7 @@ canvas.addEventListener('pointermove', (e) => {
   dragLastY = e.clientY;
 });
 function endDrag(e: PointerEvent) {
+  rollPinch.onPointerUp(e);
   if (dragPointerId !== e.pointerId) return;
   dragPointerId = null;
   canvas.classList.remove('dragging');
@@ -1209,7 +1274,8 @@ function endDrag(e: PointerEvent) {
   }
 }
 canvas.addEventListener('pointerup', endDrag);
-canvas.addEventListener('pointercancel', () => {
+canvas.addEventListener('pointercancel', (e) => {
+  rollPinch.onPointerUp(e);
   dragPointerId = null;
   loopSelectStartBeat = null;
   canvas.classList.remove('dragging');
@@ -1351,8 +1417,8 @@ staffCanvas.addEventListener(
 );
 
 // Grid-lock click-to-seek in the staff view's own ruler strip, mirroring the piano roll's ruler
-// tap. A plain click suffices (no drag/loop-region support here, by design -- see StaffView's
-// class doc comment) since nothing else on this canvas handles pointerdown/drag today.
+// tap. A plain click suffices there (no drag/loop-region support in the ruler, by design -- see
+// StaffView's class doc comment).
 staffCanvas.addEventListener('click', (e) => {
   if (!staffView || !currentScore) return;
   const rect = staffCanvas.getBoundingClientRect();
@@ -1363,6 +1429,73 @@ staffCanvas.addEventListener('click', (e) => {
   const snapped = measureAtBeat(currentScore, beat)?.startBeat ?? beat;
   seekToBeat(snapped);
 });
+
+// Touch/pointer drag-to-scroll below the ruler strip -- #staff sets touch-action:none (so a touch
+// drag doesn't fight the browser's own native page-scroll gesture), but until this, nothing filled
+// in the JS side of that: the wheel handler above only ever fires for a mouse/trackpad, so a phone
+// or tablet had no way to scroll the stacked staves at all once they didn't all fit vertically.
+// Mirrors the piano roll's axis-locked drag (vertical scroll, horizontal pan) but skips its
+// ruler-drag loop-selection and note-preview-on-tap, which are piano-roll-only features (see
+// StaffView's class doc comment on why this view stays deliberately simpler).
+let staffDragPointerId: number | null = null;
+let staffDragStartX = 0;
+let staffDragStartY = 0;
+let staffDragLastX = 0;
+let staffDragLastY = 0;
+let staffDragAxis: 'x' | 'y' | null = null;
+
+const staffPinch = new PinchZoomTracker();
+
+staffCanvas.addEventListener('pointerdown', (e) => {
+  if (!staffView) return;
+  staffPinch.onPointerDown(e);
+  if (staffPinch.activeCount >= 2) {
+    staffDragPointerId = null;
+    return;
+  }
+  const rect = staffCanvas.getBoundingClientRect();
+  if (e.clientY - rect.top < STAFF_RULER_HEIGHT_PX) return; // ruler strip stays tap-to-seek only
+  staffDragPointerId = e.pointerId;
+  staffDragStartX = e.clientX;
+  staffDragStartY = e.clientY;
+  staffDragLastX = e.clientX;
+  staffDragLastY = e.clientY;
+  staffDragAxis = null;
+  staffCanvas.setPointerCapture(e.pointerId);
+});
+staffCanvas.addEventListener('pointermove', (e) => {
+  const pinchRatio = staffPinch.onPointerMove(e);
+  if (pinchRatio != null) {
+    applyZoom(pinchRatio);
+    return;
+  }
+  if (staffDragPointerId !== e.pointerId || !staffView) return;
+  const totalDx = e.clientX - staffDragStartX;
+  const totalDy = e.clientY - staffDragStartY;
+  // Lock to whichever axis the drag committed to, once it's moved enough to tell -- same
+  // reasoning as the piano roll's drag handler: an imperfectly-straight drag shouldn't bleed a
+  // little of the other axis's motion into the view on every move.
+  if (staffDragAxis === null && Math.hypot(totalDx, totalDy) > CLICK_DRAG_THRESHOLD_PX) {
+    staffDragAxis = Math.abs(totalDx) > Math.abs(totalDy) ? 'x' : 'y';
+  }
+  const dx = e.clientX - staffDragLastX;
+  const dy = e.clientY - staffDragLastY;
+  if (staffDragAxis !== 'y') panByBeats(-dx / staffView.getPixelsPerBeat());
+  if (staffDragAxis !== 'x') {
+    staffView.scrollByPixels(-dy);
+    scheduleRender();
+  }
+  staffDragLastX = e.clientX;
+  staffDragLastY = e.clientY;
+});
+function endStaffDrag(e: PointerEvent) {
+  staffPinch.onPointerUp(e);
+  if (staffDragPointerId !== e.pointerId) return;
+  staffDragPointerId = null;
+  staffDragAxis = null;
+}
+staffCanvas.addEventListener('pointerup', endStaffDrag);
+staffCanvas.addEventListener('pointercancel', endStaffDrag);
 
 /**
  * Invoked once the app's mode (Solo vs. Ensemble, or "no backend at all") is resolved -- either

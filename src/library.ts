@@ -41,6 +41,23 @@ export interface StoredSong {
 const SONGS_COLLECTION = 'songs';
 const ACCESS_DOC_PATH = ['config', 'access'] as const;
 
+function parseSongDoc(id: string, data: Record<string, unknown>): StoredSong {
+  // xmlGz (gzip-compressed bytes) is the current format; xml (raw string) is a fallback for
+  // documents written before compression was added. Decompression is the expensive part of
+  // this (below), which is exactly why subscribeToSongs only calls this for docs that actually
+  // changed rather than on every doc on every snapshot.
+  const xml = data.xmlGz ? strFromU8(gunzipSync((data.xmlGz as Bytes).toUint8Array())) : ((data.xml as string) ?? '');
+  return {
+    id,
+    title: data.title as string,
+    xml,
+    // Documents written before MIDI import existed have no format field; they're always MusicXML.
+    format: ((data.format as SongFormat | undefined) ?? 'musicxml') as SongFormat,
+    importedAt: (data.importedAt as number) ?? 0,
+    partNameOverrides: data.partNameOverrides as Record<string, string> | undefined,
+  };
+}
+
 /** Live-subscribes to the shared song library; the callback fires immediately and again on every change from any device. */
 export function subscribeToSongs(callback: (songs: StoredSong[]) => void, onError: (err: unknown) => void): Unsubscribe {
   if (!db) {
@@ -48,25 +65,23 @@ export function subscribeToSongs(callback: (songs: StoredSong[]) => void, onErro
     return () => {};
   }
   const q = query(collection(db, SONGS_COLLECTION), orderBy('importedAt', 'asc'));
+  // A collection onSnapshot fires (with the FULL current result set) on every change to ANY doc
+  // in it -- one voice's rename, a new import, anything. Re-gunzipping and re-decoding every
+  // song's XML from scratch on every single one of those events (as this used to do) means a
+  // roomful of devices all simultaneously doing that work for the *entire* library every time
+  // any one of them touches it -- a real, repeatable cause of a synced-rehearsal-wide stutter/
+  // freeze that gets worse the more songs (and the more people editing) there are. Firestore's
+  // docChanges() says exactly which docs were added/modified/removed since the last snapshot, so
+  // a per-doc cache lets every unchanged song's already-decompressed StoredSong be reused as-is.
+  const cache = new Map<string, StoredSong>();
   return onSnapshot(
     q,
     (snapshot) => {
-      const songs: StoredSong[] = snapshot.docs.map((d) => {
-        const data = d.data();
-        // xmlGz (gzip-compressed bytes) is the current format; xml (raw string) is a fallback for
-        // documents written before compression was added.
-        const xml = data.xmlGz ? strFromU8(gunzipSync((data.xmlGz as Bytes).toUint8Array())) : ((data.xml as string) ?? '');
-        return {
-          id: d.id,
-          title: data.title as string,
-          xml,
-          // Documents written before MIDI import existed have no format field; they're always
-          // MusicXML.
-          format: ((data.format as SongFormat | undefined) ?? 'musicxml') as SongFormat,
-          importedAt: (data.importedAt as number) ?? 0,
-          partNameOverrides: data.partNameOverrides as Record<string, string> | undefined,
-        };
-      });
+      for (const change of snapshot.docChanges()) {
+        if (change.type === 'removed') cache.delete(change.doc.id);
+        else cache.set(change.doc.id, parseSongDoc(change.doc.id, change.doc.data()));
+      }
+      const songs = snapshot.docs.map((d) => cache.get(d.id)).filter((s): s is StoredSong => s != null);
       callback(songs);
     },
     onError,
