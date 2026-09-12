@@ -32,6 +32,8 @@ const ACCEPTED_EXTENSIONS = ['.musicxml', '.xml', '.mxl', '.mid', '.midi'];
 const MIDI_EXTENSIONS = ['.mid', '.midi'];
 
 const BPM_PRESETS = [50, 80, 100, 120, 140];
+const MIN_BPM = 20;
+const MAX_BPM = 300;
 const DUCK_VOLUME_PRESETS = [0.1, 0.25, 0.5, 0.75];
 const MIN_TRANSPOSE = -7;
 const MAX_TRANSPOSE = 7;
@@ -82,6 +84,7 @@ app.innerHTML = `
         <button id="view-toggle-btn" disabled title="Switch between piano roll and sheet music">Sheet Music</button>
         <div class="transport-group" id="bpm-group">
           <span class="transport-label">BPM</span>
+          <input id="bpm-input" type="number" min="${MIN_BPM}" max="${MAX_BPM}" step="1" inputmode="numeric" title="Custom BPM" />
           ${BPM_PRESETS.map((b) => `<button class="bpm-btn" data-bpm="${b}">${b}</button>`).join('')}
         </div>
         <div class="transport-group" id="measure-group">
@@ -140,6 +143,7 @@ const transposeUpBtn = document.querySelector<HTMLButtonElement>('#transpose-up'
 const zoomValueEl = document.querySelector<HTMLSpanElement>('#zoom-value')!;
 const zoomOutBtn = document.querySelector<HTMLButtonElement>('#zoom-out')!;
 const zoomInBtn = document.querySelector<HTMLButtonElement>('#zoom-in')!;
+const bpmInput = document.querySelector<HTMLInputElement>('#bpm-input')!;
 const measureInput = document.querySelector<HTMLInputElement>('#measure-input')!;
 const measureGoBtn = document.querySelector<HTMLButtonElement>('#measure-go-btn')!;
 const measurePrevBtn = document.querySelector<HTMLButtonElement>('#measure-prev-btn')!;
@@ -591,6 +595,9 @@ async function applyPlaybackState(state: PlaybackState) {
 
   bpm = state.bpm;
   document.querySelectorAll<HTMLButtonElement>('.bpm-btn').forEach((b) => b.classList.toggle('active', b.getAttribute('data-bpm') === String(bpm)));
+  // Skipped while the field itself has focus -- otherwise a remote BPM change (another device's
+  // preset click, in Ensemble mode) would overwrite whatever this device is still mid-typing.
+  if (document.activeElement !== bpmInput) bpmInput.value = String(bpm);
   transpose = state.transpose;
   transposeValueEl.textContent = transpose > 0 ? `+${transpose}` : String(transpose);
   pianoRoll?.setTranspose(transpose);
@@ -867,20 +874,41 @@ loopBtn.addEventListener('click', () => {
   pushState({ loopEnabled: !loopEnabled });
 });
 
+function applyBpm(newBpm: number) {
+  if (audioEngine?.isPlaying()) {
+    // Explicitly zeroed, not omitted: publishPlaybackState is a merge write, so an omitted
+    // field would keep whatever count-in the last fresh Play set, silently reattaching a
+    // several-second count-in-then-delay to an ordinary BPM change.
+    void publishPlayingAt(audioEngine.getCurrentBeat(), { bpm: newBpm, countInBeats: 0, countInPulseBeats: 1 });
+  } else {
+    pushState({ bpm: newBpm });
+  }
+}
+
 document.querySelectorAll<HTMLButtonElement>('.bpm-btn').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    const newBpm = parseInt(btn.getAttribute('data-bpm')!, 10);
-    if (audioEngine?.isPlaying()) {
-      // Explicitly zeroed, not omitted: publishPlaybackState is a merge write, so an omitted
-      // field would keep whatever count-in the last fresh Play set, silently reattaching a
-      // several-second count-in-then-delay to an ordinary BPM change.
-      void publishPlayingAt(audioEngine.getCurrentBeat(), { bpm: newBpm, countInBeats: 0, countInPulseBeats: 1 });
-    } else {
-      pushState({ bpm: newBpm });
-    }
-  });
+  btn.addEventListener('click', () => applyBpm(parseInt(btn.getAttribute('data-bpm')!, 10)));
 });
 document.querySelector(`.bpm-btn[data-bpm="${bpm}"]`)?.classList.add('active');
+bpmInput.value = String(bpm);
+
+/** Reads/clamps the custom BPM field and applies it -- mirrors clampMeasureInput's proactive
+ *  clamp (never let the field hold an out-of-range value) rather than relying on the input's own
+ *  native min/max validation. Ignores an empty field instead of coercing it to MIN_BPM, so
+ *  clearing the field to retype doesn't briefly apply a wrong tempo. */
+function applyBpmInput() {
+  if (!bpmInput.value.trim()) return;
+  const n = Math.min(Math.max(parseInt(bpmInput.value, 10) || bpm, MIN_BPM), MAX_BPM);
+  bpmInput.value = String(n);
+  if (n !== bpm) applyBpm(n);
+}
+bpmInput.addEventListener('change', applyBpmInput);
+bpmInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    applyBpmInput();
+    bpmInput.blur();
+  }
+});
 
 // Proactively keeps the field's value in-range instead of relying on the native min/max
 // validation -- an out-of-range value on a number input triggers the browser's own visual

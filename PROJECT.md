@@ -146,10 +146,14 @@ approach and its remaining scope limits (clef assignment, note-duration shapes, 
   goes the rest of the way back to beat zero, matching how a physical transport's Stop button
   behaves.
 - **Space bar** toggles play/pause globally (ignored while a text input has focus).
-- **BPM presets** (50/80/100/120/140): tempo is entirely independent of whatever tempo, if
-  any, was encoded in the source file — the file's own tempo markings are never read or used
-  for playback speed. Changing BPM while already playing re-schedules from the current
-  position at the new speed without a perceptible jump.
+- **BPM presets** (50/80/100/120/140), plus a **custom BPM field** right next to them for any
+  other tempo (clamped to 20–300, applies on Enter or on blur): tempo is entirely independent of
+  whatever tempo, if any, was encoded in the source file — the file's own tempo markings are
+  never read or used for playback speed. Changing BPM (preset or custom) while already playing
+  re-schedules from the current position at the new speed without a perceptible jump. The custom
+  field mirrors whichever BPM is actually in effect (a preset click updates it too), skipped
+  while the field itself has focus so a remote BPM change in Ensemble mode can't overwrite
+  whatever this device is still mid-typing.
 - **Metronome**: an optional click on every beat pulse (accented on downbeats), synthesized
   the same way as the notes.
 - **Count-in ("Einzählen")**: pressing Play with the metronome on first counts out one full
