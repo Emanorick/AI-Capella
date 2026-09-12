@@ -313,15 +313,33 @@ requires `<duration>` on every note/rest, but not every real-world file is spec-
 hand-edited files and this app's own OMR vision-transcription spike alike can emit a `<type>`
 (the notated appearance: "quarter", "eighth", ...) without a computed `<duration>`, especially
 for a rest with nothing musically "there" to double-check a length against. Left unhandled, that
-note/rest's `durationBeats` came out `0`, the parser's `cursor` never advanced past it, and the
-*next* note in the part silently inherited its `startBeat` instead of landing after it — a
-concretely reported bug ("Nachtigall"): a part opening with a rest had its real first note land
-on beat 1 instead of where it actually starts. Fixed with a fallback to `<type>` (+ a dot) when
-`<duration>` is missing or zero, using the same beats-per-type units `staffView.ts`'s
-`DURATION_TABLE` already does (a quarter note is 1 beat, independent of `<divisions>`). A
-whole-measure rest (`<rest measure="yes"/>`) gets a further fallback on top of that — spec-legal
-without either `<duration>` or `<type>`, since its length is implied entirely by the measure's
-own time signature — filling to the end of the measure.
+note/rest's `durationBeats` came out `0` and the parser's `cursor` never advanced past it. Fixed
+with a fallback to `<type>` (+ a dot) when `<duration>` is missing or zero, using the same
+beats-per-type units `staffView.ts`'s `DURATION_TABLE` already does (a quarter note is 1 beat,
+independent of `<divisions>`). A whole-measure rest (`<rest measure="yes"/>`) gets a further
+fallback on top of that — spec-legal without either `<duration>` or `<type>`, since its length is
+implied entirely by the measure's own time signature — filling to the end of the measure.
+
+**A measure's real length is however far its own content actually reaches, not always the
+time-signature-implied length (`beats * 4/beatType`).** Those only coincide for an ordinarily-
+complete measure; a **pickup/anacrusis measure** is genuinely shorter, and is a normal, common
+case, not an error — concretely, "Nachtigall" (a reported bug) opens with a single eighth-note
+upbeat in a 3/8 piece, well short of a full 3/8 measure. The parser used to always advance
+`measureStartBeat` by the full time-signature length regardless, which for a pickup measure
+silently padded in an extra gap of silence before measure 2 and shifted every subsequent
+measure/note in the piece later than the source actually notates — worse the more measures away
+from the pickup, which is why it showed up most obviously as a *different* voice's first real
+note (e.g. a Tenor/Bass part resting through the pickup and the next couple of measures) landing
+at the wrong beat entirely, not just "one beat off." Fixed by tracking the furthest `cursor`
+actually reaches while walking a measure's content (across every backup/forward-interleaved
+voice) and using that as the measure's real length, falling back to the time-signature length
+only when a measure has no content at all to measure against. Relies on the source file being
+internally consistent about where a pickup measure's shorter boundary falls across every part —
+true of any properly engraved score (parts sharing a measure numbering only makes musical sense
+if all of them agree on where each measure starts and ends), but this is why the *measures* list
+itself is still only ever built from the first part processed (`measuresBuilt`): every other
+part's per-note beat math uses this same actual-content-length logic independently, and should
+agree with the first part's boundaries rather than needing to re-derive/share them.
 
 **MIDI import** (`midi.ts`) is a from-scratch standard MIDI file (SMF) reader — no external
 library — supporting format 0, 1, and 2 files, running status, and both text/lyric meta-event

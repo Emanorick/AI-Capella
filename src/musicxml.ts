@@ -74,6 +74,10 @@ export function parseMusicXML(xmlText: string): Score {
       const numAttr = measureEl.getAttribute('number');
       const measureNumber = numAttr ? parseInt(numAttr, 10) : measures.length + 1;
       cursor = measureStartBeat;
+      // Tracks the furthest `cursor` actually reaches while processing this measure's content
+      // (across every backup/forward-interleaved voice) -- see its use below, once the measure's
+      // content has all been walked, for why this replaces a fixed time-signature-derived length.
+      let measureCursorMax = measureStartBeat;
 
       for (const child of Array.from(measureEl.children)) {
         switch (child.tagName) {
@@ -204,6 +208,7 @@ export function parseMusicXML(xmlText: string): Score {
             if (!isChord) {
               cursor += durationBeats;
               lastNoteStart = startBeat;
+              measureCursorMax = Math.max(measureCursorMax, cursor);
             }
             break;
           }
@@ -217,12 +222,25 @@ export function parseMusicXML(xmlText: string): Score {
             const durationText = child.querySelector('duration')?.textContent;
             const durationUnits = durationText ? parseFloat(durationText) : 0;
             cursor += divisions > 0 ? durationUnits / divisions : 0;
+            measureCursorMax = Math.max(measureCursorMax, cursor);
             break;
           }
         }
       }
 
-      const measureDurationBeats = beats * (4 / beatType);
+      // A measure's real length is however far its own content actually reaches, not always the
+      // full time-signature-implied length (beats * 4/beatType) -- those only coincide for an
+      // ordinarily-complete measure. A pickup/anacrusis measure (a real, common case, not an
+      // error: this app's own "Nachtigall" test piece opens with a single eighth-note upbeat in a
+      // 3/8 piece, well short of a full 3/8 measure) is genuinely shorter than the time signature
+      // suggests. Blindly using the time-signature length there inflated measureStartBeat by the
+      // pickup's own shortfall, silently padding an extra gap of silence before measure 2 and
+      // shifting every subsequent measure/note in the piece later than the source actually
+      // notates -- the real mechanism behind a concretely reported bug (a part's first real note,
+      // after a pickup + several measures of rests in other voices, landing at the wrong beat).
+      // Falls back to the time-signature length only for a measure with no content at all (an
+      // empty measure has nothing to measure `cursor` against).
+      const measureDurationBeats = measureCursorMax > measureStartBeat ? measureCursorMax - measureStartBeat : beats * (4 / beatType);
       if (!measuresBuilt) {
         measures.push({ number: measureNumber, startBeat: measureStartBeat, beats, beatType, fifths });
       }
