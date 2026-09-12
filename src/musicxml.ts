@@ -8,6 +8,18 @@ function pitchToMidi(step: string, alter: number, octave: number): number {
   return (octave + 1) * 12 + (STEP_SEMITONES[step] ?? 0) + alter;
 }
 
+// MusicXML's <type> values, in beats (a quarter note is 1 beat) -- used only as a fallback when
+// <duration> is missing/zero (see the 'note' case below), independent of <divisions>.
+const TYPE_BEATS: Record<string, number> = {
+  whole: 4,
+  half: 2,
+  quarter: 1,
+  eighth: 0.5,
+  '16th': 0.25,
+  '32nd': 0.125,
+  '64th': 0.0625,
+};
+
 /**
  * Parses a MusicXML partwise document into a flat Score model.
  * Supports the subset produced by typical OMR/engraving tools: multiple parts,
@@ -81,11 +93,41 @@ export function parseMusicXML(xmlText: string): Score {
           }
           case 'note': {
             const isChord = !!child.querySelector(':scope > chord');
-            const isRest = !!child.querySelector(':scope > rest');
+            const restEl = child.querySelector(':scope > rest');
+            const isRest = !!restEl;
             const durationText = child.querySelector(':scope > duration')?.textContent;
             const durationUnits = durationText ? parseFloat(durationText) : 0;
-            const durationBeats = divisions > 0 ? durationUnits / divisions : 0;
+            let durationBeats = divisions > 0 ? durationUnits / divisions : 0;
             const startBeat = isChord ? lastNoteStart : cursor;
+
+            // <duration> is technically required by the spec on every note/rest, but not every
+            // real-world file is spec-perfect -- hand-edited files and this app's own OMR
+            // vision-transcription spike alike can emit a <type> (the note's notated appearance:
+            // "quarter", "eighth", ...) without a computed <duration>, especially for a rest with
+            // nothing musically "there" to double-check a length against. Left unhandled,
+            // durationBeats above comes out 0, `cursor` never advances past this note/rest, and
+            // the *next* note in the part silently inherits its startBeat instead of landing after
+            // it -- the concretely reported "Nachtigall" bug: a part opening with a rest had its
+            // first real note land on beat 1 instead of where it actually starts. Fall back to
+            // <type> (+ a dot) when that happens, same beats-per-type units `staffView.ts`'s
+            // DURATION_TABLE already uses (a quarter note is 1 beat, independent of `divisions`).
+            if (durationBeats <= 0) {
+              const typeText = child.querySelector(':scope > type')?.textContent;
+              const typeBeats = typeText ? TYPE_BEATS[typeText] : undefined;
+              if (typeBeats != null) {
+                const dotted = child.querySelectorAll(':scope > dot').length > 0;
+                durationBeats = dotted ? typeBeats * 1.5 : typeBeats;
+              }
+            }
+
+            // A whole-measure rest (<rest measure="yes"/>) is spec-legal without an explicit
+            // <duration> OR <type> -- its length is implied entirely by the measure's own time
+            // signature, since that's the whole point of the measure="yes" flag. Fill to the end
+            // of the measure (not just `beats * 4/beatType`) so this is still correct for a
+            // measure rest that isn't at the very start of the measure.
+            if (isRest && restEl?.getAttribute('measure') === 'yes' && durationBeats <= 0) {
+              durationBeats = measureStartBeat + beats * (4 / beatType) - cursor;
+            }
 
             if (!isRest) {
               const pitchEl = child.querySelector(':scope > pitch');

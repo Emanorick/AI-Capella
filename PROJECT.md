@@ -308,6 +308,21 @@ handles:
 `META-INF/container.xml` manifest) are unzipped client-side in `library.ts` using `fflate`,
 reading the manifest to find the actual score file inside the archive.
 
+**A `<note>`/`<rest>` missing `<duration>` no longer silently becomes zero-length.** The spec
+requires `<duration>` on every note/rest, but not every real-world file is spec-perfect —
+hand-edited files and this app's own OMR vision-transcription spike alike can emit a `<type>`
+(the notated appearance: "quarter", "eighth", ...) without a computed `<duration>`, especially
+for a rest with nothing musically "there" to double-check a length against. Left unhandled, that
+note/rest's `durationBeats` came out `0`, the parser's `cursor` never advanced past it, and the
+*next* note in the part silently inherited its `startBeat` instead of landing after it — a
+concretely reported bug ("Nachtigall"): a part opening with a rest had its real first note land
+on beat 1 instead of where it actually starts. Fixed with a fallback to `<type>` (+ a dot) when
+`<duration>` is missing or zero, using the same beats-per-type units `staffView.ts`'s
+`DURATION_TABLE` already does (a quarter note is 1 beat, independent of `<divisions>`). A
+whole-measure rest (`<rest measure="yes"/>`) gets a further fallback on top of that — spec-legal
+without either `<duration>` or `<type>`, since its length is implied entirely by the measure's
+own time signature — filling to the end of the measure.
+
 **MIDI import** (`midi.ts`) is a from-scratch standard MIDI file (SMF) reader — no external
 library — supporting format 0, 1, and 2 files, running status, and both text/lyric meta-event
 conventions. It parses directly into the same `Score` model, notably *without* going through
