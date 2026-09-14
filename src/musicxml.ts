@@ -20,6 +20,11 @@ const TYPE_BEATS: Record<string, number> = {
   '64th': 0.0625,
 };
 
+// A grace note has no real duration of its own (see the 'note' case's isGrace handling) -- this
+// is purely a nominal, short audible/visible length for playback and the piano roll/staff view,
+// not derived from the source file.
+const GRACE_NOTE_DURATION_BEATS = 0.25;
+
 /**
  * Parses a MusicXML partwise document into a flat Score model.
  * Supports the subset produced by typical OMR/engraving tools: multiple parts,
@@ -113,10 +118,18 @@ export function parseMusicXML(xmlText: string): Score {
             const isChord = !!child.querySelector(':scope > chord');
             const restEl = child.querySelector(':scope > rest');
             const isRest = !!restEl;
+            // A grace note (<grace/>) is spec-defined to carry no <duration> at all -- it's
+            // deliberately "outside" normal measured time (an ornamental note played quickly
+            // before/around the note it decorates), not a file that merely forgot to include one.
+            // Confirmed concretely from a submitted score excerpt ("Jagdlied"): a grace note leads
+            // into a triplet run. Must be excluded from the <type> duration fallback just below
+            // (which exists for actually-missing durations, e.g. the "Nachtigall" rest bug) --
+            // otherwise it gets assigned a real, nonzero duration from its <type> and that gets
+            // added to `cursor`, silently displacing every later note in the part by that amount.
+            const isGrace = !!child.querySelector(':scope > grace');
             const durationText = child.querySelector(':scope > duration')?.textContent;
             const durationUnits = durationText ? parseFloat(durationText) : 0;
             let durationBeats = divisions > 0 ? durationUnits / divisions : 0;
-            const startBeat = isChord ? lastNoteStart : cursor;
 
             // <duration> is technically required by the spec on every note/rest, but not every
             // real-world file is spec-perfect -- hand-edited files and this app's own OMR
@@ -129,7 +142,7 @@ export function parseMusicXML(xmlText: string): Score {
             // first real note land on beat 1 instead of where it actually starts. Fall back to
             // <type> (+ a dot) when that happens, same beats-per-type units `staffView.ts`'s
             // DURATION_TABLE already uses (a quarter note is 1 beat, independent of `divisions`).
-            if (durationBeats <= 0) {
+            if (durationBeats <= 0 && !isGrace) {
               const typeText = child.querySelector(':scope > type')?.textContent;
               const typeBeats = typeText ? TYPE_BEATS[typeText] : undefined;
               if (typeBeats != null) {
@@ -137,6 +150,12 @@ export function parseMusicXML(xmlText: string): Score {
                 durationBeats = dotted ? typeBeats * 1.5 : typeBeats;
               }
             }
+            // Still audible/visible as a real (very short) note -- just never allowed to touch
+            // `cursor` (see isGrace's declaration above). Placed to end exactly at the current
+            // cursor position, i.e. just before whatever main note follows it, rather than
+            // overlapping it.
+            if (isGrace) durationBeats = GRACE_NOTE_DURATION_BEATS;
+            const startBeat = isGrace ? Math.max(0, cursor - durationBeats) : isChord ? lastNoteStart : cursor;
 
             // A whole-measure rest (<rest measure="yes"/>) is spec-legal without an explicit
             // <duration> OR <type> -- its length is implied entirely by the measure's own time
@@ -219,7 +238,7 @@ export function parseMusicXML(xmlText: string): Score {
               }
             }
 
-            if (!isChord) {
+            if (!isChord && !isGrace) {
               cursor += durationBeats;
               lastNoteStart = startBeat;
               measureCursorMax = Math.max(measureCursorMax, cursor);

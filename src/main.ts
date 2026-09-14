@@ -70,7 +70,6 @@ app.innerHTML = `
       </div>
       <div id="header-right">
         <div id="position-display">—</div>
-        <button id="loop-btn-mini" disabled title="Loop">&#8635;</button>
         <button id="stop-btn-mini" disabled title="Stop and reset to the start">&#9632;</button>
         <button id="play-btn-mini" disabled title="Play/Pause">&#9658;</button>
       </div>
@@ -80,8 +79,8 @@ app.innerHTML = `
       <div id="transport">
         <button id="play-btn" disabled>&#9658;</button>
         <button id="stop-btn" disabled title="Stop and reset to the start">&#9632;</button>
+        <button id="loop-btn" class="icon-btn" disabled title="Drag the ruler above the roll to set a loop">&#8635;</button>
         <button id="metronome-btn" disabled>Metronome</button>
-        <button id="loop-btn" disabled title="Drag the ruler above the roll to set a loop">Loop</button>
         <button id="view-toggle-btn" disabled title="Switch between piano roll and sheet music">Sheet Music</button>
         <div class="transport-group" id="bpm-group">
           <span class="transport-label">BPM</span>
@@ -136,7 +135,6 @@ const playBtn = document.querySelector<HTMLButtonElement>('#play-btn')!;
 const playBtnMini = document.querySelector<HTMLButtonElement>('#play-btn-mini')!;
 const stopBtn = document.querySelector<HTMLButtonElement>('#stop-btn')!;
 const stopBtnMini = document.querySelector<HTMLButtonElement>('#stop-btn-mini')!;
-const loopBtnMini = document.querySelector<HTMLButtonElement>('#loop-btn-mini')!;
 const metronomeBtn = document.querySelector<HTMLButtonElement>('#metronome-btn')!;
 const loopBtn = document.querySelector<HTMLButtonElement>('#loop-btn')!;
 const transposeValueEl = document.querySelector<HTMLSpanElement>('#transpose-value')!;
@@ -519,7 +517,6 @@ async function loadSongLocally(song: SongEntry) {
   stopBtnMini.disabled = false;
   metronomeBtn.disabled = false;
   loopBtn.disabled = false;
-  loopBtnMini.disabled = false;
   measureInput.disabled = false;
   measureGoBtn.disabled = false;
   measurePrevBtn.disabled = false;
@@ -889,7 +886,6 @@ metronomeBtn.addEventListener('click', () => {
 
 function updateLoopButton() {
   loopBtn.classList.toggle('active', loopEnabled);
-  loopBtnMini.classList.toggle('active', loopEnabled);
   if (loopRegion) {
     loopBtn.title = loopEnabled
       ? `Looping ${loopRegion.start.toFixed(1)}–${loopRegion.end.toFixed(1)} (click to stop there instead)`
@@ -899,14 +895,11 @@ function updateLoopButton() {
       ? 'Looping the whole piece (drag the ruler above the roll to loop a region instead)'
       : 'Click to loop the whole piece, or drag the ruler above the roll to loop a region';
   }
-  loopBtnMini.title = loopBtn.title;
 }
-function toggleLoop() {
+loopBtn.addEventListener('click', () => {
   if (!currentScore) return;
   pushState({ loopEnabled: !loopEnabled });
-}
-loopBtn.addEventListener('click', toggleLoop);
-loopBtnMini.addEventListener('click', toggleLoop);
+});
 
 function applyBpm(newBpm: number) {
   if (audioEngine?.isPlaying()) {

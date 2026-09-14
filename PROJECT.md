@@ -169,11 +169,9 @@ approach and its remaining scope limits (clef assignment, note-duration shapes, 
   would for a plain synced Play.
 - **Loop**: either loop the whole piece, or drag across the ruler to mark a specific region
   and loop just that (useful for hammering a tricky bar repeatedly). The Loop button toggles
-  whether hitting the boundary wraps around or just stops there. A round icon-only twin
-  (`#loop-btn-mini`, next to the compact header's Play/Stop) mirrors the full transport's Loop
-  button one-for-one (same active state, same click handler) so it's reachable even with the
-  settings panel collapsed — previously Loop existed only as a spelled-out button inside the
-  panel, invisible whenever it was collapsed.
+  whether hitting the boundary wraps around or just stops there. It's a round icon (`.icon-btn`,
+  a circular-arrow glyph) next to Stop in the transport, not a spelled-out label — deliberately
+  only in the full transport, not duplicated into the compact header.
 - **Transpose** (±7 semitones) and **Zoom** (25%–300%) apply live, including mid-playback.
 
 ### Per-voice mixing
@@ -331,6 +329,19 @@ beats-per-type units `staffView.ts`'s `DURATION_TABLE` already does (a quarter n
 independent of `<divisions>`). A whole-measure rest (`<rest measure="yes"/>`) gets a further
 fallback on top of that — spec-legal without either `<duration>` or `<type>`, since its length is
 implied entirely by the measure's own time signature — filling to the end of the measure.
+
+**A `<grace/>` note is explicitly excluded from that same `<type>` fallback, and never advances
+`cursor` at all.** A grace note is spec-defined to carry no `<duration>` — it's deliberately
+"outside" normal measured time (an ornamental note played quickly around the note it decorates),
+not a file that merely forgot to include one, so it must never be treated the same as an
+actually-missing duration. Confirmed concretely from a submitted score excerpt ("Jagdlied"): a
+grace note leads into a triplet run. Before this exclusion, a grace note picked up a real, nonzero
+duration from its own `<type>` via the fallback above, and that got added to `cursor` — silently
+displacing every later note in the part by that amount, compounding with every further grace note
+in the piece (matching a reported bug: voices drifting out of alignment with each other from a
+certain point onward). A grace note is still added as a real (if very short,
+`GRACE_NOTE_DURATION_BEATS`) audible/visible `NoteEvent`, ending exactly at the position the next
+real note starts — just never allowed to move `cursor` itself.
 
 **A measure's real length is however far its own content actually reaches, not always the
 time-signature-implied length (`beats * 4/beatType`).** Those only coincide for an ordinarily-
