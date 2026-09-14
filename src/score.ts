@@ -54,6 +54,11 @@ export interface SlurArc {
   endMidi: number;
 }
 
+export interface RehearsalMark {
+  label: string;
+  beat: number;
+}
+
 export interface Score {
   title: string;
   parts: PartInfo[];
@@ -66,6 +71,13 @@ export interface Score {
   // tie-note boundaries aren't discarded, though: they're optionally preserved on the NoteEvent
   // itself (see its tieSegments field) for the sheet-music view to notate faithfully.
   totalBeats: number;
+  // Rehearsal marks (<direction><direction-type><rehearsal>) actually printed in the source, e.g.
+  // "A"/"B"/"C" letters or measure-range labels -- sorted by beat. Only ever populated from
+  // MusicXML (recorded once, from whichever part is processed first, since these are a piece-level
+  // structural concept rather than a per-part one); always empty for MIDI imports. When empty,
+  // main.ts falls back to letting the user mark their own section boundaries instead (persisted
+  // per-song via library.ts's savedConfig, not part of this parsed-from-source Score at all).
+  rehearsalMarks: RehearsalMark[];
 }
 
 export interface BeatMarker {

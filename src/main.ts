@@ -6,7 +6,7 @@ import { PianoRoll, RULER_HEIGHT_PX, type LoopRegion } from './pianoRoll';
 import { StaffView, STAFF_RULER_HEIGHT_PX } from './staffView';
 import { colorForPartIndex } from './palette';
 import { measureAtBeat, type Score } from './score';
-import { deleteImportedSong, readScoreFile, saveImportedSong, subscribeToSongs, updateSongMetadata, type SongFormat } from './library';
+import { deleteImportedSong, readScoreFile, saveImportedSong, saveSongConfig, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong } from './library';
 import { ensureSignedIn, isFirebaseConfigured } from './firebase';
 import { ensureAccess } from './pinGate';
 import * as sync from './sync';
@@ -20,6 +20,7 @@ interface SongEntry {
   format?: SongFormat; // only meaningful alongside `xml`; built-in songs are always MusicXML
   imported?: boolean;
   partNameOverrides?: Record<string, string>;
+  savedConfig?: StoredSong['savedConfig'];
 }
 
 // import.meta.env.BASE_URL (not a bare "/...") since the app is served from a subpath on
@@ -94,6 +95,12 @@ app.innerHTML = `
           <button id="measure-go-btn" disabled>Go</button>
           <button id="measure-next-btn" class="measure-step-btn" disabled title="Hold to jump forward faster">&plus;</button>
         </div>
+        <div class="transport-group" id="sections-group">
+          <span class="transport-label">Sections</span>
+          <div id="sections-list"></div>
+          <button id="section-add-btn" class="desktop-only" disabled title="Mark the current position as the next section (A, B, C, ...)">&plus;</button>
+          <button id="save-config-btn" class="desktop-only" disabled title="Save the current transpose, BPM, and sections as this song's default">Save</button>
+        </div>
         <div class="transport-group" id="transpose-group">
           <span class="transport-label">Transpose</span>
           <button id="transpose-down">&minus;</button>
@@ -148,6 +155,9 @@ const measureInput = document.querySelector<HTMLInputElement>('#measure-input')!
 const measureGoBtn = document.querySelector<HTMLButtonElement>('#measure-go-btn')!;
 const measurePrevBtn = document.querySelector<HTMLButtonElement>('#measure-prev-btn')!;
 const measureNextBtn = document.querySelector<HTMLButtonElement>('#measure-next-btn')!;
+const sectionsListEl = document.querySelector<HTMLDivElement>('#sections-list')!;
+const sectionAddBtn = document.querySelector<HTMLButtonElement>('#section-add-btn')!;
+const saveConfigBtn = document.querySelector<HTMLButtonElement>('#save-config-btn')!;
 const canvas = document.querySelector<HTMLCanvasElement>('#roll')!;
 const staffCanvas = document.querySelector<HTMLCanvasElement>('#staff')!;
 const viewToggleBtn = document.querySelector<HTMLButtonElement>('#view-toggle-btn')!;
@@ -171,6 +181,12 @@ let customStartBeat: number | null = null; // last spot set via the ruler; Stop 
 let previewNoteTimeout: number | null = null;
 let partMix = new Map<string, PartMixState>();
 let loopRegion: LoopRegion | null = null;
+// User-added section markers (A/B/C...), used only when the current song's MusicXML has no
+// <rehearsal> marks of its own (score.rehearsalMarks) -- otherwise those are used directly and
+// this stays empty. Not synced across devices via pushState (like mute/solo, see PlaybackState's
+// doc comment) -- only persisted when the user explicitly saves it (saveSongConfig), and reloaded
+// from the song's savedConfig on every fresh load in the meantime.
+let manualSections: { label: string; beat: number }[] = [];
 let loopEnabled = false;
 // Whether the next Play should count-in (see PlaybackState.freshStart's doc comment in sync.ts).
 // Kept in sync via applyPlaybackState the same way metronomeOn/loopEnabled are.
@@ -449,7 +465,13 @@ function selectSong(song: SongEntry) {
     playing: false,
     originBeat: 0,
     originServerTimeMs: 0,
-    transpose: 0,
+    // A saved default (the "Save" action, see saveSongConfig) takes over from the usual hardcoded
+    // reset -- transpose always explicit (0 with no saved config, same as before); bpm only
+    // included when actually saved, so a song with no saved config still keeps today's behavior
+    // of carrying over whatever BPM the previous song was left at (bpm is otherwise never reset
+    // on song selection, and pushState's merge write would otherwise need it omitted, not zeroed).
+    transpose: song.savedConfig?.transpose ?? 0,
+    ...(song.savedConfig?.bpm != null ? { bpm: song.savedConfig.bpm } : {}),
     metronomeOn: false,
     loopEnabled: false,
     loopRegion: null,
@@ -477,6 +499,11 @@ async function loadSongLocally(song: SongEntry) {
   currentScore = score;
   currentSong = song;
   loadedSongId = song.id;
+  // Only relevant when the source has no rehearsal marks of its own (see renderSections) --
+  // reloaded fresh from this song's saved config every time, never carried over from whatever the
+  // previously-open song had.
+  manualSections = score.rehearsalMarks.length ? [] : (song.savedConfig?.sections ?? []).slice();
+  renderSections();
   zoom = 1;
   zoomValueEl.textContent = '100%';
   viewOffsetBeats = 0;
@@ -899,6 +926,47 @@ function updateLoopButton() {
 loopBtn.addEventListener('click', () => {
   if (!currentScore) return;
   pushState({ loopEnabled: !loopEnabled });
+});
+
+/** Rehearsal marks straight from the source when it has any; otherwise whatever the user has
+ *  manually marked for this song (see manualSections' own doc comment). */
+function effectiveSections(): { label: string; beat: number }[] {
+  return currentScore?.rehearsalMarks.length ? currentScore.rehearsalMarks : manualSections;
+}
+
+/** Rebuilds the sections row (one jump button per mark) and the add/save buttons' enabled state.
+ *  Not event-delegated like buildPartsPanel -- this list is short and rebuilt wholesale on every
+ *  change anyway (a new mark, a fresh song load), so a handful of direct listeners is simpler. */
+function renderSections() {
+  const sections = effectiveSections();
+  sectionsListEl.innerHTML = sections
+    .map((s, i) => `<button class="section-btn" data-index="${i}" title="Jump to ${s.label}">${s.label}</button>`)
+    .join('');
+  sectionsListEl.querySelectorAll<HTMLButtonElement>('.section-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const section = sections[Number(btn.getAttribute('data-index'))];
+      if (section) seekToBeat(section.beat, { recenterView: true });
+    });
+  });
+  const hasSourceMarks = (currentScore?.rehearsalMarks.length ?? 0) > 0;
+  // Only makes sense to hand-add marks when the source didn't already provide a complete set --
+  // and only for a song this device can actually write a saved default back to.
+  sectionAddBtn.disabled = !currentSong?.imported || hasSourceMarks;
+  saveConfigBtn.disabled = !currentSong?.imported;
+}
+
+sectionAddBtn.addEventListener('click', () => {
+  if (!currentSong?.imported || !audioEngine) return;
+  const label = manualSections.length < 26 ? String.fromCharCode(65 + manualSections.length) : `#${manualSections.length + 1}`;
+  manualSections.push({ label, beat: engineBeat() });
+  renderSections();
+});
+
+saveConfigBtn.addEventListener('click', () => {
+  if (!currentSong?.imported) return;
+  void saveSongConfig(currentSong.id, { transpose, bpm, sections: manualSections }).catch((err) => {
+    setImportStatus(`Couldn't save the song's default settings: ${err instanceof Error ? err.message : String(err)}`, true);
+  });
 });
 
 function applyBpm(newBpm: number) {
@@ -1601,7 +1669,7 @@ async function runBootstrap() {
     await ensureAccess(); // PIN gate; resolves immediately if already granted on this device
     subscribeToSongs(
       (songs) => {
-        importedSongs = songs.map((s) => ({ id: s.id, title: s.title, xml: s.xml, format: s.format, imported: true, partNameOverrides: s.partNameOverrides }));
+        importedSongs = songs.map((s) => ({ id: s.id, title: s.title, xml: s.xml, format: s.format, imported: true, partNameOverrides: s.partNameOverrides, savedConfig: s.savedConfig }));
         renderSongList();
         // A remote songId can arrive before this device's own library listener has caught up
         // with it (e.g. it was just imported elsewhere) -- re-apply the last state we got once

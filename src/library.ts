@@ -36,6 +36,12 @@ export interface StoredSong {
   // mutate a JSON Score just to change a label). Applied client-side after parsing, before the
   // part name is shown anywhere. Absent/undefined for a song with no renamed voices.
   partNameOverrides?: Record<string, string>;
+  // A deliberately-saved default for this song (the "Save" action in main.ts), applied when the
+  // song is freshly selected -- not written automatically on every transpose/BPM/marker change,
+  // only when the user explicitly asks to remember the current setup. sections is only ever
+  // populated here for a song whose MusicXML has no <rehearsal> marks of its own (see
+  // Score.rehearsalMarks) -- when it does, those are used directly and nothing needs saving.
+  savedConfig?: { transpose?: number; bpm?: number; sections?: { label: string; beat: number }[] };
 }
 
 const SONGS_COLLECTION = 'songs';
@@ -55,6 +61,7 @@ function parseSongDoc(id: string, data: Record<string, unknown>): StoredSong {
     format: ((data.format as SongFormat | undefined) ?? 'musicxml') as SongFormat,
     importedAt: (data.importedAt as number) ?? 0,
     partNameOverrides: data.partNameOverrides as Record<string, string> | undefined,
+    savedConfig: data.savedConfig as StoredSong['savedConfig'],
   };
 }
 
@@ -130,6 +137,19 @@ export async function updateSongMetadata(id: string, patch: { title?: string; pa
   if (patch.title !== undefined) fields.title = patch.title;
   if (patch.partName) fields[`partNameOverrides.${patch.partName.partId}`] = patch.partName.name;
   await updateDoc(doc(db, SONGS_COLLECTION, id), fields);
+}
+
+/**
+ * Saves the current transpose/BPM/section-marker setup as this song's default, applied the next
+ * time it's freshly selected (see main.ts's selectSong/loadSongLocally). A deliberate, explicit
+ * snapshot -- unlike renames, this is never written automatically on every tweak, only when the
+ * user actually asks to remember the current one. Replaces the whole `savedConfig` object at once
+ * (not a dot-path partial update like updateSongMetadata's partName case) since it's always
+ * written as one complete, internally-consistent snapshot, never a single field in isolation.
+ */
+export async function saveSongConfig(id: string, config: { transpose: number; bpm: number; sections: { label: string; beat: number }[] }): Promise<void> {
+  if (!db) throw new Error('Firebase is not configured');
+  await updateDoc(doc(db, SONGS_COLLECTION, id), { savedConfig: config });
 }
 
 async function sha256Hex(text: string): Promise<string> {

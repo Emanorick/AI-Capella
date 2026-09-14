@@ -199,6 +199,19 @@ so renaming never risks corrupting the source data. See §4.6 for the Firestore-
 including a real bug the design deliberately avoids (a naive nested-object write would silently
 wipe out every other voice's already-saved rename).
 
+### Section markers and saved song defaults
+A row of letter buttons (A, B, C, ...) next to Measure jumps straight to a section: sourced
+directly from the MusicXML file's own `<rehearsal>` marks (`Score.rehearsalMarks`, §4.2) when it
+has any, or — when it doesn't — from marks the user adds by hand. A desktop-only `+` button
+(hidden under 720px, alongside the "Save" button below — jumping to an *existing* marker stays
+available everywhere) marks the current playback position as the next letter in sequence. Hand-
+added markers stay purely local until explicitly saved: a "Save" button (also desktop-only,
+imported songs only) writes the current transpose, BPM, and hand-added section markers to the
+song's Firestore document as its default, applied automatically the next time the song is freshly
+selected (not on every tweak — see `saveSongConfig` in `library.ts`). A file that already has its
+own `<rehearsal>` marks never needs (or offers) hand-added ones — those always take priority, and
+the `+` button stays disabled for such a song.
+
 ### Import & shared library
 - Drag-and-drop or file-picker import of `.musicxml`, `.xml`, `.mxl` (MuseScore's
   zip-compressed export format — unzipped client-side via `fflate`), or a standard MIDI file
@@ -375,6 +388,13 @@ staff instead of where a real tenor clef actually places it. See §4.8 for how `
 resolves and applies this (`resolveClef`, `octaveShift`) — the `<pitch>` data itself (and
 therefore MIDI/playback) is unaffected either way, since clef only ever changes where a note is
 *positioned* on the page, never what pitch it actually is.
+
+**`<direction><direction-type><rehearsal>` marks are parsed into `Score.rehearsalMarks`**
+(label + beat position), the same way `<clef>` and everything else structural is: only from the
+first part processed (`measuresBuilt` again — a rehearsal mark is a piece-level concept, and real
+scores conventionally print one only once, usually on the top staff), recorded at whatever `cursor`
+position the `<direction>` element appears at in the file. See §2's "Section markers" for how
+`main.ts` uses this (and what happens when a file has none).
 
 **MIDI import** (`midi.ts`) is a from-scratch standard MIDI file (SMF) reader — no external
 library — supporting format 0, 1, and 2 files, running status, and both text/lyric meta-event

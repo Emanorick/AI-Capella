@@ -245,6 +245,7 @@ export function parseMIDI(buffer: ArrayBuffer): Score {
     measures,
     slurs: [],
     totalBeats,
+    rehearsalMarks: [], // MIDI has no equivalent concept this parser reads (a Marker meta-event exists but isn't parsed here)
   };
 }
 

@@ -547,11 +547,14 @@ body {
 
 .bpm-btn,
 .duck-btn,
+.section-btn,
 #transpose-down,
 #transpose-up,
 #zoom-out,
 #zoom-in,
-#measure-go-btn {
+#measure-go-btn,
+#section-add-btn,
+#save-config-btn {
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: transparent;
   color: #eef0f5;
@@ -559,6 +562,26 @@ body {
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
+}
+
+#sections-list {
+  display: inline-flex;
+  gap: 4px;
+}
+
+#section-add-btn:disabled,
+#save-config-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Authoring actions (adding a new section marker, saving the current setup as the song's
+   default) -- deliberately kept off the narrow/mobile layout, unlike jumping to an
+   already-existing section marker, which stays available everywhere. */
+@media (max-width: 720px) {
+  .desktop-only {
+    display: none;
+  }
 }
 
 #measure-input,

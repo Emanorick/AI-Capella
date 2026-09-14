@@ -1,4 +1,4 @@
-import type { MeasureInfo, NoteEvent, PartInfo, Score, SlurArc } from './score';
+import type { MeasureInfo, NoteEvent, PartInfo, RehearsalMark, Score, SlurArc } from './score';
 
 const STEP_SEMITONES: Record<string, number> = {
   C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11,
@@ -50,6 +50,7 @@ export function parseMusicXML(xmlText: string): Score {
   const notes: NoteEvent[] = [];
   const measures: MeasureInfo[] = [];
   const slurs: SlurArc[] = [];
+  const rehearsalMarks: RehearsalMark[] = [];
   let totalBeats = 0;
   let measuresBuilt = false;
 
@@ -258,6 +259,15 @@ export function parseMusicXML(xmlText: string): Score {
             measureCursorMax = Math.max(measureCursorMax, cursor);
             break;
           }
+          case 'direction': {
+            // Only recorded from the first part processed (like `measures` itself, via
+            // `measuresBuilt`) -- a rehearsal mark is a piece-level structural concept, and real
+            // scores conventionally print it only once (usually on the top staff), not per part.
+            if (measuresBuilt) break;
+            const rehearsalText = child.querySelector(':scope > direction-type > rehearsal')?.textContent?.trim();
+            if (rehearsalText) rehearsalMarks.push({ label: rehearsalText, beat: cursor });
+            break;
+          }
         }
       }
 
@@ -289,6 +299,7 @@ export function parseMusicXML(xmlText: string): Score {
   }
 
   notes.sort((a, b) => a.startBeat - b.startBeat);
+  rehearsalMarks.sort((a, b) => a.beat - b.beat);
 
-  return { title, parts, notes, measures, slurs, totalBeats };
+  return { title, parts, notes, measures, slurs, totalBeats, rehearsalMarks };
 }
