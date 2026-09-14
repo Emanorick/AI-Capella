@@ -169,7 +169,11 @@ approach and its remaining scope limits (clef assignment, note-duration shapes, 
   would for a plain synced Play.
 - **Loop**: either loop the whole piece, or drag across the ruler to mark a specific region
   and loop just that (useful for hammering a tricky bar repeatedly). The Loop button toggles
-  whether hitting the boundary wraps around or just stops there.
+  whether hitting the boundary wraps around or just stops there. A round icon-only twin
+  (`#loop-btn-mini`, next to the compact header's Play/Stop) mirrors the full transport's Loop
+  button one-for-one (same active state, same click handler) so it's reachable even with the
+  settings panel collapsed — previously Loop existed only as a spelled-out button inside the
+  panel, invisible whenever it was collapsed.
 - **Transpose** (±7 semitones) and **Zoom** (25%–300%) apply live, including mid-playback.
 
 ### Per-voice mixing
@@ -210,6 +214,10 @@ wipe out every other voice's already-saved rename).
   read/write," which the PIN doesn't change. It exists purely to keep a shared link from being
   casually forwarded outside the group; see the code comment in `pinGate.ts` for the exact
   reasoning and its limits.
+- Deleting a song asks for confirmation first (`window.confirm`, naming the song) — the one
+  destructive, unrecoverable action in the whole library (it removes the song for every device,
+  not just the one that clicked it), unlike the trust model everywhere else in this app (renames,
+  playback state) of applying shared-state changes immediately with no confirmation step.
 
 ### Synced multi-device playback
 - Every connected device is a full remote control for one shared playback session: hitting
@@ -345,6 +353,18 @@ itself is still only ever built from the first part processed (`measuresBuilt`):
 part's per-note beat math uses this same actual-content-length logic independently, and should
 agree with the first part's boundaries rather than needing to re-derive/share them.
 
+**`<clef>` (sign/line/clef-octave-change) is now read from `<attributes>` and stored on
+`PartInfo.clef`**, rather than every part's staff-view clef being purely a heuristic guess from
+its average pitch. Most concretely, this fixes the real-engraving choir "tenor clef" convention —
+a treble (G) clef with a small 8 printed below it (MusicXML `clef-octave-change: -1`, "sounds an
+octave lower than written") — which previously either got guessed as a plain bass or treble clef
+by average pitch, or (even when the heuristic happened to guess "treble" correctly) was
+positioned on the staff at its literal sounding octave, landing on many ledger lines below the
+staff instead of where a real tenor clef actually places it. See §4.8 for how `staffView.ts`
+resolves and applies this (`resolveClef`, `octaveShift`) — the `<pitch>` data itself (and
+therefore MIDI/playback) is unaffected either way, since clef only ever changes where a note is
+*positioned* on the page, never what pitch it actually is.
+
 **MIDI import** (`midi.ts`) is a from-scratch standard MIDI file (SMF) reader — no external
 library — supporting format 0, 1, and 2 files, running status, and both text/lyric meta-event
 conventions. It parses directly into the same `Score` model, notably *without* going through
@@ -403,6 +423,20 @@ view hasn't been panned away from the actual position — which is always true d
 allowed to browse the score, and the playhead line is computed from `playheadBeat`
 independently, so it correctly drifts away from (or entirely off) its usual spot rather than
 silently relabeling whatever beat the pan happened to land on.
+
+**The fixed pitch-row range (`minMidi`/`maxMidi`) tracks the current transpose, not just the
+untransposed notes.** Notes are drawn at `note.midi + this.transpose`, but this range used to be
+computed once at construction from the untransposed pitches alone and never revisited when
+transpose changed. Transposing far enough (down, most noticeably — reported as bass notes
+becoming permanently invisible and unreachable by scrolling) could put a note's row outside
+`[minMidi, maxMidi]` entirely: `rowY()` would place it beyond the content area's bottom/top, and
+`maxScrollY()` (itself derived from that same range) couldn't scroll far enough to reach it.
+Fixed by recomputing the range from the untransposed extremes (`basePitchMin`/`basePitchMax`)
+plus the current transpose every time `setTranspose()` runs, rather than fixing it forever at
+construction. Both bounds shift by the same amount, so the range's *size* — and therefore
+`contentHeightPx()`/`maxScrollY()` — stays constant across any transpose value; only which
+pitches the existing scroll position shows changes, so this needed no `scrollY` adjustment of its
+own and doesn't disturb the untransposed case at all.
 
 **Piano-key gutter, reintroduced in a non-persistent form.** An earlier version kept a full
 keyboard permanently down the left edge (removed in favor of click-to-preview, see §2); a
@@ -569,6 +603,29 @@ No audio files, no MIDI — every note is synthesized live with the Web Audio AP
   letting both run at once — the existing single-pointer drag state is reset the moment a pinch
   starts, and isn't resumed for whichever finger remains once the pinch ends (lifting both and
   re-touching is an accepted, minor UX cost for keeping the two gestures from fighting).
+- **Audio scheduling top-up and the loop/end-of-piece boundary check run on their own
+  `setInterval`, independent of the visual `requestAnimationFrame` loop.** They used to live
+  inside the same rAF-driven `renderLoop` that draws each frame — but most browsers throttle rAF
+  to near-zero or stop firing it entirely once the tab/screen is backgrounded, and
+  `AudioEngine`'s scheduled-ahead window is bounded (`LOOKAHEAD_SEC`, 8s), so playback (and the
+  metronome) would just go silent a few seconds after switching away from the app, and a piece
+  that should loop or stop at its end wouldn't do either while backgrounded. `audioTick()`
+  (`AUDIO_TICK_INTERVAL_MS`, 200ms) now owns `audioEngine.tick()` and the boundary check;
+  `renderLoop` only reads the current beat and draws. `setInterval` is throttled too (to roughly
+  once a second in most browsers when hidden) but isn't halted the way rAF often is — comfortably
+  within `LOOKAHEAD_REFILL_SEC`'s (3s) margin to keep the schedule topped up. Verified by freezing
+  `requestAnimationFrame` entirely and confirming new notes/clicks keep getting scheduled well
+  past the initial 8s lookahead regardless (fails against the pre-fix code, where scheduling
+  visibly stalls at the very first lookahead window once rAF stops firing).
+- **Song/voice renames apply optimistically, with a rollback and a visible error on failure.**
+  The inline-edit element's own text was never touched until the Firestore write's `.then()`
+  resolved, so every rename visibly flashed back to the *old* value the instant you committed it,
+  then (if and only if the write actually succeeded) jumped to the new one a moment later — itself
+  enough to read as "unstable," and a failed write (permissions, network) surfaced nowhere but a
+  console.warn, i.e. a silent, unexplained revert. Both rename handlers (song title, voice name)
+  now update the local text/state immediately and only roll it back — checking the edited
+  song/part is still the one on screen, in case the user has since navigated elsewhere — if the
+  write actually rejects, surfacing the failure via `setImportStatus` instead of the console.
 
 ### 4.6 Shared library & access (`firebase.ts`, `library.ts`, `pinGate.ts`)
 
@@ -783,10 +840,24 @@ or nearly sharing a pitch would be unreadable overlaid even in different colors.
 drawn once per measure, spanning from the top staff to the bottom staff, so the stack reads as
 one synchronized system rather than N unrelated staves.
 
+**Clef resolution** (`resolveClef`) prefers the actually-notated MusicXML `<clef>` (§4.2) over the
+average-pitch heuristic whenever it's present and one of the two shapes this view can draw (a
+plain G or F clef) — the heuristic remains the fallback for MIDI imports and any other clef sign
+(a true C-clef, say — rare in choir writing, and this view has no C-clef glyph to draw anyway).
+The resolved `octaveShift` (in whole octaves) only ever affects *positioning*: it's folded
+straight into the part's `bottomLineIndex` (`CLEF_BOTTOM_LINE[clef] - octaveShift * 7`, 7
+diatonic steps per octave) rather than touching a note's own pitch/spelling. Its most common real
+value is +1, for the standard choir "tenor clef" convention — a G clef printed with a small 8
+below it (MusicXML `clef-octave-change: -1`, "this clef sounds an octave lower than written") —
+so a tenor part's notes land on/near the staff the way they're actually engraved, instead of
+plotting them at their literal sounding octave against a plain treble clef (which would hang them
+on many ledger lines below it).
+
 Clef glyphs are small hand-drawn bezier-curve shapes (a stylized G-clef spiral for treble; two
 dots flanking a hook for bass), not a Unicode music-symbol character — this app bundles no music
 font, and Unicode clef characters render as missing-glyph boxes on many systems without one.
-Recognizable at a glance as "this is treble/bass," not calligraphic. Note flags (eighth/16th/32nd)
+Recognizable at a glance as "this is treble/bass," not calligraphic (and, for a resolved tenor
+clef, still just the plain G-clef shape — no small "8" sub-glyph underneath it yet). Note flags (eighth/16th/32nd)
 are a closed two-bezier "hook" shape — bulging out from the stem, then tapering back to a point
 further down it — reading as a proper tapering flag rather than the symmetric lens/blob shape an
 earlier single-quadratic-curve version produced. Each note's notehead is nudged a few pixels

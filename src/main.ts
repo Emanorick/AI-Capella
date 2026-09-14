@@ -70,6 +70,7 @@ app.innerHTML = `
       </div>
       <div id="header-right">
         <div id="position-display">—</div>
+        <button id="loop-btn-mini" disabled title="Loop">&#8635;</button>
         <button id="stop-btn-mini" disabled title="Stop and reset to the start">&#9632;</button>
         <button id="play-btn-mini" disabled title="Play/Pause">&#9658;</button>
       </div>
@@ -135,6 +136,7 @@ const playBtn = document.querySelector<HTMLButtonElement>('#play-btn')!;
 const playBtnMini = document.querySelector<HTMLButtonElement>('#play-btn-mini')!;
 const stopBtn = document.querySelector<HTMLButtonElement>('#stop-btn')!;
 const stopBtnMini = document.querySelector<HTMLButtonElement>('#stop-btn-mini')!;
+const loopBtnMini = document.querySelector<HTMLButtonElement>('#loop-btn-mini')!;
 const metronomeBtn = document.querySelector<HTMLButtonElement>('#metronome-btn')!;
 const loopBtn = document.querySelector<HTMLButtonElement>('#loop-btn')!;
 const transposeValueEl = document.querySelector<HTMLSpanElement>('#transpose-value')!;
@@ -349,7 +351,14 @@ songListEl.addEventListener('click', (e) => {
   if (!id) return;
 
   if (target.closest('.song-delete-btn')) {
-    void removeImportedSong(id);
+    const song = allSongs().find((s) => s.id === id);
+    // A shared-library delete removes the song for everyone, not just this device -- worth a
+    // deliberate confirmation step (unlike this app's usual "any device can change shared state
+    // immediately" trust model for renames/playback) since it's the one destructive, unrecoverable
+    // action in the whole library.
+    if (window.confirm(`Willst du "${song?.title ?? 'dieses Arrangement'}" wirklich löschen?`)) {
+      void removeImportedSong(id);
+    }
     return;
   }
   const song = allSongs().find((s) => s.id === id);
@@ -510,6 +519,7 @@ async function loadSongLocally(song: SongEntry) {
   stopBtnMini.disabled = false;
   metronomeBtn.disabled = false;
   loopBtn.disabled = false;
+  loopBtnMini.disabled = false;
   measureInput.disabled = false;
   measureGoBtn.disabled = false;
   measurePrevBtn.disabled = false;
@@ -699,13 +709,26 @@ function startInlineEdit(el: HTMLElement, initialValue: string, onCommit: (value
 // already-open view.
 songTitleEl.addEventListener('dblclick', () => {
   if (!currentSong?.imported || !currentScore) return;
-  startInlineEdit(songTitleEl, currentScore.title, (value) => {
-    void updateSongMetadata(currentSong!.id, { title: value })
-      .then(() => {
-        songTitleEl.textContent = value;
-        if (currentScore) currentScore.title = value;
-      })
-      .catch((err) => console.warn('[AI-Capella] Failed to rename song:', err));
+  const songId = currentSong.id;
+  const previousTitle = currentScore.title;
+  startInlineEdit(songTitleEl, previousTitle, (value) => {
+    // Applied immediately, not after the Firestore round-trip resolves: el's own text was never
+    // touched by startInlineEdit itself, so waiting for the write to settle before updating it
+    // meant every rename visibly flashed back to the OLD title the instant you hit Enter/blurred,
+    // then (if and when the write actually succeeded) jumped to the new one a moment later --
+    // itself enough to read as "unstable," and on a failed write (permissions, network) there was
+    // no user-visible sign at all beyond a console.warn, just a silent revert.
+    songTitleEl.textContent = value;
+    if (currentScore) currentScore.title = value;
+    void updateSongMetadata(songId, { title: value }).catch((err) => {
+      // Only roll back if this is still the song actually on screen -- the user may have already
+      // navigated elsewhere by the time this rejects.
+      if (currentSong?.id === songId) {
+        songTitleEl.textContent = previousTitle;
+        if (currentScore) currentScore.title = previousTitle;
+      }
+      setImportStatus(`Couldn't rename the song: ${err instanceof Error ? err.message : String(err)}`, true);
+    });
   });
 });
 
@@ -781,13 +804,20 @@ partsPanelEl.addEventListener('dblclick', (e) => {
   const partId = nameEl?.closest<HTMLElement>('.part-row')?.getAttribute('data-part');
   const part = currentScore?.parts.find((p) => p.id === partId);
   if (!nameEl || !part || !currentSong?.imported) return;
-  startInlineEdit(nameEl, part.name, (value) => {
-    void updateSongMetadata(currentSong!.id, { partName: { partId: part.id, name: value } })
-      .then(() => {
-        part.name = value;
-        nameEl.textContent = value;
-      })
-      .catch((err) => console.warn('[AI-Capella] Failed to rename voice:', err));
+  const songId = currentSong.id;
+  const previousName = part.name;
+  startInlineEdit(nameEl, previousName, (value) => {
+    // See the song-title rename handler's comment -- applied immediately rather than after the
+    // Firestore write resolves, so a rename doesn't visibly flash back to the old name first.
+    part.name = value;
+    nameEl.textContent = value;
+    void updateSongMetadata(songId, { partName: { partId: part.id, name: value } }).catch((err) => {
+      if (currentSong?.id === songId) {
+        part.name = previousName;
+        nameEl.textContent = previousName;
+      }
+      setImportStatus(`Couldn't rename the voice: ${err instanceof Error ? err.message : String(err)}`, true);
+    });
   });
 });
 
@@ -859,6 +889,7 @@ metronomeBtn.addEventListener('click', () => {
 
 function updateLoopButton() {
   loopBtn.classList.toggle('active', loopEnabled);
+  loopBtnMini.classList.toggle('active', loopEnabled);
   if (loopRegion) {
     loopBtn.title = loopEnabled
       ? `Looping ${loopRegion.start.toFixed(1)}–${loopRegion.end.toFixed(1)} (click to stop there instead)`
@@ -868,11 +899,14 @@ function updateLoopButton() {
       ? 'Looping the whole piece (drag the ruler above the roll to loop a region instead)'
       : 'Click to loop the whole piece, or drag the ruler above the roll to loop a region';
   }
+  loopBtnMini.title = loopBtn.title;
 }
-loopBtn.addEventListener('click', () => {
+function toggleLoop() {
   if (!currentScore) return;
   pushState({ loopEnabled: !loopEnabled });
-});
+}
+loopBtn.addEventListener('click', toggleLoop);
+loopBtnMini.addEventListener('click', toggleLoop);
 
 function applyBpm(newBpm: number) {
   if (audioEngine?.isPlaying()) {
@@ -1348,41 +1382,70 @@ function renderNow() {
   updatePositionDisplay(beat);
 }
 
-function renderLoop() {
-  if (!audioEngine || !pianoRoll || !currentScore) return;
-  audioEngine.tick(); // tops up the bounded lookahead schedule as playback progresses
+// Scheduling top-up (audioEngine.tick()) and the loop/end-of-piece boundary check used to live
+// inside renderLoop, gated on requestAnimationFrame -- which most browsers throttle to near-zero
+// or stop firing entirely once the tab/screen is backgrounded. Since AudioEngine's own scheduled-
+// ahead window is bounded (LOOKAHEAD_SEC, 8s), that meant playback (and the metronome) would just
+// go silent a few seconds after switching away from the app, and a piece that should loop or stop
+// at its end wouldn't do either while backgrounded. Pulled out into their own setInterval-driven
+// tick, separate from the purely-visual rAF loop below -- setInterval keeps firing (throttled to
+// roughly once a second in most browsers, but not halted the way rAF often is) while hidden, which
+// is well within LOOKAHEAD_REFILL_SEC's (3s) margin to keep the schedule topped up and the
+// boundary check responsive. Rendering itself stays rAF-only: nothing needs to be drawn while
+// nobody's looking, and rAF resumes its own chain automatically once the tab is visible again.
+const AUDIO_TICK_INTERVAL_MS = 200;
+let audioTickIntervalId: number | null = null;
+
+function audioTick() {
+  if (!audioEngine || !currentScore) return;
+  audioEngine.tick();
   const beat = audioEngine.getCurrentBeat();
   // A loop region, once marked, bounds playback; the Loop button decides whether hitting that
   // bound (or the end of the piece, when no region is marked) wraps around or stops there.
   const boundary = loopRegion ? loopRegion.end : currentScore.totalBeats;
+  if (beat < boundary) return;
 
-  if (beat >= boundary) {
-    if (loopEnabled) {
-      const loopStart = loopRegion ? loopRegion.start : 0;
-      audioEngine.play(loopStart, bpm, transpose);
-      rafId = requestAnimationFrame(renderLoop);
-      return;
-    }
-
-    const resetBeat = loopRegion ? loopRegion.start : 0;
-    audioEngine.stop();
-    audioEngine.setPausedBeat(resetBeat);
-    viewOffsetBeats = 0;
-    syncPlayButtons(false);
-    renderActiveView(resetBeat, resetBeat);
-    updatePositionDisplay(resetBeat);
-    rafId = null;
+  if (loopEnabled) {
+    const loopStart = loopRegion ? loopRegion.start : 0;
+    audioEngine.play(loopStart, bpm, transpose);
     return;
   }
 
+  const resetBeat = loopRegion ? loopRegion.start : 0;
+  audioEngine.stop();
+  audioEngine.setPausedBeat(resetBeat);
+  viewOffsetBeats = 0;
+  syncPlayButtons(false);
+  renderActiveView(resetBeat, resetBeat);
+  updatePositionDisplay(resetBeat);
+  stopRenderLoop();
+}
+function startAudioTick() {
+  if (audioTickIntervalId == null) audioTickIntervalId = window.setInterval(audioTick, AUDIO_TICK_INTERVAL_MS);
+}
+function stopAudioTick() {
+  if (audioTickIntervalId != null) {
+    clearInterval(audioTickIntervalId);
+    audioTickIntervalId = null;
+  }
+}
+
+function renderLoop() {
+  if (!audioEngine || !pianoRoll || !currentScore || !audioEngine.isPlaying()) {
+    rafId = null; // stopped (e.g. by audioTick's own boundary check) since this frame was requested
+    return;
+  }
+  const beat = audioEngine.getCurrentBeat();
   renderActiveView(beat + viewOffsetBeats, beat);
   updatePositionDisplay(beat + viewOffsetBeats);
   rafId = requestAnimationFrame(renderLoop);
 }
 function startRenderLoop() {
+  startAudioTick();
   if (rafId == null) rafId = requestAnimationFrame(renderLoop);
 }
 function stopRenderLoop() {
+  stopAudioTick();
   if (rafId != null) {
     cancelAnimationFrame(rafId);
     rafId = null;

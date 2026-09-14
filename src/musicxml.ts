@@ -59,6 +59,7 @@ export function parseMusicXML(xmlText: string): Score {
     let measureStartBeat = 0;
     let cursor = 0;
     let lastNoteStart = 0;
+    let partClef: PartInfo['clef'];
     const openSlurs = new Map<number, { beat: number; midi: number }>();
     // A tie is MusicXML's way of representing one sustained pitch that had to be split into
     // multiple <note> elements because a note can't itself cross a measure boundary in the file
@@ -92,6 +93,19 @@ export function parseMusicXML(xmlText: string): Score {
               const bt = timeEl.querySelector('beat-type')?.textContent;
               if (b) beats = parseInt(b, 10) || beats;
               if (bt) beatType = parseInt(bt, 10) || beatType;
+            }
+            // Only the first (unnumbered, or number="1") <clef> -- a part with more than one staff
+            // (piano grand staff, e.g.) can have several, but this app renders one staff per part.
+            const clefEl = child.querySelector(':scope > clef:not([number]), :scope > clef[number="1"]');
+            const clefSign = clefEl?.querySelector('sign')?.textContent;
+            if (clefSign) {
+              const lineText = clefEl!.querySelector('line')?.textContent;
+              const octaveChangeText = clefEl!.querySelector('clef-octave-change')?.textContent;
+              partClef = {
+                sign: clefSign,
+                line: lineText ? parseInt(lineText, 10) : undefined,
+                octaveChange: octaveChangeText ? parseInt(octaveChangeText, 10) : undefined,
+              };
             }
             break;
           }
@@ -249,6 +263,10 @@ export function parseMusicXML(xmlText: string): Score {
 
     measuresBuilt = true;
     totalBeats = Math.max(totalBeats, measureStartBeat);
+    if (partClef) {
+      const partInfo = parts.find((p) => p.id === partId);
+      if (partInfo) partInfo.clef = partClef;
+    }
   }
 
   notes.sort((a, b) => a.startBeat - b.startBeat);

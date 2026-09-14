@@ -57,6 +57,10 @@ export class PianoRoll {
   private ctx2d: CanvasRenderingContext2D;
   private minMidi: number;
   private maxMidi: number;
+  // Untransposed pitch extremes -- minMidi/maxMidi (below) are recomputed from these plus the
+  // current transpose every time it changes, rather than fixed forever at construction time.
+  private basePitchMin: number;
+  private basePitchMax: number;
   private transpose = 0;
   private pixelsPerBeat = BASE_PIXELS_PER_BEAT;
   private hiddenParts = new Set<string>();
@@ -113,9 +117,39 @@ export class PianoRoll {
       if (list) list.push(slur);
       else this.slursByPart.set(slur.partId, [slur]);
     }
+    // The fixed pitch-row range (and therefore the scrollable content height) has to cover every
+    // pitch a note could ever be drawn at, not just its untransposed one: notes are drawn at
+    // `note.midi + this.transpose` (see render()), but this range itself is computed once here
+    // and never revisited when transpose changes. Padding only by ROW_PADDING_SEMITONES left a
+    // transposed-far-enough note's row outside [minMidi, maxMidi] entirely -- rowY() would place
+    // it beyond the content area's bottom/top, and maxScrollY() (itself derived from this same
+    // untransposed range) couldn't scroll far enough to reach it. A concretely reported bug: bass
+    // notes becoming permanently invisible/unreachable-by-scroll after transposing down.
     const pitches = score.notes.map((n) => n.midi);
-    this.minMidi = (pitches.length ? Math.min(...pitches) : 60) - ROW_PADDING_SEMITONES;
-    this.maxMidi = (pitches.length ? Math.max(...pitches) : 72) + ROW_PADDING_SEMITONES;
+    this.basePitchMin = pitches.length ? Math.min(...pitches) : 60;
+    this.basePitchMax = pitches.length ? Math.max(...pitches) : 72;
+    this.minMidi = 0;
+    this.maxMidi = 0;
+    this.updatePitchRange();
+  }
+
+  /**
+   * Recomputes the fixed pitch-row range from basePitchMin/Max plus the current transpose --
+   * called at construction and every setTranspose(). Notes are drawn at `note.midi +
+   * this.transpose` (see render()), but minMidi/maxMidi used to be computed once from the
+   * untransposed pitches and never revisited: transposing far enough could put a note's row
+   * outside [minMidi, maxMidi] entirely, where rowY() places it beyond the content area's
+   * bottom/top and maxScrollY() (itself derived from this same range) can't scroll far enough to
+   * reach it. A concretely reported bug: bass notes becoming permanently invisible/unreachable-
+   * by-scroll after transposing down. Both bounds shift by the same `transpose` amount, so `range`
+   * (and therefore contentHeightPx()/maxScrollY(), which only depend on the range's *size*, not
+   * its offset) stays constant across any transpose value -- this only remaps which pitches the
+   * existing scroll position shows, not how much there is to scroll through, so it doesn't need
+   * to touch/preserve scrollY itself.
+   */
+  private updatePitchRange() {
+    this.minMidi = this.basePitchMin + this.transpose - ROW_PADDING_SEMITONES;
+    this.maxMidi = this.basePitchMax + this.transpose + ROW_PADDING_SEMITONES;
   }
 
   /** Mute hides a part entirely; when any part is soloed, every non-soloed (and non-muted) part is dimmed. */
@@ -132,6 +166,7 @@ export class PianoRoll {
 
   setTranspose(semitones: number) {
     this.transpose = semitones;
+    this.updatePitchRange();
     this.contentBufferDirty = true;
   }
 

@@ -302,7 +302,8 @@ body {
 }
 
 #play-btn-mini,
-#stop-btn-mini {
+#stop-btn-mini,
+#loop-btn-mini {
   width: 34px;
   height: 34px;
   border-radius: 6px;
@@ -315,14 +316,35 @@ body {
   flex-shrink: 0;
 }
 
+/* Round, not the rounded-square shape shared by the other mini transport buttons -- a deliberately
+   distinct shape for a toggle (vs. an instantaneous action like Play/Stop), and small/unlabeled
+   enough that it needs a shape a glance can tell apart from its neighbors. */
+#loop-btn-mini {
+  border-radius: 50%;
+  font-size: 17px;
+}
+
+#loop-btn-mini.active {
+  background: #4fa8ff;
+  color: #06070a;
+  border-color: #4fa8ff;
+}
+
 #play-btn-mini:hover,
-#stop-btn-mini:hover {
+#stop-btn-mini:hover,
+#loop-btn-mini:hover {
   border-color: rgba(255, 255, 255, 0.4);
   color: #eef0f5;
 }
 
+#loop-btn-mini.active:hover {
+  border-color: #4fa8ff;
+  color: #06070a;
+}
+
 #play-btn-mini:disabled,
-#stop-btn-mini:disabled {
+#stop-btn-mini:disabled,
+#loop-btn-mini:disabled {
   opacity: 0.35;
   cursor: default;
 }

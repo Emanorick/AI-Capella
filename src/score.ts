@@ -1,6 +1,15 @@
 export interface PartInfo {
   id: string;
   name: string;
+  // The clef actually notated in the source (MusicXML <clef>: <sign>/<line>/<clef-octave-change>),
+  // when known -- absent for MIDI imports and any MusicXML file that omits it, in which case
+  // staffView.ts falls back to a heuristic guess from the part's average pitch. octaveChange is
+  // most commonly -1 for the real-engraving "treble clef, sounds an octave lower than written"
+  // convention choir tenor parts use (a small "8" printed below a treble clef) -- without it, a
+  // tenor part heuristically assigned (or even correctly assigned) a treble clef would still be
+  // positioned on the staff as if it sounded where it's written, hanging on many ledger lines
+  // below the staff instead of sitting where a real tenor clef actually places it.
+  clef?: { sign: string; line?: number; octaveChange?: number };
 }
 
 export interface NoteEvent {

@@ -1,4 +1,4 @@
-import type { MeasureInfo, NoteEvent, Score } from './score';
+import type { MeasureInfo, NoteEvent, PartInfo, Score } from './score';
 import type { PartMixState } from './audioEngine';
 
 export const BASE_PIXELS_PER_BEAT = 70;
@@ -53,6 +53,28 @@ const CLEF_BOTTOM_LINE: Record<ClefType, number> = {
   treble: diatonicIndex('E', 4),
   bass: diatonicIndex('G', 2),
 };
+
+/**
+ * Resolves a part's clef + octave shift, preferring the actually-notated MusicXML <clef> (sign/
+ * line/clef-octave-change) over the average-pitch heuristic when it's present and one of the two
+ * shapes this view can draw (a plain G or F clef). octaveShift is in whole octaves and only ever
+ * affects where a note is *positioned* on the staff (added to its diatonic index before comparing
+ * against the clef's fixed bottom line) -- never its pitch/spelling/MIDI, which is already
+ * correct pitch data regardless of clef. Its most common real value is +1, for the standard choir
+ * "tenor clef" convention: a G clef printed with a small 8 below it (MusicXML clef-octave-change
+ * -1, "this clef sounds an octave lower than written") -- so tenor notes are actually WRITTEN an
+ * octave higher than they sound, landing on/near the staff instead of on many ledger lines below
+ * it the way plotting them at their literal sounding octave against a plain treble clef would.
+ * Any other sign (a true tenor C-clef, e.g. -- rare in choir writing, and this view has no C-clef
+ * glyph to draw anyway) falls back to the heuristic rather than guessing a shape/position that
+ * doesn't match what's actually printed.
+ */
+function resolveClef(clef: PartInfo['clef'], avgMidi: number): { clef: ClefType; octaveShift: number } {
+  const octaveShift = -(clef?.octaveChange ?? 0);
+  if (clef?.sign === 'G') return { clef: 'treble', octaveShift };
+  if (clef?.sign === 'F') return { clef: 'bass', octaveShift };
+  return { clef: avgMidi >= 60 ? 'treble' : 'bass', octaveShift: 0 };
+}
 
 // Fallback spelling for notes with no parsed step/alter/octave (MIDI imports have no source
 // spelling to preserve): a fixed sharps-preferred chromatic table. MusicXML-sourced notes always
@@ -366,6 +388,7 @@ function computeRestGaps(notes: NoteEvent[], totalBeats: number): { startBeat: n
 interface PartLayout {
   partId: string;
   clef: ClefType;
+  octaveShift: number; // whole octaves added to a note's diatonic index before staff positioning -- see resolveClef
   topY: number; // css px, y of the staff's top line within the content area (before scroll)
 }
 
@@ -430,15 +453,16 @@ export class StaffView {
       this.restsByPart.set(partId, computeRestGaps(notes, score.totalBeats));
     }
 
-    // Clef per part: no clef is parsed anywhere in this app's pipeline, so it's assigned from each
-    // part's own average pitch -- a common, reasonable heuristic (a soprano/alto part's average is
-    // almost always well above middle C; a bass part's well below it) rather than always treble.
+    // Clef per part: see resolveClef -- prefers the actually-notated MusicXML <clef> when present
+    // and recognized, falling back to a heuristic from the part's own average pitch (a soprano/
+    // alto part's average is almost always well above middle C; a bass part's well below it) for
+    // MIDI imports or an unrecognized clef sign.
     let y = STAFF_HEIGHT_PX / 2 + 10;
     this.layouts = score.parts.map((p) => {
       const notes = this.notesByPart.get(p.id) ?? [];
       const avgMidi = notes.length ? notes.reduce((sum, n) => sum + n.midi, 0) / notes.length : 60;
-      const clef: ClefType = avgMidi >= 60 ? 'treble' : 'bass';
-      const layout: PartLayout = { partId: p.id, clef, topY: y };
+      const { clef, octaveShift } = resolveClef(p.clef, avgMidi);
+      const layout: PartLayout = { partId: p.id, clef, octaveShift, topY: y };
       y += STAFF_HEIGHT_PX + MIN_STAFF_GAP_PX;
       return layout;
     });
@@ -651,7 +675,10 @@ export class StaffView {
     // Ducking (regular Solo elsewhere): dim the whole staff, matching PianoRoll's DIMMED_ALPHA.
     // Muting/true-solo-away is handled one level up in render() by skipping drawStaff entirely.
     const dimmed = this.dimmedParts.has(layout.partId);
-    const bottomLineIndex = CLEF_BOTTOM_LINE[layout.clef];
+    // octaveShift (see resolveClef) is folded into the bottom-line reference itself, in whole
+    // octaves (7 diatonic steps) -- equivalent to, but simpler than, threading it through to
+    // drawNote and adjusting every note's own diatonic index there instead.
+    const bottomLineIndex = CLEF_BOTTOM_LINE[layout.clef] - layout.octaveShift * 7;
     const bottomLineY = layout.topY + STAFF_HEIGHT_PX;
 
     // 5 staff lines.
