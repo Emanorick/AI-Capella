@@ -30,6 +30,17 @@ function midiToFreq(midi: number): number {
   return 440 * Math.pow(2, (midi - 69) / 12);
 }
 
+// Additive harmonic profile for the piano-test timbre: a fundamental plus a few overtones with
+// decreasing gain, the 4th slightly sharp (ratio > 4) to mimic a real piano string's inharmonicity
+// (stiff strings stretch overtones sharp of the ideal integer ratio -- part of what makes a piano
+// sound like a piano rather than a pure additive tone).
+const PIANO_HARMONICS: { ratio: number; gain: number; type: OscillatorType }[] = [
+  { ratio: 1, gain: 1.0, type: 'triangle' },
+  { ratio: 2, gain: 0.32, type: 'sine' },
+  { ratio: 3, gain: 0.16, type: 'sine' },
+  { ratio: 4.02, gain: 0.07, type: 'sine' },
+];
+
 /** Synthesizes a single plucked-piano-ish note; returns the voice so callers can track/stop it. */
 function playPianoNote(
   ctx: AudioContext,
@@ -39,50 +50,64 @@ function playPianoNote(
   midi: number,
 ): Voice {
   const freq = midiToFreq(midi);
+  // A real piano's low strings ring for seconds; its high strings decay in a fraction of a second
+  // -- scaling the decay stage by pitch (rather than a fixed time for every note) is what makes
+  // the difference between "piano-ish" and a generic synth tone most audible across a choir
+  // arrangement's actual vocal range.
+  const pitchDecayScale = Math.max(0.35, Math.min(1.8, 220 / freq));
 
-  const osc1 = ctx.createOscillator();
-  osc1.type = 'triangle';
-  osc1.frequency.setValueAtTime(freq, startTime);
-
-  const osc2 = ctx.createOscillator();
-  osc2.type = 'sine';
-  osc2.frequency.setValueAtTime(freq * 2.01, startTime);
-  const osc2Gain = ctx.createGain();
-  osc2Gain.gain.value = 0.15;
+  const oscillators: OscillatorNode[] = [];
+  const harmonicGains: GainNode[] = [];
+  for (const h of PIANO_HARMONICS) {
+    const osc = ctx.createOscillator();
+    osc.type = h.type;
+    osc.frequency.setValueAtTime(freq * h.ratio, startTime);
+    const g = ctx.createGain();
+    g.gain.value = h.gain;
+    oscillators.push(osc);
+    harmonicGains.push(g);
+  }
 
   const filter = ctx.createBiquadFilter();
   filter.type = 'lowpass';
-  filter.frequency.setValueAtTime(Math.min(freq * 6, 8000), startTime);
-  filter.frequency.exponentialRampToValueAtTime(Math.max(freq * 1.5, 400), startTime + 0.5);
+  filter.frequency.setValueAtTime(Math.min(freq * 8, 9000), startTime);
+  filter.frequency.exponentialRampToValueAtTime(Math.max(freq * 1.3, 350), startTime + 0.6 * pitchDecayScale);
 
   const ampGain = ctx.createGain();
-  const attack = 0.006;
+  const attack = 0.004;
   const peak = 0.36;
-  const decayTarget = Math.max(peak * 0.35, 0.001);
   const noteOffTime = startTime + duration;
+
+  // A hammer-struck string doesn't decay in one smooth curve -- there's a quick initial drop as
+  // the strike transient dies away, then a much slower decay of the sustained ring. Modeling both
+  // stages (rather than one exponential ramp straight to the sustain level) is the other main
+  // piece of what reads as "piano" instead of a plucked/organ-like single-stage decay.
+  const fastDecayTarget = peak * 0.55;
+  const fastDecayTime = startTime + attack + 0.08;
+  const slowDecayTarget = Math.max(peak * 0.12, 0.001);
+  const slowDecayEnd = fastDecayTime + Math.min(duration, 1.1 * pitchDecayScale);
 
   ampGain.gain.setValueAtTime(0, startTime);
   ampGain.gain.linearRampToValueAtTime(peak, startTime + attack);
-  const decayEndTime = startTime + attack + Math.min(duration, 0.4);
-  ampGain.gain.exponentialRampToValueAtTime(decayTarget, decayEndTime);
-  // This hold event must never land before decayEndTime -- Web Audio resolves automation events
+  ampGain.gain.exponentialRampToValueAtTime(fastDecayTarget, fastDecayTime);
+  ampGain.gain.exponentialRampToValueAtTime(slowDecayTarget, slowDecayEnd);
+  // This hold event must never land before slowDecayEnd -- Web Audio resolves automation events
   // in time order regardless of call order, so a setValueAtTime landing earlier than a pending
-  // ramp's own end time pre-empts it: the value would hold flat at `peak` and then jump straight
-  // to decayTarget instead of actually decaying, silently discarding the ramp above for most
-  // notes (anything shorter than ~0.4s, i.e. most of them).
-  ampGain.gain.setValueAtTime(Math.max(decayTarget, 0.001), Math.max(noteOffTime, decayEndTime));
+  // ramp's own end time pre-empts it: the value would hold flat and then jump straight to
+  // slowDecayTarget instead of actually decaying, silently discarding the ramp above for most
+  // notes (anything shorter than the decay stages, i.e. most of them).
+  ampGain.gain.setValueAtTime(Math.max(slowDecayTarget, 0.001), Math.max(noteOffTime, slowDecayEnd));
   ampGain.gain.exponentialRampToValueAtTime(0.0001, noteOffTime + RELEASE_TIME);
 
-  osc1.connect(filter);
-  osc2.connect(osc2Gain).connect(filter);
+  for (let i = 0; i < oscillators.length; i++) oscillators[i].connect(harmonicGains[i]).connect(filter);
   filter.connect(ampGain);
   ampGain.connect(destination);
 
   const stopTime = noteOffTime + RELEASE_TIME + 0.05;
-  osc1.start(startTime);
-  osc2.start(startTime);
-  osc1.stop(stopTime);
-  osc2.stop(stopTime);
+  for (const osc of oscillators) {
+    osc.start(startTime);
+    osc.stop(stopTime);
+  }
 
   // Stopping a source node doesn't disconnect the rest of its chain -- the downstream gain/filter
   // nodes stay wired into the graph (doing zero-output work) until something explicitly
@@ -92,8 +117,8 @@ function playPianoNote(
   // fall behind real time under load. Disconnect the whole chain the moment the primary oscillator
   // ends -- whether that's its natural stop time, or an early one from clearSchedule() preempting
   // it -- so the live graph stays bounded to what's actually still sounding.
-  osc1.addEventListener('ended', () => {
-    for (const node of [osc1, osc2, osc2Gain, filter, ampGain]) {
+  oscillators[0].addEventListener('ended', () => {
+    for (const node of [...oscillators, ...harmonicGains, filter, ampGain]) {
       try {
         node.disconnect();
       } catch {
@@ -102,7 +127,7 @@ function playPianoNote(
     }
   });
 
-  return { oscillators: [osc1, osc2], gain: ampGain };
+  return { oscillators, gain: ampGain };
 }
 
 function playClick(ctx: AudioContext, destination: AudioNode, startTime: number, accent: boolean): Voice {
