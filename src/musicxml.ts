@@ -62,6 +62,7 @@ export function parseMusicXML(xmlText: string): Score {
     let beats = 4;
     let beatType = 4;
     let fifths = 0;
+    let keyMode: MeasureInfo['mode'];
     let measureStartBeat = 0;
     let cursor = 0;
     let lastNoteStart = 0;
@@ -93,6 +94,8 @@ export function parseMusicXML(xmlText: string): Score {
             if (divText) divisions = parseFloat(divText) || 1;
             const fifthsText = child.querySelector('key > fifths')?.textContent;
             if (fifthsText) fifths = parseInt(fifthsText, 10) || 0;
+            const modeText = child.querySelector('key > mode')?.textContent?.trim();
+            if (modeText === 'major' || modeText === 'minor') keyMode = modeText;
             const timeEl = child.querySelector('time');
             if (timeEl) {
               const b = timeEl.querySelector('beats')?.textContent;
@@ -285,7 +288,7 @@ export function parseMusicXML(xmlText: string): Score {
       // empty measure has nothing to measure `cursor` against).
       const measureDurationBeats = measureCursorMax > measureStartBeat ? measureCursorMax - measureStartBeat : beats * (4 / beatType);
       if (!measuresBuilt) {
-        measures.push({ number: measureNumber, startBeat: measureStartBeat, beats, beatType, fifths });
+        measures.push({ number: measureNumber, startBeat: measureStartBeat, beats, beatType, fifths, mode: keyMode });
       }
       measureStartBeat += measureDurationBeats;
     }

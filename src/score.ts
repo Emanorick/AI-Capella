@@ -44,6 +44,7 @@ export interface MeasureInfo {
   beats: number; // time signature numerator
   beatType: number; // time signature denominator
   fifths: number; // key signature, circle-of-fifths count: positive = sharps, negative = flats
+  mode?: 'major' | 'minor'; // from <key><mode>, when the file states it (only used to name the key in the library)
 }
 
 export interface SlurArc {

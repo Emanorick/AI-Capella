@@ -1,14 +1,27 @@
+// Typefaces are bundled with the app rather than loaded from Google's servers: no visitor data goes
+// to a third party (German courts have fined sites for remotely loaded Google Fonts), and they keep
+// working on weak rehearsal-room Wi-Fi.
+import '@fontsource-variable/bodoni-moda/opsz.css';
+import '@fontsource-variable/bodoni-moda/opsz-italic.css';
+import '@fontsource-variable/atkinson-hyperlegible-next/wght.css';
+import '@fontsource-variable/atkinson-hyperlegible-mono/wght.css';
 import './style.css';
 import { parseMusicXML } from './musicxml';
 import { parseMIDI } from './midi';
 import { AudioEngine, type PartMixState } from './audioEngine';
 import { PianoRoll, RULER_HEIGHT_PX, type LoopRegion } from './pianoRoll';
 import { StaffView, STAFF_RULER_HEIGHT_PX } from './staffView';
-import { colorForPartIndex } from './palette';
+import { OverviewStrip } from './overview';
+import { colorForPart } from './palette';
 import { measureAtBeat, type Score } from './score';
 import { deleteImportedSong, readScoreFile, saveImportedSong, saveSongConfig, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong } from './library';
 import { ensureSignedIn, isFirebaseConfigured } from './firebase';
 import { ensureAccess } from './pinGate';
+import { animateRibbons, coverDataFromScore, drawCover, drawMark, prepareCanvas, type CoverData } from './artwork';
+import { icon } from './icons';
+import { countLabel, keyName, lang, setLang, t } from './i18n';
+import { canvasFontsReady } from './theme';
+import { closeOverlay, confirmDialog, isNarrow, openMenu, openPopover, openSheet, promptDialog, toast } from './ui';
 import * as sync from './sync';
 import type { PlaybackState } from './sync';
 
@@ -35,7 +48,6 @@ const MIDI_EXTENSIONS = ['.mid', '.midi'];
 const BPM_PRESETS = [50, 80, 100, 120, 140];
 const MIN_BPM = 20;
 const MAX_BPM = 300;
-const DUCK_VOLUME_PRESETS = [0.1, 0.25, 0.5, 0.75];
 const MIN_TRANSPOSE = -7;
 const MAX_TRANSPOSE = 7;
 const MIN_ZOOM = 0.25;
@@ -45,127 +57,153 @@ const VIEW_EDGE_SLACK_BEATS = 2;
 const CLICK_DRAG_THRESHOLD_PX = 5;
 const MIN_LOOP_BEATS = 0.5;
 const PREVIEW_NOTE_LABEL_MS = 1200;
+const SEARCH_THRESHOLD = 8; // the search field only appears once the library is long enough to need it
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
-  <div id="landing">
-    <h1>AI-Capella</h1>
-    <p id="landing-subtitle">Practicing alone, or rehearsing together?</p>
-    <button id="mode-solo-btn">Solo<span>Just this device -- nothing shared</span></button>
-    <button id="mode-ensemble-btn">Ensemble<span>Synced playback with everyone else</span></button>
-  </div>
-  <aside id="library">
-    <h1>AI-Capella</h1>
-    <h2>Library</h2>
-    <ul id="song-list"></ul>
-    <button id="import-btn">+ Import score</button>
-    <input id="import-input" type="file" accept=".musicxml,.xml,.mxl,.mid,.midi" multiple hidden />
-    <div id="import-status"></div>
-    <button id="switch-mode-btn" title="Switch between Solo and Ensemble mode"></button>
-  </aside>
-  <main id="workspace">
-    <header id="song-header">
-      <div id="header-left">
-        <button id="library-back-btn" title="Back to library">&#8592; Library</button>
-        <h2 id="song-title">Choose a song</h2>
-      </div>
-      <div id="header-right">
-        <div id="position-display">—</div>
-        <button id="stop-btn-mini" disabled title="Stop and reset to the start">&#9632;</button>
-        <button id="play-btn-mini" disabled title="Play/Pause">&#9658;</button>
+  <section id="landing" class="view" aria-label="AI-Capella">
+    <canvas class="ribbons" id="landing-ribbons" aria-hidden="true"></canvas>
+    <h1 class="landing-name"><i>AI</i>-Capella</h1>
+    <div class="landing-modes">
+      <button type="button" class="mode-btn" id="mode-solo-btn">${icon('user')}<span>${t('practiseAlone')}</span></button>
+      <button type="button" class="mode-btn" id="mode-ensemble-btn">${icon('users')}<span>${t('rehearseTogether')}</span></button>
+    </div>
+  </section>
+
+  <section id="library" class="view">
+    <header class="lib-top">
+      <span class="brand"><canvas class="mark" aria-hidden="true"></canvas><span class="wordmark"><i>AI</i>-Capella</span></span>
+      <div class="lib-top-r">
+        <div class="seg mode-seg" id="mode-seg" role="group" aria-label="${t('mode')}">
+          <button type="button" data-action="mode" data-mode="solo">${icon('user')}<span>${t('solo')}</span></button>
+          <button type="button" data-action="mode" data-mode="ensemble">${icon('users')}<span>${t('ensemble')}</span><i class="live-dot" aria-hidden="true"></i></button>
+        </div>
+        <button type="button" class="icon-btn" id="lib-menu-btn" aria-label="${t('menu')}">${icon('more')}</button>
       </div>
     </header>
-    <div id="settings-panel">
-      <div id="parts-panel"></div>
-      <div id="transport">
-        <button id="play-btn" disabled>&#9658;</button>
-        <button id="stop-btn" disabled title="Stop and reset to the start">&#9632;</button>
-        <button id="loop-btn" class="icon-btn" disabled title="Drag the ruler above the roll to set a loop">&#8635;</button>
-        <button id="metronome-btn" disabled>Metronome</button>
-        <button id="view-toggle-btn" disabled title="Switch between piano roll and sheet music">Sheet Music</button>
-        <div class="transport-group" id="bpm-group">
-          <span class="transport-label">BPM</span>
-          <input id="bpm-input" type="number" min="${MIN_BPM}" max="${MAX_BPM}" step="1" inputmode="numeric" title="Custom BPM" />
-          ${BPM_PRESETS.map((b) => `<button class="bpm-btn" data-bpm="${b}">${b}</button>`).join('')}
+    <div class="lib-scroll">
+      <div class="lib-head">
+        <div>
+          <h1>${t('repertoire')}</h1>
+          <p id="lib-count"></p>
         </div>
-        <div class="transport-group" id="measure-group">
-          <span class="transport-label">Measure</span>
-          <button id="measure-prev-btn" class="measure-step-btn" disabled title="Hold to jump back faster">&minus;</button>
-          <input id="measure-input" type="number" min="1" step="1" inputmode="numeric" disabled />
-          <button id="measure-go-btn" disabled>Go</button>
-          <button id="measure-next-btn" class="measure-step-btn" disabled title="Hold to jump forward faster">&plus;</button>
-        </div>
-        <div class="transport-group" id="sections-group">
-          <span class="transport-label">Sections</span>
-          <div id="sections-list"></div>
-          <button id="section-add-btn" class="desktop-only" disabled title="Mark the current position as the next section (A, B, C, ...)">&plus;</button>
-          <button id="save-config-btn" class="desktop-only" disabled title="Save the current transpose, BPM, and sections as this song's default">Save</button>
-        </div>
-        <div class="transport-group" id="transpose-group">
-          <span class="transport-label">Transpose</span>
-          <button id="transpose-down">&minus;</button>
-          <span id="transpose-value">0</span>
-          <button id="transpose-up">&plus;</button>
-        </div>
-        <div class="transport-group" id="zoom-group">
-          <span class="transport-label">Zoom</span>
-          <button id="zoom-out">&minus;</button>
-          <span id="zoom-value">100%</span>
-          <button id="zoom-in">&plus;</button>
-        </div>
-        <div class="transport-group" id="duck-volume-group" title="Volume of the other voices while one is soloed">
-          <span class="transport-label">Solo Volume</span>
-          ${DUCK_VOLUME_PRESETS.map((v) => `<button class="duck-btn" data-duck="${v}">${Math.round(v * 100)}%</button>`).join('')}
+        <div class="lib-tools">
+          <label class="search" id="lib-search-wrap" hidden>${icon('search')}<input id="lib-search" type="search" placeholder="${t('searchTitles')}" aria-label="${t('searchTitles')}" /></label>
+          <button type="button" class="btn primary" id="import-btn">${icon('plus')}<span>${t('addArrangement')}</span></button>
         </div>
       </div>
+      <div id="lib-banner" class="banner" role="status" hidden></div>
+      <ul id="song-grid" class="song-grid"></ul>
+      <p class="lib-tip">${icon('upload')}<span>${t('dropTip')}</span></p>
     </div>
-    <div id="settings-toggle-row">
-      <button id="settings-toggle" title="Hide settings" aria-expanded="true">&#9662;</button>
+    <div class="drop-veil" aria-hidden="true"><span>${icon('upload')}${t('dropHere')}</span></div>
+    <input id="import-input" type="file" accept=".musicxml,.xml,.mxl,.mid,.midi" multiple hidden />
+  </section>
+
+  <section id="player" class="view">
+    <header class="p-top">
+      <button type="button" class="back-btn" id="library-back-btn">${icon('back')}<span>${t('back')}</span></button>
+      <div class="p-title">
+        <h2 id="song-title"></h2>
+        <span id="song-meta"></span>
+      </div>
+      <div class="p-top-r">
+        <div class="seg view-seg" id="view-seg" role="group" aria-label="${t('view')}">
+          <button type="button" data-action="view" data-view="roll" aria-label="${t('pianoRoll')}">${icon('roll')}<span>${t('pianoRoll')}</span></button>
+          <button type="button" data-action="view" data-view="staff" aria-label="${t('sheetMusic')}">${icon('sheet')}<span>${t('sheetMusic')}</span></button>
+        </div>
+        <button type="button" class="badge" id="mode-badge"></button>
+        <button type="button" class="icon-btn landscape-only" data-action="open-mixer" aria-label="${t('voices')}">${icon('mixer')}</button>
+        <button type="button" class="icon-btn" id="player-menu-btn" aria-label="${t('menu')}">${icon('more')}</button>
+      </div>
+    </header>
+    <aside class="voices-panel" aria-label="${t('voices')}">
+      <div class="panel-head"><span class="label">${t('voices')}</span><button type="button" class="link-btn" data-action="mix-reset">${t('reset')}</button></div>
+      <ul class="voice-list" id="voice-list"></ul>
+      <div class="duck">
+        <label class="label" for="duck-range-side">${t('othersWhileSoloing')}</label>
+        <div class="duck-row"><input type="range" class="duck-range" id="duck-range-side" min="0" max="0.75" step="0.05" /><output class="duck-value"></output></div>
+      </div>
+    </aside>
+    <div class="chips" id="voice-chips" role="group" aria-label="${t('voices')}"></div>
+    <div class="chips-mixer"><button type="button" class="chip mixer-chip" data-action="open-mixer" aria-label="${t('voices')}">${icon('mixer')}</button></div>
+    <div class="stage" id="stage">
+      <canvas id="roll"></canvas>
+      <canvas id="staff" hidden></canvas>
+      <div class="zoom" role="group" aria-label="Zoom">
+        <button type="button" class="icon-btn" data-action="zoom-out" aria-label="${t('zoomOut')}">${icon('minus')}</button>
+        <span id="zoom-value">100%</span>
+        <button type="button" class="icon-btn" data-action="zoom-in" aria-label="${t('zoomIn')}">${icon('plus')}</button>
+      </div>
     </div>
-    <canvas id="roll"></canvas>
-    <canvas id="staff" class="hidden"></canvas>
-  </main>
+    <div class="overview" id="overview-wrap">
+      <canvas id="overview" title="${t('wholePiece')}"></canvas>
+      <div id="section-marks"></div>
+      <button type="button" class="icon-btn small" id="section-add-btn" data-action="section-add" aria-label="${t('addSection')}" title="${t('addSection')}">${icon('flag')}</button>
+    </div>
+    <button type="button" class="info-row" data-action="open-controls">
+      <span><b data-bind="pos-bar"></b> <span data-bind="pos-beat-short"></span></span>
+      <span class="info-tempo">${icon('quarter')}<b data-bind="bpm"></b></span>
+      <span>${t('key')} <b data-bind="transpose"></b></span>
+      <span class="info-metro" data-bind-metro>${icon('metronome')}</span>
+      ${icon('chevronUp')}
+    </button>
+    <footer class="transport">
+      <button type="button" class="pos" data-action="goto" aria-label="${t('goToBar')}">
+        <b data-bind="pos-bar"></b><span data-bind="pos-beat"></span>
+      </button>
+      <div class="t-center">
+        <button type="button" class="t-btn t-stop-left" data-action="stop" aria-label="${t('stop')}" title="${t('stop')}">${icon('stop')}</button>
+        <button type="button" class="t-btn" data-hold="-1" aria-label="${t('prevBar')}" title="${t('prevBar')}">${icon('prev')}</button>
+        <button type="button" class="t-btn t-stop-mid" data-action="stop" aria-label="${t('stop')}" title="${t('stop')}">${icon('stop')}</button>
+        <button type="button" class="play-btn" data-action="play" aria-label="${t('play')}">${icon('play')}</button>
+        <button type="button" class="t-btn" data-hold="1" aria-label="${t('nextBar')}" title="${t('nextBar')}">${icon('next')}</button>
+        <span class="t-sep" aria-hidden="true"></span>
+        <button type="button" class="t-btn toggle" data-action="loop" aria-pressed="false">${icon('loop')}</button>
+        <button type="button" class="t-btn toggle t-metro" data-action="metronome" aria-pressed="false" aria-label="${t('metronome')}" title="${t('metronome')}">${icon('metronome')}</button>
+      </div>
+      <div class="t-right">
+        <div class="stepper" role="group" aria-label="${t('tempo')}">
+          <button type="button" data-action="bpm-down" aria-label="${t('slower')}">${icon('minus')}</button>
+          <button type="button" class="stepper-value" data-action="open-tempo">${icon('quarter')}<span>= <b data-bind="bpm"></b></span></button>
+          <button type="button" data-action="bpm-up" aria-label="${t('faster')}">${icon('plus')}</button>
+        </div>
+        <div class="stepper" role="group" aria-label="${t('key')}">
+          <span class="label">${t('key')}</span>
+          <button type="button" data-action="transpose-down" aria-label="${t('lower')}">${icon('minus')}</button>
+          <span class="stepper-value static"><b data-bind="key-short"></b></span>
+          <button type="button" data-action="transpose-up" aria-label="${t('higher')}">${icon('plus')}</button>
+        </div>
+      </div>
+    </footer>
+  </section>
 `;
 
-const songListEl = document.querySelector<HTMLUListElement>('#song-list')!;
+const libraryEl = document.querySelector<HTMLElement>('#library')!;
+const songGridEl = document.querySelector<HTMLUListElement>('#song-grid')!;
+const libCountEl = document.querySelector<HTMLParagraphElement>('#lib-count')!;
+const libBannerEl = document.querySelector<HTMLDivElement>('#lib-banner')!;
+const searchWrapEl = document.querySelector<HTMLLabelElement>('#lib-search-wrap')!;
+const searchInput = document.querySelector<HTMLInputElement>('#lib-search')!;
 const importBtn = document.querySelector<HTMLButtonElement>('#import-btn')!;
 const importInput = document.querySelector<HTMLInputElement>('#import-input')!;
-const importStatusEl = document.querySelector<HTMLDivElement>('#import-status')!;
-const libraryEl = document.querySelector<HTMLElement>('#library')!;
-const libraryBackBtn = document.querySelector<HTMLButtonElement>('#library-back-btn')!;
 const songTitleEl = document.querySelector<HTMLHeadingElement>('#song-title')!;
-const positionEl = document.querySelector<HTMLDivElement>('#position-display')!;
-const settingsPanelEl = document.querySelector<HTMLDivElement>('#settings-panel')!;
-const settingsToggleBtn = document.querySelector<HTMLButtonElement>('#settings-toggle')!;
-const partsPanelEl = document.querySelector<HTMLDivElement>('#parts-panel')!;
-const playBtn = document.querySelector<HTMLButtonElement>('#play-btn')!;
-const playBtnMini = document.querySelector<HTMLButtonElement>('#play-btn-mini')!;
-const stopBtn = document.querySelector<HTMLButtonElement>('#stop-btn')!;
-const stopBtnMini = document.querySelector<HTMLButtonElement>('#stop-btn-mini')!;
-const metronomeBtn = document.querySelector<HTMLButtonElement>('#metronome-btn')!;
-const loopBtn = document.querySelector<HTMLButtonElement>('#loop-btn')!;
-const transposeValueEl = document.querySelector<HTMLSpanElement>('#transpose-value')!;
-const transposeDownBtn = document.querySelector<HTMLButtonElement>('#transpose-down')!;
-const transposeUpBtn = document.querySelector<HTMLButtonElement>('#transpose-up')!;
+const songMetaEl = document.querySelector<HTMLSpanElement>('#song-meta')!;
+const voiceListEl = document.querySelector<HTMLUListElement>('#voice-list')!;
+const chipsEl = document.querySelector<HTMLDivElement>('#voice-chips')!;
 const zoomValueEl = document.querySelector<HTMLSpanElement>('#zoom-value')!;
-const zoomOutBtn = document.querySelector<HTMLButtonElement>('#zoom-out')!;
-const zoomInBtn = document.querySelector<HTMLButtonElement>('#zoom-in')!;
-const bpmInput = document.querySelector<HTMLInputElement>('#bpm-input')!;
-const measureInput = document.querySelector<HTMLInputElement>('#measure-input')!;
-const measureGoBtn = document.querySelector<HTMLButtonElement>('#measure-go-btn')!;
-const measurePrevBtn = document.querySelector<HTMLButtonElement>('#measure-prev-btn')!;
-const measureNextBtn = document.querySelector<HTMLButtonElement>('#measure-next-btn')!;
-const sectionsListEl = document.querySelector<HTMLDivElement>('#sections-list')!;
+const sectionMarksEl = document.querySelector<HTMLDivElement>('#section-marks')!;
 const sectionAddBtn = document.querySelector<HTMLButtonElement>('#section-add-btn')!;
-const saveConfigBtn = document.querySelector<HTMLButtonElement>('#save-config-btn')!;
+const modeBadge = document.querySelector<HTMLButtonElement>('#mode-badge')!;
 const canvas = document.querySelector<HTMLCanvasElement>('#roll')!;
 const staffCanvas = document.querySelector<HTMLCanvasElement>('#staff')!;
-const viewToggleBtn = document.querySelector<HTMLButtonElement>('#view-toggle-btn')!;
+const overviewCanvas = document.querySelector<HTMLCanvasElement>('#overview')!;
 
 let currentScore: Score | null = null;
 let audioEngine: AudioEngine | null = null;
 let pianoRoll: PianoRoll | null = null;
 let staffView: StaffView | null = null;
+let overview: OverviewStrip | null = null;
 // Which view is currently visible -- a personal display preference like zoom, not synced across
 // devices. The staff view is read-only (see StaffView's doc comment): it just displays and
 // follows the shared beat position; every transport control lives on the shared bar regardless of
@@ -195,6 +233,8 @@ let rafId: number | null = null;
 let renderPending = false;
 let canvasLeft = 0;
 let canvasTop = 0;
+// Sorted notes per part, for the voice activity lights (who is singing at the playhead).
+let notesByPart = new Map<string, { startBeat: number; durationBeats: number }[]>();
 
 // Multi-device sync: which song is currently loaded locally, plus bookkeeping so an incoming
 // shared-session update only actually touches AudioEngine when something timing-relevant
@@ -202,42 +242,61 @@ let canvasTop = 0;
 // metronome, say, must NOT reschedule playback, or every remote toggle would audibly retrigger
 // every currently-sounding note. See applyPlaybackState().
 let loadedSongId: string | null = null;
-// The full SongEntry for whatever's currently loaded -- used to know its format (for hiding the
-// Sheet Music toggle on a MIDI import, task 3) and its imported/Firestore-id status (for gating
-// rename editing to only actual library entries, task 4). loadedSongId alone isn't enough for
-// either.
+// The full SongEntry for whatever's currently loaded -- used to know its format (the Sheet Music
+// view isn't offered for MIDI imports) and its imported/Firestore-id status (renames and saved
+// defaults only apply to actual library entries).
 let currentSong: SongEntry | null = null;
 let pendingSongId: string | null = null; // set when a remote songId isn't in our library list yet
 let lastReceivedPlaybackState: PlaybackState | null = null;
 let lastAppliedTiming: { playing: boolean; originBeat: number; originServerTimeMs: number; bpm: number; transpose: number; countInBeats: number; countInPulseBeats: number } | null = null;
 let lastAppliedMetronomeOn = false;
 
+type LibraryState = 'loading' | 'ready' | 'offline' | 'unconfigured';
+let libraryState: LibraryState = isFirebaseConfigured ? 'loading' : 'unconfigured';
+let libraryError = '';
+
 function updateCanvasRect() {
-  const rect = canvas.getBoundingClientRect();
+  const rect = (activeView === 'staff' ? staffCanvas : canvas).getBoundingClientRect();
   canvasLeft = rect.left;
   canvasTop = rect.top;
 }
-updateCanvasRect();
+
+// ---------------------------------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------------------------------
+
+let stopLandingRibbons: (() => void) | null = null;
 
 /**
- * The app opens on a landing screen (Solo vs. Ensemble, only when there's a shared backend to
- * choose between) the first time, then the library so you can browse/import scores; picking a
+ * The app opens on a title screen (Solo vs. Ensemble, only when there's a shared backend to
+ * choose between) the first time, then the repertoire so you can browse/import scores; picking a
  * song switches to the player.
  */
 function setViewMode(mode: 'landing' | 'library' | 'player') {
   app.classList.toggle('mode-landing', mode === 'landing');
   app.classList.toggle('mode-library', mode === 'library');
   app.classList.toggle('mode-player', mode === 'player');
-  if (mode === 'player') {
-    // The canvas was hidden (display:none) while in library mode, so its layout size wasn't
-    // knowable until now.
-    pianoRoll?.resize();
-    staffView?.resize();
-    updateCanvasRect();
-    renderNow();
+  closeOverlay();
+  if (mode === 'landing' && !stopLandingRibbons) {
+    stopLandingRibbons = animateRibbons(document.querySelector<HTMLCanvasElement>('#landing-ribbons')!, (w, h) =>
+      w < 700
+        ? { voices: 6, x0: -0.1 * w, x1: 1.1 * w, cy: h * 0.5, gap: 13, amp: 26, line: 2.2, halo: 12 }
+        : { voices: 6, x0: -0.04 * w, x1: 1.04 * w, cy: h * 0.5, gap: Math.min(24, h * 0.03), amp: Math.min(46, h * 0.055), line: 2.6, halo: 16, bead: 3.6 },
+    );
+  } else if (mode !== 'landing' && stopLandingRibbons) {
+    stopLandingRibbons();
+    stopLandingRibbons = null;
   }
+  if (mode === 'library') requestAnimationFrame(drawAllCovers);
+  if (mode === 'player') {
+    // The canvases were hidden (display:none) while in library mode, so their layout size wasn't
+    // knowable until now.
+    resizeCanvases();
+  }
+  if (mode !== 'player') releaseWakeLock();
 }
-libraryBackBtn.addEventListener('click', () => {
+
+document.querySelector<HTMLButtonElement>('#library-back-btn')!.addEventListener('click', () => {
   // Publishes a normal synced Stop -- in Ensemble mode this stops every device, not just this
   // one, matching the expectation that leaving to browse the library shouldn't leave a song
   // silently still playing for the rest of the group. Safe no-op if nothing is loaded/playing
@@ -253,160 +312,334 @@ libraryBackBtn.addEventListener('click', () => {
 // (so reopening the app mid-rehearsal doesn't re-ask every time) is unaffected going forward.
 const MODE_STORAGE_KEY = 'ai-capella-mode-v2';
 // Solo = fully local, no shared playback session at all (even though Firebase may be
-// configured) -- for practicing alone without nudging anyone else's playback. Ensemble = today's
-// behavior, the single shared session. The shared song *library* stays available either way; only
-// playback sync is gated by this choice. Resolved once at startup (see the bootstrap below) and
-// changed only via the "switch mode" control, which just reloads -- there's no in-place teardown
-// of an active Firestore subscription.
+// configured) -- for practicing alone without nudging anyone else's playback. Ensemble = the
+// single shared session. The shared song *library* stays available either way; only playback sync
+// is gated by this choice. Resolved once at startup and changed only via the mode switch, which
+// just reloads -- there's no in-place teardown of an active Firestore subscription.
 let sessionMode: 'solo' | 'ensemble' = 'solo';
 function syncEnabled(): boolean {
   return isFirebaseConfigured && sessionMode === 'ensemble';
 }
 
-const switchModeBtn = document.querySelector<HTMLButtonElement>('#switch-mode-btn')!;
-switchModeBtn.textContent = 'Switch mode';
-switchModeBtn.addEventListener('click', () => {
-  localStorage.removeItem(MODE_STORAGE_KEY);
+function renderModeControls() {
+  document.querySelectorAll<HTMLButtonElement>('#mode-seg [data-mode]').forEach((b) => {
+    b.setAttribute('aria-pressed', String(b.dataset.mode === sessionMode));
+  });
+  document.querySelector<HTMLElement>('#mode-seg')!.hidden = !isFirebaseConfigured;
+  modeBadge.innerHTML = sessionMode === 'ensemble' ? `${icon('users')}<span>${t('ensemble')}</span><i class="live-dot" aria-hidden="true"></i>` : `${icon('user')}<span>${t('solo')}</span>`;
+  modeBadge.hidden = !isFirebaseConfigured;
+}
+
+async function requestModeSwitch(mode: 'solo' | 'ensemble') {
+  if (mode === sessionMode) return;
+  const name = mode === 'solo' ? t('solo') : t('ensemble');
+  const ok = await confirmDialog({
+    title: t('switchToTitle', { mode: name }),
+    body: mode === 'solo' ? t('switchToSolo') : t('switchToEnsemble'),
+    confirmLabel: t('switchAction'),
+  });
+  if (!ok) return;
+  stopPlayback();
+  localStorage.setItem(MODE_STORAGE_KEY, mode);
   location.reload();
-});
+}
+modeBadge.addEventListener('click', () => requestModeSwitch(sessionMode === 'solo' ? 'ensemble' : 'solo'));
 
 function chooseMode(mode: 'solo' | 'ensemble') {
   sessionMode = mode;
   localStorage.setItem(MODE_STORAGE_KEY, mode);
+  renderModeControls();
   setViewMode('library');
   void runBootstrap();
 }
 document.querySelector<HTMLButtonElement>('#mode-solo-btn')!.addEventListener('click', () => chooseMode('solo'));
 document.querySelector<HTMLButtonElement>('#mode-ensemble-btn')!.addEventListener('click', () => chooseMode('ensemble'));
 
-// Mode resolution: a stored choice skips straight to the library; with no stored choice, show the
-// landing screen only if there's actually a backend to choose Ensemble on -- otherwise Ensemble is
-// meaningless and Solo is the only real option, so skip straight to the library as before this
-// feature existed.
-const storedMode = localStorage.getItem(MODE_STORAGE_KEY);
-if (storedMode === 'solo' || storedMode === 'ensemble') {
-  sessionMode = storedMode;
-  setViewMode('library');
-  void runBootstrap();
-} else if (isFirebaseConfigured) {
-  switchModeBtn.style.display = 'none'; // nothing to switch to yet -- no mode has been chosen
-  setViewMode('landing');
-} else {
-  switchModeBtn.style.display = 'none'; // no backend at all -- there's no other mode to switch to
-  setViewMode('library');
-  void runBootstrap();
+function languageItems() {
+  return [
+    { label: 'Deutsch', icon: 'globe' as const, checked: lang === 'de', onSelect: () => lang !== 'de' && setLang('de') },
+    { label: 'English', icon: 'globe' as const, checked: lang === 'en', onSelect: () => lang !== 'en' && setLang('en') },
+  ];
 }
-
-// Shared by the settings-toggle button and the mobile swipe-up/down gesture below. Sets the
-// panel's max-height from its measured scrollHeight (rather than a guessed fixed value, which
-// risks clipping a larger ensemble's wrapped controls on a narrow phone) before toggling the
-// collapsed class, so the CSS max-height transition animates smoothly instead of snapping.
-function toggleSettingsPanel() {
-  const collapsed = settingsPanelEl.classList.contains('collapsed');
-  settingsPanelEl.style.maxHeight = settingsPanelEl.scrollHeight + 'px';
-  if (collapsed) {
-    settingsPanelEl.classList.remove('collapsed');
-  } else {
-    // Forces the browser to apply the just-set max-height (the panel's full height) in one frame
-    // before adding 'collapsed' sets it to 0 in the next -- without this the two style writes
-    // would coalesce and there'd be nothing for the transition to animate from.
-    requestAnimationFrame(() => settingsPanelEl.classList.add('collapsed'));
-  }
-  settingsToggleBtn.innerHTML = collapsed ? '&#9662;' : '&#9656;';
-  settingsToggleBtn.title = collapsed ? 'Hide settings' : 'Show settings';
-  settingsToggleBtn.setAttribute('aria-expanded', String(collapsed));
-}
-settingsToggleBtn.addEventListener('click', toggleSettingsPanel);
-settingsPanelEl.addEventListener('transitionend', (e) => {
-  if (e.propertyName !== 'max-height') return;
-  // Collapsing/expanding changes how much vertical space the canvas has.
-  pianoRoll?.resize();
-  staffView?.resize();
-  updateCanvasRect();
-  renderNow();
+document.querySelector<HTMLButtonElement>('#lib-menu-btn')!.addEventListener('click', (e) => {
+  openMenu(e.currentTarget as HTMLElement, languageItems(), t('language'));
 });
 
-/**
- * Coalesces render requests to at most one per animation frame. Wheel/trackpad events and
- * pointermove can fire far faster than the display refreshes (100+/sec during a fast swipe);
- * rendering synchronously per event does far more repaint work than can ever be shown and was
- * the main source of stutter while panning.
- */
-function scheduleRender() {
-  if (renderPending) return;
-  renderPending = true;
-  requestAnimationFrame(() => {
-    renderPending = false;
-    renderNow();
+// Brand marks (static) -- drawn once they have a layout size.
+function drawMarks() {
+  document.querySelectorAll<HTMLCanvasElement>('canvas.mark').forEach((c) => {
+    const p = prepareCanvas(c);
+    if (p) drawMark(p.ctx, p.w, false);
   });
 }
+
+// ---------------------------------------------------------------------------------------------
+// Repertoire
+// ---------------------------------------------------------------------------------------------
 
 function allSongs(): SongEntry[] {
   return [...BUILTIN_SONGS, ...importedSongs];
 }
 
-function renderSongList() {
-  songListEl.innerHTML = allSongs()
-    .map(
-      (s) => `
-      <li data-id="${s.id}">
-        <button class="song-btn">${s.title}</button>
-        ${s.imported ? '<button class="song-delete-btn" title="Remove from library">&times;</button>' : ''}
-      </li>`,
-    )
-    .join('');
+interface SongMeta {
+  voices: number;
+  bars: number;
+  key: string;
+  time: string;
+  cover: CoverData;
 }
-renderSongList();
+const metaCache = new Map<string, Promise<SongMeta | null>>();
+const coverCanvases = new Map<HTMLCanvasElement, CoverData>();
+let metaQueue: Promise<unknown> = Promise.resolve();
 
-songListEl.addEventListener('click', (e) => {
-  const target = e.target as HTMLElement;
-  const li = target.closest<HTMLElement>('li');
-  const id = li?.getAttribute('data-id');
-  if (!id) return;
+async function readSongText(song: SongEntry): Promise<string> {
+  return song.xml !== undefined ? song.xml : await fetch(song.url!).then((r) => r.text());
+}
 
-  if (target.closest('.song-delete-btn')) {
-    const song = allSongs().find((s) => s.id === id);
-    // A shared-library delete removes the song for everyone, not just this device -- worth a
-    // deliberate confirmation step (unlike this app's usual "any device can change shared state
-    // immediately" trust model for renames/playback) since it's the one destructive, unrecoverable
-    // action in the whole library.
-    if (window.confirm(`Willst du "${song?.title ?? 'dieses Arrangement'}" wirklich löschen?`)) {
-      void removeImportedSong(id);
-    }
+function parseSong(song: SongEntry, text: string): Score {
+  // Built-in songs (fetched by URL) and imported MusicXML/.mxl files are MusicXML text; MIDI
+  // imports were already parsed into a Score at import time and stored as its JSON serialization.
+  return song.format === 'score' ? (JSON.parse(text) as Score) : parseMusicXML(text);
+}
+
+/** Voices, bars, key, time signature and cover for a library card -- parsed once per song version, one at a time so a big library doesn't freeze the page. */
+function songMeta(song: SongEntry): Promise<SongMeta | null> {
+  const key = `${song.id}:${song.xml?.length ?? 0}`;
+  let cached = metaCache.get(key);
+  if (!cached) {
+    cached = (metaQueue = metaQueue.then(
+      () =>
+        new Promise<SongMeta | null>((resolve) => {
+          setTimeout(async () => {
+            try {
+              const score = parseSong(song, await readSongText(song));
+              const first = score.measures[0];
+              resolve({
+                voices: score.parts.length,
+                bars: score.measures.at(-1)?.number ?? score.measures.length,
+                // MIDI imports carry no key signature (older ones not even a fifths field), so no key is named for them.
+                key: first && song.format !== 'score' ? keyName(first.fifths, first.mode) : '',
+                time: first ? `${first.beats}/${first.beatType}` : '',
+                cover: coverDataFromScore(score),
+              });
+            } catch {
+              resolve(null);
+            }
+          }, 0);
+        }),
+    )) as Promise<SongMeta | null>;
+    metaCache.set(key, cached);
+  }
+  return cached;
+}
+
+function drawCoverCanvas(c: HTMLCanvasElement) {
+  const data = coverCanvases.get(c);
+  if (!data || !c.isConnected) {
+    coverCanvases.delete(c);
     return;
   }
-  const song = allSongs().find((s) => s.id === id);
-  if (song) selectSong(song);
+  const p = prepareCanvas(c);
+  if (p) drawCover(p.ctx, p.w, p.h, data);
+}
+
+function drawAllCovers() {
+  for (const c of coverCanvases.keys()) drawCoverCanvas(c);
+}
+
+function voiceDots(count: number): HTMLSpanElement {
+  const dots = document.createElement('span');
+  dots.className = 'vdots';
+  dots.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < Math.min(count, 8); i++) {
+    const d = document.createElement('i');
+    d.style.setProperty('--c', colorForPart(i, count));
+    dots.appendChild(d);
+  }
+  return dots;
+}
+
+function songCard(song: SongEntry): HTMLLIElement {
+  // Built with DOM APIs and textContent throughout -- song titles come from the shared library,
+  // where anyone with the PIN can set them, so they must never be parsed as HTML.
+  const li = document.createElement('li');
+  li.className = 'song-card';
+  li.dataset.id = song.id;
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'song-open';
+  open.setAttribute('aria-label', t('open', { title: song.title }));
+  const cover = document.createElement('canvas');
+  cover.className = 'cover';
+  cover.setAttribute('aria-hidden', 'true');
+  const body = document.createElement('span');
+  body.className = 'song-body';
+  const title = document.createElement('span');
+  title.className = 'song-title';
+  title.textContent = song.title;
+  const meta = document.createElement('span');
+  meta.className = 'song-meta';
+  meta.innerHTML = '&nbsp;';
+  body.append(title, meta);
+  open.append(cover, body);
+  li.appendChild(open);
+  if (song.imported) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'icon-btn song-more';
+    more.setAttribute('aria-label', t('moreFor', { title: song.title }));
+    more.innerHTML = icon('more');
+    li.appendChild(more);
+  } else {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = t('sample');
+    li.appendChild(tag);
+  }
+  void songMeta(song).then((m) => {
+    if (!m) return;
+    const parts = [countLabel(m.voices, 'voicesOne', 'voicesMany'), countLabel(m.bars, 'barsOne', 'barsMany'), m.key].filter(Boolean);
+    meta.replaceChildren(voiceDots(m.voices), document.createTextNode(parts.join(' · ')));
+    coverCanvases.set(cover, m.cover);
+    requestAnimationFrame(() => drawCoverCanvas(cover));
+  });
+  return li;
+}
+
+function renderSongList() {
+  const songs = allSongs();
+  const q = searchInput.value.trim().toLowerCase();
+  searchWrapEl.hidden = songs.length <= SEARCH_THRESHOLD && !q;
+  const shown = q ? songs.filter((s) => s.title.toLowerCase().includes(q)) : songs;
+  const items: HTMLElement[] = shown.map(songCard);
+  if (libraryState === 'loading') {
+    for (let i = 0; i < 3; i++) {
+      const sk = document.createElement('li');
+      sk.className = 'song-card skeleton';
+      sk.setAttribute('aria-hidden', 'true');
+      items.push(sk);
+    }
+  }
+  if (q && !shown.length) {
+    const empty = document.createElement('li');
+    empty.className = 'empty-note';
+    empty.textContent = t('noMatches', { q: searchInput.value.trim() });
+    items.push(empty);
+  }
+  coverCanvases.clear();
+  songGridEl.replaceChildren(...items);
+  const count = countLabel(songs.length, 'arrangementsOne', 'arrangementsMany');
+  libCountEl.textContent = libraryState === 'ready' ? t('sharedWithChoir', { count }) : t('onThisDevice', { count });
+  renderLibraryBanner();
+}
+
+function renderLibraryBanner() {
+  libBannerEl.replaceChildren();
+  libBannerEl.hidden = libraryState === 'ready';
+  if (libraryState === 'ready') return;
+  libBannerEl.classList.toggle('muted', libraryState !== 'offline');
+  const text = document.createElement('div');
+  if (libraryState === 'loading') text.textContent = t('loadingLibrary');
+  else if (libraryState === 'unconfigured') text.textContent = t('notConfigured');
+  else {
+    const b = document.createElement('b');
+    b.textContent = t('offlineTitle');
+    const p = document.createElement('span');
+    p.textContent = t('offlineBody', { msg: libraryError });
+    text.append(b, p);
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn';
+    retry.textContent = t('retry');
+    retry.addEventListener('click', () => location.reload());
+    libBannerEl.append(text, retry);
+    return;
+  }
+  libBannerEl.appendChild(text);
+}
+
+searchInput.addEventListener('input', renderSongList);
+
+songGridEl.addEventListener('click', (e) => {
+  const target = e.target as HTMLElement;
+  const li = target.closest<HTMLElement>('li.song-card');
+  const song = allSongs().find((s) => s.id === li?.dataset.id);
+  if (!song) return;
+  const more = target.closest<HTMLButtonElement>('.song-more');
+  if (more) {
+    openMenu(
+      more,
+      [
+        { label: t('rename'), icon: 'pencil', onSelect: () => void renameSong(song) },
+        { label: t('delete'), icon: 'trash', danger: true, onSelect: () => void confirmDelete(song) },
+      ],
+      song.title,
+    );
+    return;
+  }
+  if (target.closest('.song-open')) selectSong(song);
 });
 
-async function removeImportedSong(id: string) {
+async function confirmDelete(song: SongEntry) {
+  // A shared-library delete removes the song for everyone, not just this device -- worth a
+  // deliberate confirmation step (unlike this app's usual "any device can change shared state
+  // immediately" trust model for renames/playback) since it's the one destructive, unrecoverable
+  // action in the whole library.
+  const ok = await confirmDialog({ title: t('deleteTitle', { title: song.title }), body: t('deleteBody'), confirmLabel: t('delete'), danger: true });
+  if (!ok) return;
   // No optimistic local removal: the shared onSnapshot listener updates `importedSongs` and
   // re-renders for every device (including this one) once Firestore reflects the delete.
   try {
-    await deleteImportedSong(id);
+    await deleteImportedSong(song.id);
   } catch (err) {
-    setImportStatus(`Couldn't remove song: ${err instanceof Error ? err.message : String(err)}`, true);
+    toast(t('deleteFailed', { msg: errorText(err) }), 'error');
   }
 }
 
-function setImportStatus(text: string, isError = false) {
-  importStatusEl.textContent = text;
-  importStatusEl.classList.toggle('error', isError);
+async function renameSong(song: SongEntry) {
+  const value = await promptDialog(t('renameSong'), song.title, t('save'));
+  if (!value) return;
+  applySongTitle(song.id, value, song.title);
+}
+
+/** Renames a library song everywhere it shows, rolling back if the shared write fails. */
+function applySongTitle(songId: string, value: string, previousTitle: string) {
+  // Applied immediately, not after the Firestore round-trip resolves -- waiting made every rename
+  // visibly flash back to the old title first, and a failed write had no visible sign at all.
+  const setLocal = (title: string) => {
+    const entry = importedSongs.find((s) => s.id === songId);
+    if (entry) entry.title = title;
+    if (currentSong?.id === songId) {
+      songTitleEl.textContent = title;
+      if (currentScore) currentScore.title = title;
+    }
+    renderSongList();
+  };
+  setLocal(value);
+  void updateSongMetadata(songId, { title: value }).catch((err) => {
+    setLocal(previousTitle);
+    toast(t('renameFailed', { msg: errorText(err) }), 'error');
+  });
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 async function importFiles(files: FileList | File[]) {
   if (!isFirebaseConfigured) {
-    setImportStatus('Shared library not configured yet.', true);
+    toast(t('notConfigured'), 'error');
     return;
   }
   const list = Array.from(files).filter((f) => ACCEPTED_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext)));
   if (!list.length) {
-    setImportStatus('Choose a .musicxml, .xml, or .mxl file.', true);
+    toast(t('wrongFileType'), 'error');
     return;
   }
 
   let lastImported: SongEntry | null = null;
   for (const file of list) {
+    toast(t('adding', { name: file.name }));
     try {
       const isMidi = MIDI_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext));
       let title: string;
@@ -428,9 +661,9 @@ async function importFiles(files: FileList | File[]) {
       }
       const id = await saveImportedSong({ title, xml, format });
       lastImported = { id, title, xml, format, imported: true };
-      setImportStatus(`Imported "${title}" -- now available on every device.`);
+      toast(t('added', { title }));
     } catch (err) {
-      setImportStatus(`Couldn't import ${file.name}: ${err instanceof Error ? err.message : 'invalid file'}`, true);
+      toast(t('addFailed', { name: file.name, msg: err instanceof Error ? err.message : 'invalid file' }), 'error');
     }
   }
   // The onSnapshot listener will render the confirmed list; select the new song immediately
@@ -440,19 +673,31 @@ async function importFiles(files: FileList | File[]) {
 
 importBtn.addEventListener('click', () => importInput.click());
 importInput.addEventListener('change', () => {
-  if (importInput.files?.length) importFiles(importInput.files);
+  if (importInput.files?.length) void importFiles(importInput.files);
   importInput.value = '';
 });
-libraryEl.addEventListener('dragover', (e) => {
-  e.preventDefault();
+// Files can be dropped anywhere on the repertoire page, not just on one small target.
+let dragDepth = 0;
+libraryEl.addEventListener('dragenter', (e) => {
+  if (!e.dataTransfer?.types.includes('Files')) return;
+  dragDepth++;
   libraryEl.classList.add('drag-over');
 });
-libraryEl.addEventListener('dragleave', () => libraryEl.classList.remove('drag-over'));
+libraryEl.addEventListener('dragover', (e) => e.preventDefault());
+libraryEl.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) libraryEl.classList.remove('drag-over');
+});
 libraryEl.addEventListener('drop', (e) => {
   e.preventDefault();
+  dragDepth = 0;
   libraryEl.classList.remove('drag-over');
-  if (e.dataTransfer?.files.length) importFiles(e.dataTransfer.files);
+  if (e.dataTransfer?.files.length) void importFiles(e.dataTransfer.files);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Loading a song
+// ---------------------------------------------------------------------------------------------
 
 /**
  * Announces a song choice to the shared session; every connected device (including this one)
@@ -466,10 +711,10 @@ function selectSong(song: SongEntry) {
     originBeat: 0,
     originServerTimeMs: 0,
     // A saved default (the "Save" action, see saveSongConfig) takes over from the usual hardcoded
-    // reset -- transpose always explicit (0 with no saved config, same as before); bpm only
-    // included when actually saved, so a song with no saved config still keeps today's behavior
-    // of carrying over whatever BPM the previous song was left at (bpm is otherwise never reset
-    // on song selection, and pushState's merge write would otherwise need it omitted, not zeroed).
+    // reset -- transpose always explicit (0 with no saved config); bpm only included when actually
+    // saved, so a song with no saved config keeps whatever BPM the previous song was left at (bpm
+    // is otherwise never reset on song selection, and pushState's merge write would otherwise need
+    // it omitted, not zeroed).
     transpose: song.savedConfig?.transpose ?? 0,
     ...(song.savedConfig?.bpm != null ? { bpm: song.savedConfig.bpm } : {}),
     metronomeOn: false,
@@ -483,13 +728,13 @@ function selectSong(song: SongEntry) {
   });
 }
 
+const fontsReady = canvasFontsReady();
+
 /** Does the actual work of loading a song locally. Only ever called from applyPlaybackState(). */
 async function loadSongLocally(song: SongEntry) {
   stopRenderLoop();
-  const xmlText: string = song.xml !== undefined ? song.xml : await fetch(song.url!).then((r) => r.text());
-  // Built-in songs (fetched by URL) and imported MusicXML/.mxl files are MusicXML text; MIDI
-  // imports were already parsed into a Score at import time and stored as its JSON serialization.
-  const score: Score = song.format === 'score' ? (JSON.parse(xmlText) as Score) : parseMusicXML(xmlText);
+  const score = parseSong(song, await readSongText(song));
+  await fontsReady;
   if (song.partNameOverrides) {
     for (const part of score.parts) {
       const override = song.partNameOverrides[part.id];
@@ -499,11 +744,11 @@ async function loadSongLocally(song: SongEntry) {
   currentScore = score;
   currentSong = song;
   loadedSongId = song.id;
+  notesByPart = new Map(score.parts.map((p) => [p.id, score.notes.filter((n) => n.partId === p.id).sort((a, b) => a.startBeat - b.startBeat)]));
   // Only relevant when the source has no rehearsal marks of its own (see renderSections) --
   // reloaded fresh from this song's saved config every time, never carried over from whatever the
   // previously-open song had.
   manualSections = score.rehearsalMarks.length ? [] : (song.savedConfig?.sections ?? []).slice();
-  renderSections();
   zoom = 1;
   zoomValueEl.textContent = '100%';
   viewOffsetBeats = 0;
@@ -516,42 +761,39 @@ async function loadSongLocally(song: SongEntry) {
 
   audioEngine = new AudioEngine(score);
   audioEngine.setDuckedVolume(duckVolume);
-  const partColor = (partId: string) => {
-    const idx = score.parts.findIndex((p) => p.id === partId);
-    return colorForPartIndex(idx);
-  };
+  const partColor = (partId: string) => colorForPart(score.parts.findIndex((p) => p.id === partId), score.parts.length);
+  // Shown first so the canvases have a real layout size when the views measure themselves.
+  setViewMode('player');
   pianoRoll = new PianoRoll(canvas, score, partColor);
   pianoRoll.setLoopRegion(null);
   staffView = new StaffView(staffCanvas, score, partColor);
-  staffView.resize();
-  viewToggleBtn.disabled = false;
+  overview = new OverviewStrip(overviewCanvas, score, partColor);
   // MIDI imports have no real notated spelling -- only a heuristic chromatic fallback (see
   // staffView.ts) -- so the sheet-music view isn't offered for them at all. Force back to the
   // piano roll if the previous song was left showing the staff view.
-  viewToggleBtn.classList.toggle('hidden', song.format === 'score');
-  if (song.format === 'score' && activeView === 'staff') setActiveView('roll');
+  document.querySelector<HTMLElement>('#view-seg')!.hidden = song.format === 'score';
+  if (song.format === 'score' && activeView === 'staff') activeView = 'roll';
 
   // Mute/solo isn't synced (see PlaybackState's doc comment) -- every device starts a new song
   // with its own fresh, all-normal mix.
   partMix = new Map(score.parts.map((p) => [p.id, 'normal' as PartMixState]));
-  pianoRoll.setPartMix(partMix);
-  staffView?.setPartMix(partMix);
-
   songTitleEl.textContent = score.title;
-  playBtn.disabled = false;
-  playBtnMini.disabled = false;
-  stopBtn.disabled = false;
-  stopBtnMini.disabled = false;
-  metronomeBtn.disabled = false;
-  loopBtn.disabled = false;
-  measureInput.disabled = false;
-  measureGoBtn.disabled = false;
-  measurePrevBtn.disabled = false;
-  measureNextBtn.disabled = false;
-  measureInput.max = String(score.measures.at(-1)?.number ?? 1);
-  buildPartsPanel(score);
-  setViewMode('player');
+  songTitleEl.title = song.imported ? t('renameSong') : '';
+  const first = score.measures[0];
+  songMetaEl.textContent = first
+    ? [song.format === 'score' ? '' : keyName(first.fifths, first.mode), `${first.beats}/${first.beatType}`, countLabel(score.measures.at(-1)?.number ?? score.measures.length, 'barsOne', 'barsMany')]
+        .filter(Boolean)
+        .join(' · ')
+    : '';
+  buildVoiceControls(score);
+  applyMixToViews();
+  renderSections();
+  setActiveView(activeView);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Shared playback state
+// ---------------------------------------------------------------------------------------------
 
 /** The full shared-session shape reconstructed from this device's own current state. */
 function currentStateSnapshot(): PlaybackState {
@@ -573,21 +815,18 @@ function currentStateSnapshot(): PlaybackState {
 
 /**
  * The single way every synced control below changes playback/loop state: publish the change and
- * let it come back through applyPlaybackState(), rather than mutating local state directly. This
- * mirrors a pattern the shared song library already used (deleting a song updates every device,
- * including the one that clicked delete, only once Firestore reflects it) -- applied consistently
- * to every transport control instead of just song deletion. Without Firebase configured there's no
- * shared session to round-trip through, so state is applied immediately instead (single-device
- * fallback, matching this app's pre-sync behavior); a "start playing" patch has its sync-buffer
- * origin timestamp zeroed in that case, so AudioEngine.play() takes its normal "as soon as
- * possible" path instead of waiting for a sync instant nothing else is listening for.
- * Mute/solo/true-solo are the one exception -- deliberately local-only, see PlaybackState's doc
- * comment in sync.ts -- so they mutate state directly instead of going through here.
+ * let it come back through applyPlaybackState(), rather than mutating local state directly.
+ * Without the shared session (Solo mode, or no Firebase) there's nothing to round-trip through, so
+ * state is applied immediately instead; a "start playing" patch has its sync-buffer origin
+ * timestamp zeroed in that case, so AudioEngine.play() takes its normal "as soon as possible" path
+ * instead of waiting for a sync instant nothing else is listening for. Mute/solo/true-solo are the
+ * one exception -- deliberately local-only, see PlaybackState's doc comment in sync.ts -- so they
+ * mutate state directly instead of going through here.
  */
 function pushState(patch: Partial<PlaybackState>) {
   if (syncEnabled()) {
     void sync.publishPlaybackState(patch).catch((err) => {
-      setImportStatus(`Couldn't sync: ${err instanceof Error ? err.message : String(err)}`, true);
+      toast(t('syncFailed', { msg: errorText(err) }), 'error');
     });
   } else {
     // The sync-buffer skip below only applies when there's no count-in: a count-in still needs
@@ -602,9 +841,7 @@ function pushState(patch: Partial<PlaybackState>) {
  * pushState() for every "start playing at this beat" patch (Play, seek-while-playing, BPM/
  * transpose change while playing) -- waits for clock calibration to have attempted at least once
  * first (see sync.ensureCalibrated's doc comment), so the very first Play right after the app
- * loads doesn't compute its sync target against a default, unmeasured offset. Callers stay
- * synchronous and fire this without awaiting it, so it never delays anything else the calling
- * handler does locally (e.g. seekToBeat's own view-position compensation). `extraLeadMs` (a
+ * loads doesn't compute its sync target against a default, unmeasured offset. `extraLeadMs` (a
  * count-in's real duration) pushes the music's start instant further out so the count-in has room
  * to play before it -- see sync.computeFutureOriginServerTimeMs's doc comment.
  */
@@ -620,7 +857,7 @@ async function applyPlaybackState(state: PlaybackState) {
     const song = allSongs().find((s) => s.id === state.songId);
     if (!song) {
       pendingSongId = state.songId;
-      setImportStatus('Waiting for the shared song to finish syncing…');
+      toast(t('waitingForSong'));
       return;
     }
     pendingSongId = null;
@@ -628,30 +865,28 @@ async function applyPlaybackState(state: PlaybackState) {
   }
 
   bpm = state.bpm;
-  document.querySelectorAll<HTMLButtonElement>('.bpm-btn').forEach((b) => b.classList.toggle('active', b.getAttribute('data-bpm') === String(bpm)));
-  // Skipped while the field itself has focus -- otherwise a remote BPM change (another device's
-  // preset click, in Ensemble mode) would overwrite whatever this device is still mid-typing.
-  if (document.activeElement !== bpmInput) bpmInput.value = String(bpm);
   transpose = state.transpose;
-  transposeValueEl.textContent = transpose > 0 ? `+${transpose}` : String(transpose);
   pianoRoll?.setTranspose(transpose);
   staffView?.setTranspose(transpose);
   loopEnabled = state.loopEnabled;
   loopRegion = state.loopRegion;
   pianoRoll?.setLoopRegion(loopRegion);
-  updateLoopButton();
+  overview?.setLoopRegion(loopRegion);
   // No side effect of its own (only read later, synchronously, inside togglePlay) -- kept
   // unconditional/undedup'd so it's never staler than necessary.
   freshStart = state.freshStart;
 
-  if (!audioEngine) return;
+  if (!audioEngine) {
+    refreshBindings();
+    return;
+  }
 
   if (state.metronomeOn !== lastAppliedMetronomeOn) {
     lastAppliedMetronomeOn = state.metronomeOn;
     metronomeOn = state.metronomeOn;
-    metronomeBtn.classList.toggle('active', metronomeOn);
     audioEngine.setMetronomeEnabled(metronomeOn);
   }
+  refreshBindings();
 
   const timingChanged =
     !lastAppliedTiming ||
@@ -671,7 +906,10 @@ async function applyPlaybackState(state: PlaybackState) {
     countInBeats: state.countInBeats,
     countInPulseBeats: state.countInPulseBeats,
   };
-  if (!timingChanged) return;
+  if (!timingChanged) {
+    renderNow();
+    return;
+  }
 
   viewOffsetBeats = 0;
   if (!state.playing) {
@@ -691,169 +929,344 @@ async function applyPlaybackState(state: PlaybackState) {
   startRenderLoop();
 }
 
-/**
- * Swaps `el` for an inline text input, prefilled with `initialValue` and focused/selected; Enter
- * or blur commits (calling `onCommit` only if the value is non-empty and actually changed),
- * Escape reverts. `el` itself is put back in place before `onCommit` runs, so the caller can
- * safely mutate it (e.g. set its text) once the write it kicks off actually succeeds.
- */
-function startInlineEdit(el: HTMLElement, initialValue: string, onCommit: (value: string) => void) {
-  const input = document.createElement('input');
-  input.className = 'inline-edit-input';
-  input.value = initialValue;
-  el.replaceWith(input);
-  input.focus();
-  input.select();
-  let done = false;
-  const finish = (commit: boolean) => {
-    if (done) return;
-    done = true;
-    const value = input.value.trim();
-    input.replaceWith(el);
-    if (commit && value && value !== initialValue) onCommit(value);
-  };
-  input.addEventListener('blur', () => finish(true));
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      input.blur();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      finish(false);
-    }
+/** Current key after transposing, e.g. "A major" -- the key signature moves by fifths with the tonic. */
+function transposedKeyName(): string {
+  const first = currentScore?.measures[0];
+  if (!first || currentSong?.format === 'score') return '';
+  const tonic = (((first.fifths * 7) % 12) + 12) % 12;
+  let fifths = ((((tonic + transpose) % 12) + 12) % 12) * 7 % 12;
+  if (fifths > 6) fifths -= 12;
+  return keyName(fifths, first.mode);
+}
+
+function signed(n: number): string {
+  return n > 0 ? `+${n}` : n < 0 ? `−${-n}` : '±0';
+}
+
+/** Pushes the current tempo/key/loop/metronome state into every control bound to it (transport, dock, sheets, popovers). */
+function refreshBindings() {
+  document.querySelectorAll('[data-bind="bpm"]').forEach((el) => (el.textContent = String(bpm)));
+  document.querySelectorAll('[data-bind="transpose"]').forEach((el) => (el.textContent = signed(transpose)));
+  const keyNow = transposedKeyName();
+  document.querySelectorAll('[data-bind="key"]').forEach((el) => (el.textContent = keyNow));
+  document.querySelectorAll('[data-bind="key-short"]').forEach((el) => (el.textContent = keyNow ? `${keyNow.split(/[ -]/)[0]} · ${signed(transpose)}` : signed(transpose)));
+  document.querySelectorAll<HTMLButtonElement>('.bpm-preset').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.bpm) === bpm)));
+  // Skipped while a field has focus -- otherwise a remote BPM change (another device's preset
+  // click, in Ensemble mode) would overwrite whatever this device is still mid-typing.
+  document.querySelectorAll<HTMLInputElement>('.bpm-input').forEach((input) => {
+    if (document.activeElement !== input) input.value = String(bpm);
+  });
+  document.querySelectorAll<HTMLElement>('[data-action="metronome"]').forEach((el) => {
+    el.setAttribute(el.getAttribute('role') === 'switch' ? 'aria-checked' : 'aria-pressed', String(metronomeOn));
+  });
+  document.querySelectorAll<HTMLElement>('[data-bind-metro]').forEach((el) => el.classList.toggle('on', metronomeOn));
+  let loopTitle: string;
+  if (loopEnabled) loopTitle = t('stopLooping');
+  else if (loopRegion && currentScore) {
+    const from = measureAtBeat(currentScore, loopRegion.start)?.number ?? 1;
+    const to = measureAtBeat(currentScore, Math.max(loopRegion.start, loopRegion.end - 0.001))?.number ?? from;
+    loopTitle = t('loopRegion', { from, to });
+  } else loopTitle = t('loopWhole');
+  document.querySelectorAll<HTMLElement>('[data-action="loop"]').forEach((el) => {
+    el.setAttribute('aria-pressed', String(loopEnabled));
+    el.setAttribute('aria-label', loopTitle);
+    el.title = loopTitle;
   });
 }
 
-// Renaming only writes to Firestore for actual shared-library songs (currentSong.imported) --
-// the bundled built-in sample has no Firestore doc to write to. Immediate, no confirmation step,
-// matching the app's existing trust model (any device can already import/delete library songs
-// the same way). #song-title and #parts-panel have no live onSnapshot subscription of their own
-// (only the library sidebar does) -- so the local text is only updated here, once the write
-// actually succeeds, rather than waiting on a round-trip that will never arrive for this
-// already-open view.
-songTitleEl.addEventListener('dblclick', () => {
-  if (!currentSong?.imported || !currentScore) return;
-  const songId = currentSong.id;
-  const previousTitle = currentScore.title;
-  startInlineEdit(songTitleEl, previousTitle, (value) => {
-    // Applied immediately, not after the Firestore round-trip resolves: el's own text was never
-    // touched by startInlineEdit itself, so waiting for the write to settle before updating it
-    // meant every rename visibly flashed back to the OLD title the instant you hit Enter/blurred,
-    // then (if and when the write actually succeeded) jumped to the new one a moment later --
-    // itself enough to read as "unstable," and on a failed write (permissions, network) there was
-    // no user-visible sign at all beyond a console.warn, just a silent revert.
-    songTitleEl.textContent = value;
-    if (currentScore) currentScore.title = value;
-    void updateSongMetadata(songId, { title: value }).catch((err) => {
-      // Only roll back if this is still the song actually on screen -- the user may have already
-      // navigated elsewhere by the time this rejects.
-      if (currentSong?.id === songId) {
-        songTitleEl.textContent = previousTitle;
-        if (currentScore) currentScore.title = previousTitle;
-      }
-      setImportStatus(`Couldn't rename the song: ${err instanceof Error ? err.message : String(err)}`, true);
-    });
+function syncPlayButtons(playing: boolean) {
+  document.querySelectorAll<HTMLButtonElement>('[data-action="play"]').forEach((b) => {
+    b.innerHTML = icon(playing ? 'pause' : 'play');
+    b.setAttribute('aria-label', playing ? t('pause') : t('play'));
+    b.classList.toggle('playing', playing);
   });
+  if (playing) void requestWakeLock();
+  else releaseWakeLock();
+}
+
+// Keeps the phone screen on while music plays -- a song running past the screen timeout used to
+// dim and lock the phone mid-rehearsal.
+let wakeLock: { release: () => Promise<void> } | null = null;
+async function requestWakeLock() {
+  const nav = navigator as Navigator & { wakeLock?: { request: (type: 'screen') => Promise<{ release: () => Promise<void> }> } };
+  if (!nav.wakeLock || wakeLock) return;
+  try {
+    wakeLock = await nav.wakeLock.request('screen');
+  } catch {
+    wakeLock = null; // denied or unsupported -- harmless
+  }
+}
+function releaseWakeLock() {
+  void wakeLock?.release().catch(() => {});
+  wakeLock = null;
+}
+document.addEventListener('visibilitychange', () => {
+  // The browser drops a wake lock whenever the page is hidden; take it again on return.
+  wakeLock = null;
+  if (document.visibilityState === 'visible' && audioEngine?.isPlaying()) void requestWakeLock();
 });
 
-function buildPartsPanel(score: Score) {
-  partsPanelEl.innerHTML = score.parts
-    .map((p, idx) => {
-      const color = colorForPartIndex(idx);
-      return `
-      <div class="part-row" data-part="${p.id}">
-        <span class="swatch" style="background:${color}"></span>
-        <span class="part-name">${p.name}</span>
-        <button class="mix-btn mute-btn" data-action="muted">M</button>
-        <button class="mix-btn solo-btn" data-action="solo">S</button>
-      </div>`;
-    })
-    .join('');
+// ---------------------------------------------------------------------------------------------
+// Voices: sidebar rows, phone chips, mixer sheet
+// ---------------------------------------------------------------------------------------------
+
+function voiceRow(partId: string, name: string, color: string): HTMLLIElement {
+  const li = document.createElement('li');
+  li.className = 'voice-row';
+  li.dataset.part = partId;
+  li.style.setProperty('--c', color);
+  const light = document.createElement('i');
+  light.className = 'light';
+  light.dataset.part = partId;
+  light.setAttribute('aria-hidden', 'true');
+  const nameBtn = document.createElement('button');
+  nameBtn.type = 'button';
+  nameBtn.className = 'voice-name';
+  nameBtn.textContent = name;
+  nameBtn.title = t('onlyVoice', { name });
+  li.append(light, nameBtn);
+  for (const [mix, letter, label] of [
+    ['muted', 'M', t('mute', { name })],
+    ['solo', 'S', t('soloVoice', { name })],
+  ] as const) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `mix-btn ${mix === 'muted' ? 'mute-btn' : 'solo-btn'}`;
+    b.dataset.mix = mix;
+    b.textContent = letter;
+    b.setAttribute('aria-label', label);
+    b.title = label;
+    b.setAttribute('aria-pressed', 'false');
+    li.appendChild(b);
+  }
+  return li;
 }
 
-function syncPartRowClasses() {
-  partsPanelEl.querySelectorAll<HTMLElement>('.part-row').forEach((row) => {
-    const partId = row.getAttribute('data-part')!;
-    const state = partMix.get(partId) ?? 'normal';
+function buildVoiceControls(score: Score) {
+  voiceListEl.replaceChildren(...score.parts.map((p, i) => voiceRow(p.id, p.name, colorForPart(i, score.parts.length))));
+  const chips = score.parts.map((p, i) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip';
+    chip.dataset.part = p.id;
+    chip.style.setProperty('--c', colorForPart(i, score.parts.length));
+    chip.innerHTML = '<i aria-hidden="true"></i>';
+    chip.append(document.createTextNode(p.name));
+    chip.title = t('onlyVoice', { name: p.name });
+    return chip;
+  });
+  chipsEl.replaceChildren(...chips);
+}
+
+function applyMixToViews() {
+  if (!currentScore) return;
+  pianoRoll?.setPartMix(partMix);
+  staffView?.setPartMix(partMix);
+  const anySolo = Array.from(partMix.values()).some((s) => s === 'solo');
+  const hidden = new Set<string>();
+  const dimmed = new Set<string>();
+  for (const [id, s] of partMix) {
+    if (s === 'muted') hidden.add(id);
+    else if (anySolo && s !== 'solo') dimmed.add(id);
+  }
+  overview?.setMix(dimmed, hidden);
+  document.querySelectorAll<HTMLElement>('.voice-row').forEach((row) => {
+    const state = partMix.get(row.dataset.part!) ?? 'normal';
     row.classList.toggle('is-muted', state === 'muted');
     row.classList.toggle('is-solo', state === 'solo');
+    row.classList.toggle('is-dimmed', dimmed.has(row.dataset.part!));
+    row.querySelector('.mute-btn')?.setAttribute('aria-pressed', String(state === 'muted'));
+    row.querySelector('.solo-btn')?.setAttribute('aria-pressed', String(state === 'solo'));
   });
+  document.querySelectorAll<HTMLElement>('.chip[data-part]').forEach((chip) => {
+    const state = partMix.get(chip.dataset.part!) ?? 'normal';
+    chip.classList.toggle('is-muted', state === 'muted');
+    chip.classList.toggle('is-solo', state === 'solo');
+    chip.classList.toggle('is-dimmed', dimmed.has(chip.dataset.part!));
+  });
+  document.querySelectorAll<HTMLInputElement>('.duck-range').forEach((r) => (r.value = String(duckVolume)));
+  document.querySelectorAll('.duck-value').forEach((o) => (o.textContent = `${Math.round(duckVolume * 100)}%`));
+  renderNow();
+}
+
+function setPartMixState(partId: string, next: PartMixState) {
+  partMix.set(partId, next);
+  audioEngine?.setPartMixState(partId, next);
 }
 
 /**
- * "True solo": mutes AND hides every other voice so only this one is visible/audible (unlike the
- * Solo button, which just ducks/dims the others). Clicking the same voice again restores everyone.
+ * "Only this voice": mutes AND hides every other voice so only this one is visible/audible (unlike
+ * the Solo button, which just ducks/dims the others). Clicking the same voice again restores everyone.
  */
 function toggleTrueSolo(partId: string) {
-  if (!audioEngine || !pianoRoll || !currentScore) return;
-  const alreadyIsolated =
-    partMix.get(partId) !== 'muted' && currentScore.parts.every((p) => p.id === partId || partMix.get(p.id) === 'muted');
-  for (const p of currentScore.parts) {
-    const next: PartMixState = alreadyIsolated || p.id === partId ? 'normal' : 'muted';
-    partMix.set(p.id, next);
-    audioEngine.setPartMixState(p.id, next);
-  }
-  pianoRoll.setPartMix(partMix);
-  staffView?.setPartMix(partMix);
-  syncPartRowClasses();
-  renderNow();
+  if (!audioEngine || !currentScore) return;
+  const alreadyIsolated = partMix.get(partId) !== 'muted' && currentScore.parts.every((p) => p.id === partId || partMix.get(p.id) === 'muted');
+  for (const p of currentScore.parts) setPartMixState(p.id, alreadyIsolated || p.id === partId ? 'normal' : 'muted');
+  applyMixToViews();
 }
 
-partsPanelEl.addEventListener('click', (e) => {
-  const target = e.target as HTMLElement;
-  const row = target.closest<HTMLElement>('.part-row');
-  if (!row || !audioEngine || !pianoRoll) return;
-  const partId = row.getAttribute('data-part')!;
-  const action = target.getAttribute('data-action') as PartMixState | null;
-
-  if (!action) {
-    toggleTrueSolo(partId);
-    return;
-  }
-
+function toggleMix(partId: string, action: PartMixState) {
   const current = partMix.get(partId) ?? 'normal';
-  const next: PartMixState = current === action ? 'normal' : action;
-  partMix.set(partId, next);
-  audioEngine.setPartMixState(partId, next);
-  pianoRoll.setPartMix(partMix);
-  staffView?.setPartMix(partMix);
-  syncPartRowClasses();
-  renderNow();
-});
+  setPartMixState(partId, current === action ? 'normal' : action);
+  applyMixToViews();
+}
 
-// Event delegation, not a per-span listener -- buildPartsPanel fully replaces partsPanelEl's
-// innerHTML on every song load, which would orphan a direct listener.
-partsPanelEl.addEventListener('dblclick', (e) => {
-  const nameEl = (e.target as HTMLElement).closest<HTMLElement>('.part-name');
-  const partId = nameEl?.closest<HTMLElement>('.part-row')?.getAttribute('data-part');
+async function renameVoice(partId: string) {
   const part = currentScore?.parts.find((p) => p.id === partId);
-  if (!nameEl || !part || !currentSong?.imported) return;
+  if (!part || !currentSong?.imported) return;
   const songId = currentSong.id;
   const previousName = part.name;
-  startInlineEdit(nameEl, previousName, (value) => {
-    // See the song-title rename handler's comment -- applied immediately rather than after the
-    // Firestore write resolves, so a rename doesn't visibly flash back to the old name first.
-    part.name = value;
-    nameEl.textContent = value;
-    void updateSongMetadata(songId, { partName: { partId: part.id, name: value } }).catch((err) => {
-      if (currentSong?.id === songId) {
-        part.name = previousName;
-        nameEl.textContent = previousName;
-      }
-      setImportStatus(`Couldn't rename the voice: ${err instanceof Error ? err.message : String(err)}`, true);
+  const value = await promptDialog(t('renameVoice'), previousName, t('save'));
+  if (!value) return;
+  const setName = (name: string) => {
+    part.name = name;
+    document.querySelectorAll<HTMLElement>(`.voice-row[data-part="${CSS.escape(partId)}"] .voice-name`).forEach((el) => (el.textContent = name));
+    document.querySelectorAll<HTMLElement>(`.chip[data-part="${CSS.escape(partId)}"]`).forEach((chip) => {
+      chip.replaceChildren(chip.firstChild!, document.createTextNode(name));
     });
+  };
+  // Applied immediately, rolled back on failure -- see applySongTitle.
+  setName(value);
+  void updateSongMetadata(songId, { partName: { partId, name: value } }).catch((err) => {
+    if (currentSong?.id === songId) setName(previousName);
+    toast(t('renameFailed', { msg: errorText(err) }), 'error');
   });
-});
-
-/** Keeps the header's compact play button and the transport's full one showing the same state. */
-function syncPlayButtons(playing: boolean) {
-  const icon = playing ? '&#10074;&#10074;' : '&#9658;';
-  playBtn.innerHTML = icon;
-  playBtnMini.innerHTML = icon;
 }
 
+function openMixerSheet(opener: HTMLElement) {
+  if (!currentScore) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'sheet-body';
+  const list = document.createElement('ul');
+  list.className = 'voice-list';
+  currentScore.parts.forEach((p, i) => {
+    const row = voiceRow(p.id, p.name, colorForPart(i, currentScore!.parts.length));
+    if (currentSong?.imported) {
+      const rename = document.createElement('button');
+      rename.type = 'button';
+      rename.className = 'icon-btn small rename-voice';
+      rename.dataset.part = p.id;
+      rename.setAttribute('aria-label', t('renameVoice'));
+      rename.innerHTML = icon('pencil');
+      row.appendChild(rename);
+    }
+    list.appendChild(row);
+  });
+  const duck = document.createElement('div');
+  duck.className = 'duck';
+  duck.innerHTML = `<label class="label" for="duck-range-sheet"></label><div class="duck-row"><input type="range" class="duck-range" id="duck-range-sheet" min="0" max="0.75" step="0.05" /><output class="duck-value"></output></div>`;
+  duck.querySelector('label')!.textContent = t('othersWhileSoloing');
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.className = 'btn wide';
+  reset.dataset.action = 'mix-reset';
+  reset.textContent = t('reset');
+  wrap.append(list, duck, reset);
+  openSheet(t('voices'), wrap, opener);
+  applyMixToViews();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tempo, key, sections, go-to-bar panels
+// ---------------------------------------------------------------------------------------------
+
+function tempoBlock(): HTMLElement {
+  const block = document.createElement('div');
+  block.className = 'ctl-block';
+  block.innerHTML = `
+    <div class="ctl-head"><span class="label">${t('tempo')}</span></div>
+    <div class="big-stepper">
+      <button type="button" class="round-btn" data-action="bpm-down" aria-label="${t('slower')}">${icon('minus')}</button>
+      <span class="big-value">${icon('quarter')}<span>= <b data-bind="bpm"></b></span></span>
+      <button type="button" class="round-btn" data-action="bpm-up" aria-label="${t('faster')}">${icon('plus')}</button>
+    </div>
+    <div class="presets">
+      ${BPM_PRESETS.map((b) => `<button type="button" class="bpm-preset" data-action="bpm-preset" data-bpm="${b}" aria-pressed="false">${b}</button>`).join('')}
+    </div>
+    <label class="custom-tempo"><span>${t('customTempo')}</span><input class="bpm-input field" type="number" min="${MIN_BPM}" max="${MAX_BPM}" step="1" inputmode="numeric" /></label>`;
+  return block;
+}
+
+function keyBlock(): HTMLElement {
+  const block = document.createElement('div');
+  block.className = 'ctl-block';
+  const first = currentScore?.measures[0];
+  block.innerHTML = `
+    <div class="ctl-head"><span class="label">${t('key')}</span><span class="ctl-note"></span></div>
+    <div class="big-stepper">
+      <button type="button" class="round-btn" data-action="transpose-down" aria-label="${t('lower')}">${icon('minus')}</button>
+      <span class="big-value"><b data-bind="transpose"></b><small data-bind="key"></small></span>
+      <button type="button" class="round-btn" data-action="transpose-up" aria-label="${t('higher')}">${icon('plus')}</button>
+    </div>`;
+  if (first && currentSong?.format !== 'score') block.querySelector('.ctl-note')!.textContent = t('writtenIn', { key: keyName(first.fifths, first.mode) });
+  return block;
+}
+
+function gotoBlock(): HTMLElement {
+  const block = document.createElement('form');
+  block.className = 'ctl-block goto';
+  const maxBar = currentScore?.measures.at(-1)?.number ?? 1;
+  const current = currentScore ? (measureAtBeat(currentScore, engineBeat())?.number ?? 1) : 1;
+  block.innerHTML = `
+    <label class="label" for="goto-input">${t('goToBar')}</label>
+    <div class="goto-row">
+      <input id="goto-input" class="field measure-input" type="number" min="1" max="${maxBar}" step="1" inputmode="numeric" value="${current}" />
+      <button type="submit" class="btn primary">${t('go')}</button>
+    </div>`;
+  block.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const input = block.querySelector<HTMLInputElement>('input')!;
+    const n = Math.min(Math.max(parseInt(input.value, 10) || 1, 1), maxBar);
+    input.value = String(n);
+    jumpToMeasure(n);
+    closeOverlay();
+  });
+  return block;
+}
+
+function sectionsBlock(): HTMLElement | null {
+  const sections = effectiveSections();
+  if (!sections.length) return null;
+  const block = document.createElement('div');
+  block.className = 'ctl-block';
+  const head = document.createElement('div');
+  head.className = 'ctl-head';
+  head.innerHTML = `<span class="label">${t('sections')}</span>`;
+  const note = document.createElement('span');
+  note.className = 'ctl-note';
+  if (!currentScore?.rehearsalMarks.length && currentSong?.imported) note.textContent = t('addSectionsOnLaptop');
+  head.appendChild(note);
+  const row = document.createElement('div');
+  row.className = 'mark-row';
+  sections.forEach((s, i) => row.appendChild(sectionButton(s.label, i)));
+  block.append(head, row);
+  return block;
+}
+
+function metronomeBlock(): HTMLElement {
+  const block = document.createElement('div');
+  block.className = 'ctl-block switch-row';
+  block.innerHTML = `<span><b>${t('metronome')}</b><span class="ctl-note">${t('countInHint')}</span></span><button type="button" class="switch" role="switch" data-action="metronome" aria-checked="false" aria-label="${t('metronome')}"></button>`;
+  return block;
+}
+
+function openControlsSheet(opener: HTMLElement) {
+  const body = document.createElement('div');
+  body.className = 'sheet-body';
+  body.append(tempoBlock(), keyBlock(), metronomeBlock());
+  const sections = sectionsBlock();
+  if (sections) body.appendChild(sections);
+  body.appendChild(gotoBlock());
+  openSheet(t('tempoAndKey'), body, opener);
+  refreshBindings();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Transport actions
+// ---------------------------------------------------------------------------------------------
+
 function togglePlay() {
-  if (!audioEngine || !currentScore || playBtn.disabled) return;
+  if (!audioEngine || !currentScore) return;
   if (audioEngine.isPlaying()) {
     // A plain Pause -- resuming from here later should NOT count in, only a genuinely fresh start
     // should (see freshStart's doc comment in sync.ts).
@@ -879,12 +1292,10 @@ function togglePlay() {
     void publishPlayingAt(fromBeat, { countInBeats, countInPulseBeats }, extraLeadMs);
   }
 }
-playBtn.addEventListener('click', togglePlay);
-playBtnMini.addEventListener('click', togglePlay);
 
 /** Stops playback and resets to the loop region's start, the last ruler-set start point, or the beginning. */
 function stopPlayback() {
-  if (!audioEngine || !pianoRoll || stopBtn.disabled) return;
+  if (!audioEngine || !currentScore) return;
   const wasPlaying = audioEngine.isPlaying();
   const priorPausedBeat = audioEngine.getPausedBeat();
   const target = loopRegion ? loopRegion.start : (customStartBeat ?? 0);
@@ -892,206 +1303,111 @@ function stopPlayback() {
   // the way to the very beginning, same as a media player's Stop button.
   const alreadyAtTarget = !wasPlaying && Math.abs(priorPausedBeat - target) < 0.01;
   const resetBeat = alreadyAtTarget ? 0 : target;
-
   pushState({ playing: false, originBeat: resetBeat, originServerTimeMs: 0, freshStart: true });
 }
-stopBtn.addEventListener('click', stopPlayback);
-stopBtnMini.addEventListener('click', stopPlayback);
-
-window.addEventListener('keydown', (e) => {
-  if (e.code !== 'Space') return;
-  const tag = (document.activeElement as HTMLElement | null)?.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-  e.preventDefault();
-  togglePlay();
-});
-
-metronomeBtn.addEventListener('click', () => {
-  if (!audioEngine) return;
-  pushState({ metronomeOn: !metronomeOn });
-});
-
-function updateLoopButton() {
-  loopBtn.classList.toggle('active', loopEnabled);
-  if (loopRegion) {
-    loopBtn.title = loopEnabled
-      ? `Looping ${loopRegion.start.toFixed(1)}–${loopRegion.end.toFixed(1)} (click to stop there instead)`
-      : `Loop region set, off — click to loop it (drag the ruler to redefine)`;
-  } else {
-    loopBtn.title = loopEnabled
-      ? 'Looping the whole piece (drag the ruler above the roll to loop a region instead)'
-      : 'Click to loop the whole piece, or drag the ruler above the roll to loop a region';
-  }
-}
-loopBtn.addEventListener('click', () => {
-  if (!currentScore) return;
-  pushState({ loopEnabled: !loopEnabled });
-});
-
-/** Rehearsal marks straight from the source when it has any; otherwise whatever the user has
- *  manually marked for this song (see manualSections' own doc comment). */
-function effectiveSections(): { label: string; beat: number }[] {
-  return currentScore?.rehearsalMarks.length ? currentScore.rehearsalMarks : manualSections;
-}
-
-/** Rebuilds the sections row (one jump button per mark) and the add/save buttons' enabled state.
- *  Not event-delegated like buildPartsPanel -- this list is short and rebuilt wholesale on every
- *  change anyway (a new mark, a fresh song load), so a handful of direct listeners is simpler. */
-function renderSections() {
-  const sections = effectiveSections();
-  sectionsListEl.innerHTML = sections
-    .map((s, i) => `<button class="section-btn" data-index="${i}" title="Jump to ${s.label}">${s.label}</button>`)
-    .join('');
-  sectionsListEl.querySelectorAll<HTMLButtonElement>('.section-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const section = sections[Number(btn.getAttribute('data-index'))];
-      if (section) seekToBeat(section.beat, { recenterView: true });
-    });
-  });
-  const hasSourceMarks = (currentScore?.rehearsalMarks.length ?? 0) > 0;
-  // Only makes sense to hand-add marks when the source didn't already provide a complete set --
-  // and only for a song this device can actually write a saved default back to.
-  sectionAddBtn.disabled = !currentSong?.imported || hasSourceMarks;
-  saveConfigBtn.disabled = !currentSong?.imported;
-}
-
-sectionAddBtn.addEventListener('click', () => {
-  if (!currentSong?.imported || !audioEngine) return;
-  const label = manualSections.length < 26 ? String.fromCharCode(65 + manualSections.length) : `#${manualSections.length + 1}`;
-  manualSections.push({ label, beat: engineBeat() });
-  renderSections();
-});
-
-saveConfigBtn.addEventListener('click', () => {
-  if (!currentSong?.imported) return;
-  void saveSongConfig(currentSong.id, { transpose, bpm, sections: manualSections }).catch((err) => {
-    setImportStatus(`Couldn't save the song's default settings: ${err instanceof Error ? err.message : String(err)}`, true);
-  });
-});
 
 function applyBpm(newBpm: number) {
+  const clamped = Math.min(Math.max(Math.round(newBpm), MIN_BPM), MAX_BPM);
+  if (clamped === bpm) return;
   if (audioEngine?.isPlaying()) {
     // Explicitly zeroed, not omitted: publishPlaybackState is a merge write, so an omitted
     // field would keep whatever count-in the last fresh Play set, silently reattaching a
     // several-second count-in-then-delay to an ordinary BPM change.
-    void publishPlayingAt(audioEngine.getCurrentBeat(), { bpm: newBpm, countInBeats: 0, countInPulseBeats: 1 });
+    void publishPlayingAt(audioEngine.getCurrentBeat(), { bpm: clamped, countInBeats: 0, countInPulseBeats: 1 });
   } else {
-    pushState({ bpm: newBpm });
+    pushState({ bpm: clamped });
   }
 }
 
-document.querySelectorAll<HTMLButtonElement>('.bpm-btn').forEach((btn) => {
-  btn.addEventListener('click', () => applyBpm(parseInt(btn.getAttribute('data-bpm')!, 10)));
-});
-document.querySelector(`.bpm-btn[data-bpm="${bpm}"]`)?.classList.add('active');
-bpmInput.value = String(bpm);
-
-/** Reads/clamps the custom BPM field and applies it -- mirrors clampMeasureInput's proactive
- *  clamp (never let the field hold an out-of-range value) rather than relying on the input's own
- *  native min/max validation. Ignores an empty field instead of coercing it to MIN_BPM, so
- *  clearing the field to retype doesn't briefly apply a wrong tempo. */
-function applyBpmInput() {
-  if (!bpmInput.value.trim()) return;
-  const n = Math.min(Math.max(parseInt(bpmInput.value, 10) || bpm, MIN_BPM), MAX_BPM);
-  bpmInput.value = String(n);
-  if (n !== bpm) applyBpm(n);
+/** Reads/clamps a custom BPM field and applies it. Ignores an empty field instead of coercing it
+ *  to MIN_BPM, so clearing the field to retype doesn't briefly apply a wrong tempo. */
+function applyBpmInput(input: HTMLInputElement) {
+  if (!input.value.trim()) return;
+  const n = Math.min(Math.max(parseInt(input.value, 10) || bpm, MIN_BPM), MAX_BPM);
+  input.value = String(n);
+  applyBpm(n);
 }
-bpmInput.addEventListener('change', applyBpmInput);
-bpmInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
+document.addEventListener('change', (e) => {
+  const target = e.target as HTMLElement;
+  if (target.classList.contains('bpm-input')) applyBpmInput(target as HTMLInputElement);
+});
+document.addEventListener('input', (e) => {
+  const target = e.target as HTMLInputElement;
+  if (!target.classList?.contains('duck-range')) return;
+  duckVolume = parseFloat(target.value);
+  audioEngine?.setDuckedVolume(duckVolume);
+  document.querySelectorAll<HTMLInputElement>('.duck-range').forEach((r) => r !== target && (r.value = target.value));
+  document.querySelectorAll('.duck-value').forEach((o) => (o.textContent = `${Math.round(duckVolume * 100)}%`));
+});
+document.addEventListener('keydown', (e) => {
+  const target = e.target as HTMLElement;
+  if (e.key === 'Enter' && target.classList?.contains('bpm-input')) {
     e.preventDefault();
-    applyBpmInput();
-    bpmInput.blur();
+    applyBpmInput(target as HTMLInputElement);
+    (target as HTMLInputElement).blur();
   }
 });
 
-// Proactively keeps the field's value in-range instead of relying on the native min/max
-// validation -- an out-of-range value on a number input triggers the browser's own visual
-// "invalid" feedback (a shake/wobble on mobile Safari in particular), which our own code has no
-// control over and can't suppress after the fact. Clamping before that value is ever committed
-// avoids it ever happening.
-function clampMeasureInput() {
+function jumpToMeasure(n: number) {
   if (!currentScore) return;
-  const maxN = currentScore.measures.at(-1)?.number ?? 1;
-  const n = Math.min(Math.max(parseInt(measureInput.value, 10) || 1, 1), maxN);
-  measureInput.value = String(n);
-}
-
-function jumpToMeasure() {
-  if (!currentScore) return;
-  clampMeasureInput();
-  const n = parseInt(measureInput.value, 10);
   const measure = currentScore.measures.find((m) => m.number === n);
   if (measure) seekToBeat(measure.startBeat, { recenterView: true });
 }
-measureGoBtn.addEventListener('click', jumpToMeasure);
-measureInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') jumpToMeasure();
-});
-measureInput.addEventListener('change', clampMeasureInput);
 
-// Plus/minus stepper for the measure number, with press-and-hold acceleration: a single tap
-// moves one measure, but holding down repeats and speeds up over time -- the confirmed mobile
-// substitute for typing a measure number, since numeric keyboards are slow to reach on a phone.
-// Each step immediately jumps and recenters the view (same as pressing Go), so rapid taps or a
-// hold both give live feedback rather than only updating the number field.
+/** One bar back/forward from the bar under the playhead -- snapping to the bar start first when mid-bar going back. */
+function stepMeasure(delta: number) {
+  if (!currentScore) return;
+  const measures = currentScore.measures;
+  const beat = engineBeat();
+  const idx = Math.max(0, measures.findIndex((m) => m === measureAtBeat(currentScore!, beat)));
+  let targetIdx = idx + delta;
+  if (delta < 0 && beat - measures[idx].startBeat > 0.25) targetIdx = idx;
+  targetIdx = Math.min(Math.max(targetIdx, 0), measures.length - 1);
+  seekToBeat(measures[targetIdx].startBeat, { recenterView: true });
+}
+
+// Press-and-hold acceleration for previous/next bar: a tap moves one bar, holding repeats and
+// speeds up -- the phone substitute for typing a bar number.
 const STEPPER_INITIAL_DELAY_MS = 400;
 const STEPPER_MIN_INTERVAL_MS = 60;
 const STEPPER_ACCELERATION = 0.75;
 let stepperTimeoutId: number | null = null;
-
-function stepMeasure(delta: number) {
-  if (!currentScore) return;
-  const maxN = currentScore.measures.at(-1)?.number ?? 1;
-  const current = parseInt(measureInput.value, 10) || 1;
-  const next = Math.min(Math.max(current + delta, 1), maxN);
-  if (next === current) return;
-  measureInput.value = String(next);
-  jumpToMeasure();
-}
-
-function startMeasureStepperHold(delta: number) {
-  stepMeasure(delta);
-  let intervalMs = STEPPER_INITIAL_DELAY_MS;
-  const scheduleNext = () => {
-    stepperTimeoutId = window.setTimeout(() => {
-      stepMeasure(delta);
-      intervalMs = Math.max(STEPPER_MIN_INTERVAL_MS, intervalMs * STEPPER_ACCELERATION);
-      scheduleNext();
-    }, intervalMs);
-  };
-  scheduleNext();
-}
-
-function stopMeasureStepperHold() {
+function stopHold() {
   if (stepperTimeoutId != null) {
     clearTimeout(stepperTimeoutId);
     stepperTimeoutId = null;
   }
 }
-
-for (const [btn, delta] of [
-  [measurePrevBtn, -1],
-  [measureNextBtn, 1],
-] as const) {
-  btn.addEventListener('pointerdown', () => startMeasureStepperHold(delta));
-  btn.addEventListener('pointerup', stopMeasureStepperHold);
-  btn.addEventListener('pointerleave', stopMeasureStepperHold);
-  btn.addEventListener('pointercancel', stopMeasureStepperHold);
-}
-
-document.querySelectorAll<HTMLButtonElement>('.duck-btn').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    duckVolume = parseFloat(btn.getAttribute('data-duck')!);
-    document.querySelectorAll('.duck-btn').forEach((b) => b.classList.toggle('active', b === btn));
-    audioEngine?.setDuckedVolume(duckVolume);
-  });
+document.addEventListener('pointerdown', (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-hold]');
+  if (!btn || e.button > 0) return;
+  const delta = Number(btn.dataset.hold);
+  stepMeasure(delta);
+  let intervalMs = STEPPER_INITIAL_DELAY_MS;
+  const next = () => {
+    stepperTimeoutId = window.setTimeout(() => {
+      stepMeasure(delta);
+      intervalMs = Math.max(STEPPER_MIN_INTERVAL_MS, intervalMs * STEPPER_ACCELERATION);
+      next();
+    }, intervalMs);
+  };
+  stopHold();
+  next();
+  const end = () => {
+    stopHold();
+    btn.removeEventListener('pointerup', end);
+    btn.removeEventListener('pointerleave', end);
+    btn.removeEventListener('pointercancel', end);
+  };
+  btn.addEventListener('pointerup', end);
+  btn.addEventListener('pointerleave', end);
+  btn.addEventListener('pointercancel', end);
 });
-document.querySelector(`.duck-btn[data-duck="${duckVolume}"]`)?.classList.add('active');
 
 function applyTranspose(delta: number) {
-  if (!audioEngine || !pianoRoll) return;
+  if (!audioEngine) return;
   const newTranspose = Math.max(MIN_TRANSPOSE, Math.min(MAX_TRANSPOSE, transpose + delta));
+  if (newTranspose === transpose) return;
   if (audioEngine.isPlaying()) {
     // See the BPM handler's comment: explicitly zeroed so a stale count-in never reattaches.
     void publishPlayingAt(audioEngine.getCurrentBeat(), { transpose: newTranspose, countInBeats: 0, countInPulseBeats: 1 });
@@ -1099,8 +1415,6 @@ function applyTranspose(delta: number) {
     pushState({ transpose: newTranspose });
   }
 }
-transposeDownBtn.addEventListener('click', () => applyTranspose(-1));
-transposeUpBtn.addEventListener('click', () => applyTranspose(1));
 
 function applyZoom(factor: number) {
   if (!pianoRoll && !staffView) return;
@@ -1111,8 +1425,190 @@ function applyZoom(factor: number) {
   clampViewOffset();
   renderNow();
 }
-zoomOutBtn.addEventListener('click', () => applyZoom(1 / ZOOM_STEP));
-zoomInBtn.addEventListener('click', () => applyZoom(ZOOM_STEP));
+
+/** Rehearsal marks straight from the source when it has any; otherwise whatever the user has
+ *  manually marked for this song (see manualSections' own doc comment). */
+function effectiveSections(): { label: string; beat: number }[] {
+  return currentScore?.rehearsalMarks.length ? currentScore.rehearsalMarks : manualSections;
+}
+
+/** A boxed rehearsal letter that jumps to its section -- the same look as a printed score's marks. */
+function sectionButton(label: string, index: number): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'rmark';
+  b.dataset.action = 'section-jump';
+  b.dataset.index = String(index);
+  b.textContent = label;
+  b.title = t('jumpToSection', { label });
+  b.setAttribute('aria-label', t('jumpToSection', { label }));
+  return b;
+}
+
+/** Places the section letters over the whole-piece strip, and sets whether + (add) is offered. */
+function renderSections() {
+  const sections = effectiveSections();
+  const total = currentScore?.totalBeats || 1;
+  sectionMarksEl.replaceChildren(
+    ...sections.map((s, i) => {
+      const b = sectionButton(s.label, i);
+      b.style.left = `calc(16px + (100% - 32px) * ${Math.max(0, Math.min(1, s.beat / total))})`;
+      return b;
+    }),
+  );
+  // Hand-adding marks only makes sense when the source didn't already provide a complete set --
+  // and only for a song this device can write a saved default back to.
+  sectionAddBtn.hidden = !currentSong?.imported || (currentScore?.rehearsalMarks.length ?? 0) > 0;
+}
+
+function openPlayerMenu(anchor: HTMLElement) {
+  const items: Parameters<typeof openMenu>[1] = [];
+  if (currentSong?.imported) {
+    items.push({ label: t('renameSong'), icon: 'pencil', onSelect: () => currentSong && void renameSong(currentSong) });
+    // Saving defaults is a laptop task, like adding sections.
+    if (!isNarrow()) items.push({ label: t('saveDefaults'), icon: 'save', onSelect: saveDefaults });
+  }
+  items.push(...languageItems());
+  openMenu(anchor, items, t('menu'));
+}
+
+function saveDefaults() {
+  if (!currentSong?.imported) return;
+  saveSongConfig(currentSong.id, { transpose, bpm, sections: manualSections })
+    .then(() => toast(t('savedDefaults')))
+    .catch((err) => toast(t('saveDefaultsFailed', { msg: errorText(err) }), 'error'));
+}
+
+// One delegated click handler for every [data-action] control -- the laptop transport, the phone
+// dock, sheets and popovers all share it, so duplicated controls can't drift apart.
+document.addEventListener('click', (e) => {
+  const target = e.target as HTMLElement;
+  const voiceRowEl = target.closest<HTMLElement>('.voice-row');
+  if (voiceRowEl) {
+    const partId = voiceRowEl.dataset.part!;
+    const mixBtn = target.closest<HTMLElement>('.mix-btn');
+    if (mixBtn) toggleMix(partId, mixBtn.dataset.mix as PartMixState);
+    else if (target.closest('.rename-voice')) void renameVoice(partId);
+    else if (target.closest('.voice-name')) toggleTrueSolo(partId);
+    return;
+  }
+  const chip = target.closest<HTMLElement>('.chip[data-part]');
+  if (chip) {
+    toggleTrueSolo(chip.dataset.part!);
+    return;
+  }
+  const el = target.closest<HTMLElement>('[data-action]');
+  if (!el) return;
+  switch (el.dataset.action) {
+    case 'play':
+      togglePlay();
+      break;
+    case 'stop':
+      stopPlayback();
+      break;
+    case 'loop':
+      if (currentScore) pushState({ loopEnabled: !loopEnabled });
+      break;
+    case 'metronome':
+      if (audioEngine) pushState({ metronomeOn: !metronomeOn });
+      break;
+    case 'bpm-down':
+      applyBpm(bpm - (bpm > 60 ? 5 : 2));
+      break;
+    case 'bpm-up':
+      applyBpm(bpm + (bpm >= 60 ? 5 : 2));
+      break;
+    case 'bpm-preset':
+      applyBpm(Number(el.dataset.bpm));
+      break;
+    case 'transpose-down':
+      applyTranspose(-1);
+      break;
+    case 'transpose-up':
+      applyTranspose(1);
+      break;
+    case 'zoom-in':
+      applyZoom(ZOOM_STEP);
+      break;
+    case 'zoom-out':
+      applyZoom(1 / ZOOM_STEP);
+      break;
+    case 'view':
+      setActiveView(el.dataset.view === 'staff' ? 'staff' : 'roll');
+      break;
+    case 'mode':
+      void requestModeSwitch(el.dataset.mode === 'ensemble' ? 'ensemble' : 'solo');
+      break;
+    case 'mix-reset':
+      if (currentScore) {
+        for (const p of currentScore.parts) setPartMixState(p.id, 'normal');
+        applyMixToViews();
+      }
+      break;
+    case 'open-mixer':
+      openMixerSheet(el);
+      break;
+    case 'open-controls':
+      openControlsSheet(el);
+      break;
+    case 'open-tempo': {
+      const panel = document.createElement('div');
+      panel.className = 'popover-body';
+      panel.appendChild(tempoBlock());
+      openPopover(el, panel, 'center');
+      refreshBindings();
+      break;
+    }
+    case 'goto': {
+      const panel = document.createElement('div');
+      panel.className = 'popover-body';
+      panel.appendChild(gotoBlock());
+      openPopover(el, panel, 'start');
+      break;
+    }
+    case 'section-jump': {
+      const section = effectiveSections()[Number(el.dataset.index)];
+      if (section) seekToBeat(section.beat, { recenterView: true });
+      closeOverlay();
+      break;
+    }
+    case 'section-add':
+      if (currentSong?.imported && audioEngine) {
+        const label = manualSections.length < 26 ? String.fromCharCode(65 + manualSections.length) : `#${manualSections.length + 1}`;
+        manualSections.push({ label, beat: engineBeat() });
+        manualSections.sort((a, b) => a.beat - b.beat);
+        renderSections();
+      }
+      break;
+  }
+});
+document.querySelector<HTMLButtonElement>('#player-menu-btn')!.addEventListener('click', (e) => openPlayerMenu(e.currentTarget as HTMLElement));
+voiceListEl.addEventListener('dblclick', (e) => {
+  const row = (e.target as HTMLElement).closest<HTMLElement>('.voice-row');
+  if (row && (e.target as HTMLElement).closest('.voice-name')) void renameVoice(row.dataset.part!);
+});
+songTitleEl.addEventListener('dblclick', () => currentSong?.imported && void renameSong(currentSong));
+
+window.addEventListener('keydown', (e) => {
+  if (!app.classList.contains('mode-player') || document.querySelector('.overlay')) return;
+  const tag = (e.target as HTMLElement | null)?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.code === 'Space') {
+    e.preventDefault();
+    togglePlay();
+  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    stepMeasure(e.key === 'ArrowLeft' ? -1 : 1);
+  } else if (e.key === 'l' || e.key === 'L') {
+    if (currentScore) pushState({ loopEnabled: !loopEnabled });
+  } else if (e.key === 'm' || e.key === 'M') {
+    if (audioEngine) pushState({ metronomeOn: !metronomeOn });
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Position, seeking, panning
+// ---------------------------------------------------------------------------------------------
 
 function engineBeat(): number {
   if (!audioEngine) return 0;
@@ -1134,9 +1630,8 @@ function clampViewOffset() {
 function panByBeats(deltaBeats: number) {
   if (!pianoRoll) return;
   // Keep the view locked to the actual playback position while playing: panning it away is
-  // exactly what put the red line out of sync with the music (the view would show a different
-  // beat than the one actually sounding, since the line's screen x is fixed but the beat under it
-  // becomes whatever was panned to). Still allowed while paused/stopped, to browse the score.
+  // exactly what put the playhead out of sync with the music. Still allowed while paused/stopped,
+  // to browse the score.
   if (audioEngine?.isPlaying()) return;
   viewOffsetBeats += deltaBeats;
   clampViewOffset();
@@ -1144,17 +1639,13 @@ function panByBeats(deltaBeats: number) {
 }
 
 /**
- * Sets where the next Play (or an already-playing transport) should be, without moving the
- * view: the beat under the click stays under the same screen x, so scrolling never jumps.
- */
-/**
- * `recenterView`, when true (Measure-jump-Go), deliberately snaps the view to the new position
- * instead of holding it still -- the point of that control is navigation, "take me there." When
- * false (default; ruler/staff-ruler grid-lock tap), the view stays exactly where it was so the
- * screen doesn't jump for someone who's just marking a start point while reading elsewhere.
+ * Sets where the next Play (or an already-playing transport) should be. `recenterView`, when true
+ * (bar jumps, sections), snaps the view to the new position -- "take me there." When false
+ * (default; ruler taps), the view stays exactly where it was so the screen doesn't jump for someone
+ * who's just marking a start point while reading elsewhere.
  */
 function seekToBeat(beat: number, opts?: { recenterView?: boolean }) {
-  if (!audioEngine || !currentScore || !pianoRoll) return;
+  if (!audioEngine || !currentScore) return;
   const clamped = Math.max(0, Math.min(currentScore.totalBeats, beat));
   const oldEngineBeat = engineBeat();
   if (audioEngine.isPlaying()) {
@@ -1180,7 +1671,7 @@ function clearLoopRegion() {
 }
 
 function finalizeLoopSelection(beatA: number, beatB: number) {
-  if (!currentScore || !pianoRoll) return;
+  if (!currentScore) return;
   const start = Math.max(0, Math.min(beatA, beatB));
   const end = Math.min(currentScore.totalBeats, Math.max(beatA, beatB));
   if (end - start < MIN_LOOP_BEATS) {
@@ -1190,17 +1681,33 @@ function finalizeLoopSelection(beatA: number, beatB: number) {
   }
 }
 
+/**
+ * Coalesces render requests to at most one per animation frame. Wheel/trackpad events and
+ * pointermove can fire far faster than the display refreshes (100+/sec during a fast swipe);
+ * rendering synchronously per event does far more repaint work than can ever be shown.
+ */
+function scheduleRender() {
+  if (renderPending) return;
+  renderPending = true;
+  requestAnimationFrame(() => {
+    renderPending = false;
+    renderNow();
+  });
+}
+
 canvas.addEventListener(
   'wheel',
   (e) => {
     if (!pianoRoll) return;
     e.preventDefault();
-    if (e.shiftKey) {
+    if (e.ctrlKey) {
+      // Trackpad pinch arrives as ctrl+wheel.
+      applyZoom(Math.exp(-e.deltaY * 0.01));
+    } else if (e.shiftKey) {
       panByBeats(e.deltaY / pianoRoll.getPixelsPerBeat());
     } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
       // Trackpad gestures are rarely perfectly axis-aligned; picking whichever delta actually
-      // dominates (rather than "any nonzero deltaX means horizontal") keeps an intended vertical
-      // scroll from bleeding a little horizontal pan into the view on every tick.
+      // dominates keeps an intended vertical scroll from bleeding horizontal pan into the view.
       panByBeats(e.deltaX / pianoRoll.getPixelsPerBeat());
     } else if (e.deltaY !== 0) {
       pianoRoll.scrollByPixels(e.deltaY);
@@ -1213,9 +1720,7 @@ canvas.addEventListener(
 /**
  * Two-finger pinch-to-zoom, shared by both canvases. Tracks every currently-down pointer by id;
  * once exactly two are down, each move reports the ratio of the new inter-finger distance to the
- * previous move's (not the gesture's starting distance -- that would make the reported ratio
- * cumulative from pinch start rather than incremental per move, and applyZoom() already expects a
- * per-call multiplicative factor, same as the existing zoom in/out buttons' ZOOM_STEP).
+ * previous move's (incremental, since applyZoom() expects a per-call multiplicative factor).
  */
 class PinchZoomTracker {
   private points = new Map<number, { x: number; y: number }>();
@@ -1255,17 +1760,11 @@ class PinchZoomTracker {
 let dragPointerId: number | null = null;
 let dragStartX = 0;
 let dragStartY = 0;
-let dragStartTime = 0;
 let dragLastX = 0;
 let dragLastY = 0;
 let dragMoved = false;
 let dragAxis: 'x' | 'y' | null = null;
 let loopSelectStartBeat: number | null = null;
-
-// A vertical drag this fast and this short is a deliberate flick, not a scroll -- used below to
-// toggle the mobile settings panel on a quick swipe, without needing a dedicated gesture zone.
-const SWIPE_MAX_MS = 300;
-const SWIPE_MIN_DY_PX = 40;
 
 function clientXToBeat(clientX: number): number {
   return pianoRoll!.xToBeat(clientX - canvasLeft, displayBeat());
@@ -1278,17 +1777,16 @@ canvas.addEventListener('pointerdown', (e) => {
   rollPinch.onPointerDown(e);
   if (rollPinch.activeCount >= 2) {
     // A second finger just came down mid-drag -- abandon whatever single-pointer gesture (pan,
-    // scroll, or a ruler loop-selection) was in progress and hand off to the pinch instead, rather
-    // than letting both run at once.
+    // scroll, or a ruler loop-selection) was in progress and hand off to the pinch instead.
     dragPointerId = null;
     loopSelectStartBeat = null;
     canvas.classList.remove('dragging');
     return;
   }
+  updateCanvasRect();
   dragPointerId = e.pointerId;
   dragStartX = e.clientX;
   dragStartY = e.clientY;
-  dragStartTime = performance.now();
   dragLastX = e.clientX;
   dragLastY = e.clientY;
   dragMoved = false;
@@ -1317,15 +1815,12 @@ canvas.addEventListener('pointermove', (e) => {
 
   if (loopSelectStartBeat != null) {
     const endBeat = clientXToBeat(e.clientX);
-    pianoRoll.setLoopRegion({
-      start: Math.min(loopSelectStartBeat, endBeat),
-      end: Math.max(loopSelectStartBeat, endBeat),
-    });
+    pianoRoll.setLoopRegion({ start: Math.min(loopSelectStartBeat, endBeat), end: Math.max(loopSelectStartBeat, endBeat) });
     scheduleRender();
   } else {
     // Lock to whichever axis the drag committed to early on: real pointer movement is rarely
     // perfectly straight, and applying both axes' deltas on every move let a drag meant as
-    // vertical-only bleed a little horizontal pan into the view (and vice versa) on every tick.
+    // vertical-only bleed a little horizontal pan into the view (and vice versa).
     if (dragAxis === null && dragMoved) dragAxis = Math.abs(totalDx) > Math.abs(totalDy) ? 'x' : 'y';
     const dx = e.clientX - dragLastX;
     const dy = e.clientY - dragLastY;
@@ -1346,25 +1841,13 @@ function endDrag(e: PointerEvent) {
     if (dragMoved) {
       finalizeLoopSelection(loopSelectStartBeat, clientXToBeat(e.clientX));
     } else {
-      // A tap (not a drag) in the ruler just sets the start point, same as the old plain click.
-      // seekToBeat's published originBeat is what sets customStartBeat, via applyPlaybackState.
-      // Snapped to the containing measure's start ("grid locking") so a slightly-off tap always
-      // lands exactly on a measure boundary instead of wherever the pixel happened to map to.
+      // A tap (not a drag) in the ruler sets the start point, snapped to the containing
+      // measure's start ("grid locking") so a slightly-off tap lands exactly on a bar line.
       const snapped = currentScore ? (measureAtBeat(currentScore, loopSelectStartBeat)?.startBeat ?? loopSelectStartBeat) : loopSelectStartBeat;
       clearLoopRegion();
       seekToBeat(snapped);
     }
     loopSelectStartBeat = null;
-  } else if (dragMoved && dragAxis === 'y') {
-    // A quick vertical flick anywhere on the canvas collapses/expands the mobile settings panel
-    // -- the pointermove handler above already applied a bit of vertical scroll live, before this
-    // gesture could be classified as a swipe; leaving that small scroll in place (rather than
-    // buffering and un-applying it) is an accepted trade-off for a cosmetic edge case.
-    const elapsedMs = performance.now() - dragStartTime;
-    const totalDy = e.clientY - dragStartY;
-    if (elapsedMs < SWIPE_MAX_MS && Math.abs(totalDy) > SWIPE_MIN_DY_PX) {
-      toggleSettingsPanel();
-    }
   } else if (!dragMoved && currentScore && pianoRoll) {
     // A tap in the note area (not the ruler) only previews whatever note is under it -- it never
     // moves playback, so casual clicks or short scrolls while playing can't jump the position.
@@ -1376,8 +1859,7 @@ function endDrag(e: PointerEvent) {
     if (hit) {
       audioEngine?.previewNote(hit.midi);
       pianoRoll.setPreviewNote({ startBeat: hit.startBeat, midi: hit.midi });
-      // The label is only shown briefly, while the tone plays -- not left on screen until the
-      // next click.
+      // The label is only shown briefly, while the tone plays.
       previewNoteTimeout = window.setTimeout(() => {
         previewNoteTimeout = null;
         pianoRoll?.setPreviewNote(null);
@@ -1386,13 +1868,11 @@ function endDrag(e: PointerEvent) {
     } else {
       const keyboardMidi = pianoRoll.hitTestKeyboard(e.clientX - canvasLeft, e.clientY - canvasTop, displayBeat());
       // The keyboard strip near beat 0 (see pianoRoll.ts) isn't a real NoteEvent -- just plays the
-      // tone, no preview label (nothing at its own beat position to anchor one to).
+      // tone, no preview label.
       if (keyboardMidi != null) audioEngine?.previewNote(keyboardMidi);
       pianoRoll.setPreviewNote(null);
     }
-    // Unlike during playback (where the render loop repaints every frame regardless), nothing
-    // else forces a redraw while paused -- without this the tone would play but its label would
-    // never actually appear on screen until some other interaction happened to trigger one.
+    // Nothing else forces a redraw while paused -- without this the label would never appear.
     renderNow();
   }
 }
@@ -1404,36 +1884,117 @@ canvas.addEventListener('pointercancel', (e) => {
   canvas.classList.remove('dragging');
 });
 
-let lastPositionText = '';
-function setPositionText(text: string) {
-  // During playback this runs every animation frame; writing textContent unconditionally forces
-  // a style/layout invalidation even when the displayed string hasn't actually changed (which is
-  // most frames, since it only changes once per beat).
-  if (text === lastPositionText) return;
-  lastPositionText = text;
-  positionEl.textContent = text;
+// Whole-piece strip: click jumps (to the bar start); a mouse drag marks a loop; a touch drag
+// scrubs through the piece and commits the position on release.
+let overviewPointer: { id: number; startX: number; moved: boolean; touch: boolean } | null = null;
+function overviewBeat(clientX: number): number {
+  const rect = overviewCanvas.getBoundingClientRect();
+  return overview ? overview.xToBeat(clientX - rect.left) : 0;
+}
+overviewCanvas.addEventListener('pointerdown', (e) => {
+  if (!overview || !currentScore) return;
+  overviewPointer = { id: e.pointerId, startX: e.clientX, moved: false, touch: e.pointerType !== 'mouse' };
+  overviewCanvas.setPointerCapture(e.pointerId);
+});
+overviewCanvas.addEventListener('pointermove', (e) => {
+  if (!overviewPointer || overviewPointer.id !== e.pointerId || !overview || !currentScore) return;
+  if (Math.abs(e.clientX - overviewPointer.startX) > CLICK_DRAG_THRESHOLD_PX) overviewPointer.moved = true;
+  if (!overviewPointer.moved) return;
+  if (overviewPointer.touch) {
+    if (audioEngine?.isPlaying()) return;
+    viewOffsetBeats = overviewBeat(e.clientX) - engineBeat();
+    clampViewOffset();
+    scheduleRender();
+  } else {
+    const a = overviewBeat(overviewPointer.startX);
+    const b = overviewBeat(e.clientX);
+    const region = { start: Math.min(a, b), end: Math.max(a, b) };
+    pianoRoll?.setLoopRegion(region);
+    overview.setLoopRegion(region);
+    scheduleRender();
+  }
+});
+overviewCanvas.addEventListener('pointerup', (e) => {
+  if (!overviewPointer || overviewPointer.id !== e.pointerId || !currentScore) return;
+  const p = overviewPointer;
+  overviewPointer = null;
+  const beat = overviewBeat(e.clientX);
+  if (p.moved && !p.touch) {
+    finalizeLoopSelection(overviewBeat(p.startX), beat);
+    return;
+  }
+  const snapped = measureAtBeat(currentScore, beat)?.startBeat ?? beat;
+  if (!p.moved) clearLoopRegion();
+  seekToBeat(snapped, { recenterView: true });
+});
+overviewCanvas.addEventListener('pointercancel', () => {
+  overviewPointer = null;
+  pianoRoll?.setLoopRegion(loopRegion);
+  overview?.setLoopRegion(loopRegion);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------------------------
+
+const boundTexts = new Map<string, string>();
+function setBound(bind: string, text: string) {
+  // During playback this runs every animation frame; writing textContent unconditionally forces a
+  // style/layout invalidation even when the string hasn't changed (most frames).
+  if (boundTexts.get(bind) === text) return;
+  boundTexts.set(bind, text);
+  document.querySelectorAll(`[data-bind="${bind}"]`).forEach((el) => (el.textContent = text));
 }
 
 function updatePositionDisplay(beat: number) {
   if (!currentScore) return;
   if (audioEngine?.isCountingIn()) {
-    setPositionText('Count-in…');
+    setBound('pos-bar', t('countIn'));
+    setBound('pos-beat', '');
+    setBound('pos-beat-short', '');
     return;
   }
   const measure = measureAtBeat(currentScore, beat);
-  if (!measure) {
-    setPositionText('—');
-    return;
-  }
+  if (!measure) return;
   const pulseBeats = 4 / measure.beatType;
-  const beatInMeasure = Math.floor((beat - measure.startBeat) / pulseBeats) + 1;
-  setPositionText(`Measure ${measure.number} · Beat ${Math.min(beatInMeasure, measure.beats)}/${measure.beats}`);
+  const beatInMeasure = Math.min(Math.floor((beat - measure.startBeat) / pulseBeats) + 1, measure.beats);
+  setBound('pos-bar', t('bar', { n: measure.number }));
+  setBound('pos-beat', t('beat', { b: beatInMeasure, n: measure.beats }));
+  setBound('pos-beat-short', `· ${beatInMeasure}/${measure.beats}`);
+}
+
+/** Lights the dot next to each voice that is singing at the playhead. */
+let litParts = '';
+function updateVoiceLights(beat: number) {
+  const lit: string[] = [];
+  for (const [partId, notes] of notesByPart) {
+    let lo = 0;
+    let hi = notes.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (notes[mid].startBeat <= beat) lo = mid + 1;
+      else hi = mid;
+    }
+    // Notes within a part rarely overlap; checking a few before the insertion point covers chords.
+    for (let i = lo - 1; i >= Math.max(0, lo - 4); i--) {
+      if (notes[i].startBeat + notes[i].durationBeats > beat) {
+        lit.push(partId);
+        break;
+      }
+    }
+  }
+  const key = lit.join('|');
+  if (key === litParts) return;
+  litParts = key;
+  document.querySelectorAll<HTMLElement>('.light[data-part]').forEach((el) => el.classList.toggle('on', lit.includes(el.dataset.part!)));
 }
 
 /** Renders only whichever view is currently visible -- the hidden one costs nothing per frame. */
 function renderActiveView(displayBeatValue: number, playheadBeatValue: number) {
   if (activeView === 'staff') staffView?.render(displayBeatValue, playheadBeatValue);
   else pianoRoll?.render(displayBeatValue, playheadBeatValue);
+  overview?.render(playheadBeatValue);
+  updateVoiceLights(playheadBeatValue);
 }
 
 function renderNow() {
@@ -1443,17 +2004,11 @@ function renderNow() {
   updatePositionDisplay(beat);
 }
 
-// Scheduling top-up (audioEngine.tick()) and the loop/end-of-piece boundary check used to live
-// inside renderLoop, gated on requestAnimationFrame -- which most browsers throttle to near-zero
-// or stop firing entirely once the tab/screen is backgrounded. Since AudioEngine's own scheduled-
-// ahead window is bounded (LOOKAHEAD_SEC, 8s), that meant playback (and the metronome) would just
-// go silent a few seconds after switching away from the app, and a piece that should loop or stop
-// at its end wouldn't do either while backgrounded. Pulled out into their own setInterval-driven
-// tick, separate from the purely-visual rAF loop below -- setInterval keeps firing (throttled to
-// roughly once a second in most browsers, but not halted the way rAF often is) while hidden, which
-// is well within LOOKAHEAD_REFILL_SEC's (3s) margin to keep the schedule topped up and the
-// boundary check responsive. Rendering itself stays rAF-only: nothing needs to be drawn while
-// nobody's looking, and rAF resumes its own chain automatically once the tab is visible again.
+// Scheduling top-up (audioEngine.tick()) and the loop/end-of-piece boundary check run on their
+// own setInterval tick, separate from the purely-visual rAF loop below: browsers throttle rAF to
+// near-zero (or stop it) once the tab/screen is backgrounded, which used to silence playback a few
+// seconds after switching away. setInterval keeps firing (throttled to about once a second, well
+// within LOOKAHEAD_REFILL_SEC's margin) while hidden.
 const AUDIO_TICK_INTERVAL_MS = 200;
 let audioTickIntervalId: number | null = null;
 
@@ -1467,8 +2022,7 @@ function audioTick() {
   if (beat < boundary) return;
 
   if (loopEnabled) {
-    const loopStart = loopRegion ? loopRegion.start : 0;
-    audioEngine.play(loopStart, bpm, transpose);
+    audioEngine.play(loopRegion ? loopRegion.start : 0, bpm, transpose);
     return;
   }
 
@@ -1513,53 +2067,47 @@ function stopRenderLoop() {
   }
 }
 
-window.addEventListener('resize', () => {
+function resizeCanvases() {
   pianoRoll?.resize();
   staffView?.resize();
-  updateCanvasRect();
-  renderNow();
-});
-
-// Mobile browsers can change the canvas's actual laid-out size (address bar show/hide, dynamic
-// toolbar, app-switcher return) without firing a window 'resize' event -- when that happened, the
-// canvas kept rendering at its old (now stale) cssWidth/cssHeight while the element itself sat in
-// a differently-sized box, leaving raw unpainted canvas showing as a black area next to the
-// content. ResizeObserver watches the canvas's own box directly, so it catches every case.
-const canvasResizeObserver = new ResizeObserver(() => {
-  pianoRoll?.resize();
-  staffView?.resize();
-  updateCanvasRect();
-  renderNow();
-});
-canvasResizeObserver.observe(canvas);
-canvasResizeObserver.observe(staffCanvas);
-
-function setActiveView(view: 'roll' | 'staff') {
-  activeView = view;
-  canvas.classList.toggle('hidden', activeView !== 'roll');
-  staffCanvas.classList.toggle('hidden', activeView !== 'staff');
-  viewToggleBtn.textContent = activeView === 'roll' ? 'Sheet Music' : 'Piano Roll';
-  // The just-shown canvas may not have had a correct backing-store size while hidden
-  // (display:none elements report a zero layout box), so resize before rendering into it.
-  pianoRoll?.resize();
-  staffView?.resize();
+  overview?.resize();
   updateCanvasRect();
   renderNow();
 }
 
-viewToggleBtn.addEventListener('click', () => {
-  setActiveView(activeView === 'roll' ? 'staff' : 'roll');
+window.addEventListener('resize', () => {
+  resizeCanvases();
+  drawAllCovers();
+  drawMarks();
 });
+
+// Mobile browsers can change the canvas's laid-out size (address bar show/hide, dynamic toolbar,
+// app-switcher return) without firing a window 'resize' event -- ResizeObserver watches the
+// canvases' own boxes directly, so it catches every case.
+const canvasResizeObserver = new ResizeObserver(resizeCanvases);
+canvasResizeObserver.observe(canvas);
+canvasResizeObserver.observe(staffCanvas);
+canvasResizeObserver.observe(overviewCanvas);
+
+function setActiveView(view: 'roll' | 'staff') {
+  activeView = view;
+  canvas.hidden = activeView !== 'roll';
+  staffCanvas.hidden = activeView !== 'staff';
+  document.querySelectorAll<HTMLButtonElement>('#view-seg [data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
+  // The just-shown canvas may not have had a correct backing-store size while hidden (hidden
+  // elements report a zero layout box), so resize before rendering into it.
+  resizeCanvases();
+}
 
 staffCanvas.addEventListener(
   'wheel',
   (e) => {
     if (!staffView) return;
     e.preventDefault();
-    if (e.shiftKey) {
-      panByBeats(e.deltaX / staffView.getPixelsPerBeat());
-    } else if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
-      panByBeats(e.deltaX / staffView.getPixelsPerBeat());
+    if (e.ctrlKey) {
+      applyZoom(Math.exp(-e.deltaY * 0.01));
+    } else if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      panByBeats((e.shiftKey ? e.deltaY : e.deltaX) / staffView.getPixelsPerBeat());
     } else if (e.deltaY !== 0) {
       staffView.scrollByPixels(e.deltaY);
       scheduleRender();
@@ -1569,26 +2117,17 @@ staffCanvas.addEventListener(
 );
 
 // Grid-lock click-to-seek in the staff view's own ruler strip, mirroring the piano roll's ruler
-// tap. A plain click suffices there (no drag/loop-region support in the ruler, by design -- see
-// StaffView's class doc comment).
+// tap. A plain click suffices there (no drag/loop-region support in this ruler, by design).
 staffCanvas.addEventListener('click', (e) => {
   if (!staffView || !currentScore) return;
   const rect = staffCanvas.getBoundingClientRect();
-  const localY = e.clientY - rect.top;
-  if (localY >= STAFF_RULER_HEIGHT_PX) return;
-  const localX = e.clientX - rect.left;
-  const beat = staffView.xToBeat(localX, displayBeat());
-  const snapped = measureAtBeat(currentScore, beat)?.startBeat ?? beat;
-  seekToBeat(snapped);
+  if (e.clientY - rect.top >= STAFF_RULER_HEIGHT_PX) return;
+  const beat = staffView.xToBeat(e.clientX - rect.left, displayBeat());
+  seekToBeat(measureAtBeat(currentScore, beat)?.startBeat ?? beat);
 });
 
-// Touch/pointer drag-to-scroll below the ruler strip -- #staff sets touch-action:none (so a touch
-// drag doesn't fight the browser's own native page-scroll gesture), but until this, nothing filled
-// in the JS side of that: the wheel handler above only ever fires for a mouse/trackpad, so a phone
-// or tablet had no way to scroll the stacked staves at all once they didn't all fit vertically.
-// Mirrors the piano roll's axis-locked drag (vertical scroll, horizontal pan) but skips its
-// ruler-drag loop-selection and note-preview-on-tap, which are piano-roll-only features (see
-// StaffView's class doc comment on why this view stays deliberately simpler).
+// Touch/pointer drag-to-scroll below the ruler strip (#staff sets touch-action:none, so this is the
+// only way to scroll the stacked staves on a phone). Mirrors the piano roll's axis-locked drag.
 let staffDragPointerId: number | null = null;
 let staffDragStartX = 0;
 let staffDragStartY = 0;
@@ -1624,9 +2163,6 @@ staffCanvas.addEventListener('pointermove', (e) => {
   if (staffDragPointerId !== e.pointerId || !staffView) return;
   const totalDx = e.clientX - staffDragStartX;
   const totalDy = e.clientY - staffDragStartY;
-  // Lock to whichever axis the drag committed to, once it's moved enough to tell -- same
-  // reasoning as the piano roll's drag handler: an imperfectly-straight drag shouldn't bleed a
-  // little of the other axis's motion into the view on every move.
   if (staffDragAxis === null && Math.hypot(totalDx, totalDy) > CLICK_DRAG_THRESHOLD_PX) {
     staffDragAxis = Math.abs(totalDx) > Math.abs(totalDy) ? 'x' : 'y';
   }
@@ -1649,16 +2185,20 @@ function endStaffDrag(e: PointerEvent) {
 staffCanvas.addEventListener('pointerup', endStaffDrag);
 staffCanvas.addEventListener('pointercancel', endStaffDrag);
 
+// ---------------------------------------------------------------------------------------------
+// Startup
+// ---------------------------------------------------------------------------------------------
+
 /**
  * Invoked once the app's mode (Solo vs. Ensemble, or "no backend at all") is resolved -- either
- * immediately at startup (a stored choice, or no backend to choose on) or from the landing
- * screen's buttons. Sets up the shared song library (available in both modes) and, only in
- * Ensemble mode, the shared playback session.
+ * immediately at startup (a stored choice, or no backend to choose on) or from the title screen's
+ * buttons. Sets up the shared song library (available in both modes) and, only in Ensemble mode,
+ * the shared playback session.
  */
 async function runBootstrap() {
   if (!isFirebaseConfigured) {
-    importBtn.disabled = true;
-    importBtn.title = 'Shared library not configured yet';
+    importBtn.hidden = true;
+    renderSongList();
     return;
   }
 
@@ -1669,6 +2209,7 @@ async function runBootstrap() {
     await ensureAccess(); // PIN gate; resolves immediately if already granted on this device
     subscribeToSongs(
       (songs) => {
+        libraryState = 'ready';
         importedSongs = songs.map((s) => ({ id: s.id, title: s.title, xml: s.xml, format: s.format, imported: true, partNameOverrides: s.partNameOverrides, savedConfig: s.savedConfig }));
         renderSongList();
         // A remote songId can arrive before this device's own library listener has caught up
@@ -1679,7 +2220,9 @@ async function runBootstrap() {
         }
       },
       (err) => {
-        setImportStatus(`Shared library unavailable: ${err instanceof Error ? err.message : String(err)}`, true);
+        libraryState = 'offline';
+        libraryError = errorText(err);
+        renderSongList();
       },
     );
     if (syncEnabled()) {
@@ -1690,12 +2233,30 @@ async function runBootstrap() {
           lastReceivedPlaybackState = state;
           void applyPlaybackState(state);
         },
-        (err) => {
-          setImportStatus(`Shared session unavailable: ${err instanceof Error ? err.message : String(err)}`, true);
-        },
+        (err) => toast(t('syncFailed', { msg: errorText(err) }), 'error'),
       );
     }
   } catch (err) {
-    setImportStatus(`Couldn't connect to the shared library: ${err instanceof Error ? err.message : String(err)}`, true);
+    libraryState = 'offline';
+    libraryError = errorText(err);
+    renderSongList();
   }
 }
+
+// Mode resolution: a stored choice skips straight to the repertoire; with no stored choice, show
+// the title screen only if there's actually a backend to choose Ensemble on.
+const storedMode = localStorage.getItem(MODE_STORAGE_KEY);
+if (storedMode === 'solo' || storedMode === 'ensemble') {
+  sessionMode = storedMode;
+  setViewMode('library');
+  void runBootstrap();
+} else if (isFirebaseConfigured) {
+  setViewMode('landing');
+} else {
+  setViewMode('library');
+  void runBootstrap();
+}
+renderModeControls();
+renderSongList();
+refreshBindings();
+requestAnimationFrame(drawMarks);

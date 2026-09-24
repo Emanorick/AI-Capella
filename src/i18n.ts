@@ -1,0 +1,264 @@
+// Interface strings in English and German. The language follows the device (navigator.language),
+// with a manual override from the menus stored per device.
+export type Lang = 'en' | 'de';
+const LANG_KEY = 'ai-capella-lang';
+
+const en = {
+  practiseAlone: 'Practise alone',
+  rehearseTogether: 'Rehearse together',
+  pinTitle: 'Choir access',
+  pinHint: 'Enter the PIN your choir shared with you.',
+  pinContinue: 'Continue',
+  pinWrong: "That PIN isn't right. Try again.",
+  pinFailed: "Couldn't check the PIN: {msg}",
+  repertoire: 'Repertoire',
+  arrangementsOne: '1 arrangement',
+  arrangementsMany: '{n} arrangements',
+  sharedWithChoir: '{count}, shared with your choir',
+  onThisDevice: '{count} on this device',
+  searchTitles: 'Search titles',
+  addArrangement: 'Add arrangement',
+  dropTip: 'Drop MusicXML, MXL or MIDI files anywhere on this page to add them.',
+  dropHere: 'Drop to add to the shared library',
+  voicesOne: '1 voice',
+  voicesMany: '{n} voices',
+  barsOne: '1 bar',
+  barsMany: '{n} bars',
+  keyMajor: '{k} major',
+  keyMinor: '{k} minor',
+  sample: 'Sample',
+  moreFor: 'More for {title}',
+  open: 'Open {title}',
+  rename: 'Rename',
+  delete: 'Delete',
+  cancel: 'Cancel',
+  save: 'Save',
+  deleteTitle: 'Delete “{title}”?',
+  deleteBody: "It disappears from the library on every device in your choir. This can't be undone.",
+  renameSong: 'Rename arrangement',
+  renameVoice: 'Rename voice',
+  loadingLibrary: 'Loading the shared library…',
+  offlineTitle: 'Shared library not reachable',
+  offlineBody: 'Showing only the built-in song. {msg}',
+  retry: 'Retry',
+  notConfigured: "The shared library isn't set up, so only the built-in song is available.",
+  noMatches: 'No titles match “{q}”.',
+  adding: 'Adding {name}…',
+  added: 'Added “{title}” for everyone.',
+  addFailed: "Couldn't add {name}: {msg}",
+  wrongFileType: 'Choose a MusicXML, MXL or MIDI file.',
+  deleteFailed: "Couldn't delete the song: {msg}",
+  renameFailed: "Couldn't rename: {msg}",
+  syncFailed: "Couldn't sync: {msg}",
+  waitingForSong: 'Waiting for the shared song to arrive…',
+  solo: 'Solo',
+  ensemble: 'Ensemble',
+  mode: 'Mode',
+  switchToTitle: 'Switch to {mode}?',
+  switchToSolo: 'Only this device will play; nobody else is affected. The app reloads.',
+  switchToEnsemble: 'Play, pause and jumps will be shared with everyone in Ensemble. The app reloads.',
+  switchAction: 'Switch',
+  language: 'Language',
+  menu: 'Menu',
+  back: 'Repertoire',
+  pianoRoll: 'Piano roll',
+  sheetMusic: 'Sheet music',
+  view: 'View',
+  voices: 'Voices',
+  reset: 'Reset',
+  mute: 'Mute {name}',
+  soloVoice: 'Solo {name}',
+  onlyVoice: 'Only {name} (click again for all voices, double-click to rename)',
+  othersWhileSoloing: 'Others while soloing',
+  bar: 'Bar {n}',
+  beat: 'Beat {b} / {n}',
+  countIn: 'Count-in…',
+  play: 'Play',
+  pause: 'Pause',
+  stop: 'Back to the start mark',
+  prevBar: 'Previous bar (hold to go faster)',
+  nextBar: 'Next bar (hold to go faster)',
+  loopWhole: 'Loop the whole piece',
+  loopRegion: 'Loop bars {from}–{to}',
+  stopLooping: 'Stop looping',
+  metronome: 'Metronome',
+  countInHint: 'Counts one bar in before a fresh start',
+  tempo: 'Tempo',
+  slower: 'Slower',
+  faster: 'Faster',
+  customTempo: 'Custom tempo',
+  key: 'Key',
+  lower: 'Lower by a semitone',
+  higher: 'Higher by a semitone',
+  writtenIn: 'Written in {key}',
+  tempoAndKey: 'Tempo & key',
+  goToBar: 'Go to bar',
+  go: 'Go',
+  sections: 'Sections',
+  jumpToSection: 'Jump to section {label}',
+  addSection: 'Mark a section at the playhead',
+  addSectionsOnLaptop: 'Add sections on a laptop',
+  saveDefaults: 'Save tempo, key and sections as default',
+  savedDefaults: 'Saved as this song’s default.',
+  saveDefaultsFailed: "Couldn't save the defaults: {msg}",
+  zoomIn: 'Zoom in',
+  zoomOut: 'Zoom out',
+  wholePiece: 'Whole piece: click to jump, drag to mark a loop',
+  close: 'Close',
+};
+
+const de: Record<keyof typeof en, string> = {
+  practiseAlone: 'Allein üben',
+  rehearseTogether: 'Gemeinsam proben',
+  pinTitle: 'Chor-Zugang',
+  pinHint: 'Gib die PIN ein, die dein Chor mit dir geteilt hat.',
+  pinContinue: 'Weiter',
+  pinWrong: 'Diese PIN stimmt nicht. Versuch es noch einmal.',
+  pinFailed: 'Die PIN konnte nicht geprüft werden: {msg}',
+  repertoire: 'Repertoire',
+  arrangementsOne: '1 Arrangement',
+  arrangementsMany: '{n} Arrangements',
+  sharedWithChoir: '{count}, mit deinem Chor geteilt',
+  onThisDevice: '{count} auf diesem Gerät',
+  searchTitles: 'Titel suchen',
+  addArrangement: 'Arrangement hinzufügen',
+  dropTip: 'Zieh MusicXML-, MXL- oder MIDI-Dateien irgendwo auf diese Seite, um sie hinzuzufügen.',
+  dropHere: 'Loslassen, um es der gemeinsamen Bibliothek hinzuzufügen',
+  voicesOne: '1 Stimme',
+  voicesMany: '{n} Stimmen',
+  barsOne: '1 Takt',
+  barsMany: '{n} Takte',
+  keyMajor: '{k}-Dur',
+  keyMinor: '{k}-Moll',
+  sample: 'Beispiel',
+  moreFor: 'Mehr zu {title}',
+  open: '{title} öffnen',
+  rename: 'Umbenennen',
+  delete: 'Löschen',
+  cancel: 'Abbrechen',
+  save: 'Speichern',
+  deleteTitle: '„{title}“ löschen?',
+  deleteBody: 'Es verschwindet auf allen Geräten deines Chors aus der Bibliothek. Das lässt sich nicht rückgängig machen.',
+  renameSong: 'Arrangement umbenennen',
+  renameVoice: 'Stimme umbenennen',
+  loadingLibrary: 'Gemeinsame Bibliothek wird geladen…',
+  offlineTitle: 'Gemeinsame Bibliothek nicht erreichbar',
+  offlineBody: 'Es wird nur das mitgelieferte Stück angezeigt. {msg}',
+  retry: 'Erneut versuchen',
+  notConfigured: 'Die gemeinsame Bibliothek ist nicht eingerichtet, deshalb gibt es nur das mitgelieferte Stück.',
+  noMatches: 'Kein Titel passt zu „{q}“.',
+  adding: '{name} wird hinzugefügt…',
+  added: '„{title}“ ist jetzt für alle da.',
+  addFailed: '{name} konnte nicht hinzugefügt werden: {msg}',
+  wrongFileType: 'Wähle eine MusicXML-, MXL- oder MIDI-Datei.',
+  deleteFailed: 'Das Stück konnte nicht gelöscht werden: {msg}',
+  renameFailed: 'Umbenennen hat nicht geklappt: {msg}',
+  syncFailed: 'Synchronisieren hat nicht geklappt: {msg}',
+  waitingForSong: 'Warte auf das gemeinsame Stück…',
+  solo: 'Solo',
+  ensemble: 'Ensemble',
+  mode: 'Modus',
+  switchToTitle: 'Zu {mode} wechseln?',
+  switchToSolo: 'Nur dieses Gerät spielt, niemand sonst ist betroffen. Die App lädt neu.',
+  switchToEnsemble: 'Abspielen, Pausieren und Springen werden mit allen im Ensemble geteilt. Die App lädt neu.',
+  switchAction: 'Wechseln',
+  language: 'Sprache',
+  menu: 'Menü',
+  back: 'Repertoire',
+  pianoRoll: 'Klavierrolle',
+  sheetMusic: 'Noten',
+  view: 'Ansicht',
+  voices: 'Stimmen',
+  reset: 'Zurücksetzen',
+  mute: '{name} stumm schalten',
+  soloVoice: '{name} solo',
+  onlyVoice: 'Nur {name} (nochmal klicken für alle Stimmen, Doppelklick zum Umbenennen)',
+  othersWhileSoloing: 'Andere beim Solo',
+  bar: 'Takt {n}',
+  beat: 'Schlag {b} / {n}',
+  countIn: 'Einzählen…',
+  play: 'Abspielen',
+  pause: 'Pause',
+  stop: 'Zurück zur Startmarke',
+  prevBar: 'Vorheriger Takt (halten für schneller)',
+  nextBar: 'Nächster Takt (halten für schneller)',
+  loopWhole: 'Ganzes Stück wiederholen',
+  loopRegion: 'Takte {from}–{to} wiederholen',
+  stopLooping: 'Wiederholen beenden',
+  metronome: 'Metronom',
+  countInHint: 'Zählt vor einem Neustart einen Takt ein',
+  tempo: 'Tempo',
+  slower: 'Langsamer',
+  faster: 'Schneller',
+  customTempo: 'Eigenes Tempo',
+  key: 'Tonart',
+  lower: 'Einen Halbton tiefer',
+  higher: 'Einen Halbton höher',
+  writtenIn: 'Notiert in {key}',
+  tempoAndKey: 'Tempo & Tonart',
+  goToBar: 'Gehe zu Takt',
+  go: 'Los',
+  sections: 'Abschnitte',
+  jumpToSection: 'Zu Abschnitt {label} springen',
+  addSection: 'Abschnitt an der Abspielposition setzen',
+  addSectionsOnLaptop: 'Abschnitte am Laptop setzen',
+  saveDefaults: 'Tempo, Tonart und Abschnitte als Standard speichern',
+  savedDefaults: 'Als Standard für dieses Stück gespeichert.',
+  saveDefaultsFailed: 'Der Standard konnte nicht gespeichert werden: {msg}',
+  zoomIn: 'Vergrößern',
+  zoomOut: 'Verkleinern',
+  wholePiece: 'Ganzes Stück: klicken zum Springen, ziehen für eine Wiederholung',
+  close: 'Schließen',
+};
+
+export type MessageKey = keyof typeof en;
+
+function detectLang(): Lang {
+  try {
+    const stored = localStorage.getItem(LANG_KEY);
+    if (stored === 'en' || stored === 'de') return stored;
+  } catch {
+    // storage unavailable (private mode) -- fall through to the device language
+  }
+  return (navigator.language || 'en').toLowerCase().startsWith('de') ? 'de' : 'en';
+}
+
+export const lang: Lang = detectLang();
+document.documentElement.lang = lang;
+
+export function setLang(next: Lang) {
+  try {
+    localStorage.setItem(LANG_KEY, next);
+  } catch {
+    // not persisted; still applies after the reload below for this session's URL
+  }
+  location.reload();
+}
+
+export function t(key: MessageKey, vars: Record<string, string | number> = {}): string {
+  const table = lang === 'de' ? de : en;
+  return table[key].replace(/\{(\w+)\}/g, (_, name: string) => String(vars[name] ?? `{${name}}`));
+}
+
+export function countLabel(n: number, one: MessageKey, many: MessageKey): string {
+  return n === 1 ? t(one) : t(many, { n });
+}
+
+const MAJOR_EN = ['C♭', 'G♭', 'D♭', 'A♭', 'E♭', 'B♭', 'F', 'C', 'G', 'D', 'A', 'E', 'B', 'F♯', 'C♯'];
+const MINOR_EN = ['A♭', 'E♭', 'B♭', 'F', 'C', 'G', 'D', 'A', 'E', 'B', 'F♯', 'C♯', 'G♯', 'D♯', 'A♯'];
+// German spelling: B♭ is "B", B is "H", sharps take -is, flats -es (with the As/Es exceptions).
+const GERMAN: Record<string, string> = {
+  'C♭': 'Ces', 'G♭': 'Ges', 'D♭': 'Des', 'A♭': 'As', 'E♭': 'Es', 'B♭': 'B', F: 'F', C: 'C', G: 'G', D: 'D', A: 'A', E: 'E', B: 'H',
+  'F♯': 'Fis', 'C♯': 'Cis', 'G♯': 'Gis', 'D♯': 'Dis', 'A♯': 'Ais',
+};
+
+/** "G major" / "e-Moll" etc. from a key signature; major unless the file says minor. */
+export function keyName(fifths: number, mode: 'major' | 'minor' = 'major'): string {
+  const idx = Math.max(0, Math.min(14, (Number.isFinite(fifths) ? fifths : 0) + 7));
+  const base = (mode === 'minor' ? MINOR_EN : MAJOR_EN)[idx];
+  if (lang === 'de') {
+    const g = GERMAN[base] ?? base;
+    return t(mode === 'minor' ? 'keyMinor' : 'keyMajor', { k: mode === 'minor' ? g.toLowerCase() : g });
+  }
+  return t(mode === 'minor' ? 'keyMinor' : 'keyMajor', { k: base });
+}
