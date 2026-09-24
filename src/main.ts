@@ -741,6 +741,9 @@ async function loadSongLocally(song: SongEntry) {
       if (override) part.name = override;
     }
   }
+  // The library title wins over the title embedded in the file -- it's what the repertoire shows,
+  // and the only one a rename changes.
+  if (song.title) score.title = song.title;
   currentScore = score;
   currentSong = song;
   loadedSongId = song.id;
