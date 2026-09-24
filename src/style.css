@@ -104,11 +104,6 @@ button:disabled {
   white-space: nowrap;
 }
 
-.wordmark i,
-.landing-name i {
-  font-style: italic;
-}
-
 /* ---- Buttons & fields --------------------------------------------------------------- */
 
 .btn {
@@ -326,7 +321,12 @@ button:disabled {
   gap: 12px;
   flex-wrap: wrap;
   justify-content: center;
-  animation: rise 1.2s 0.25s var(--ease) both;
+  /* The name and the ribbons come first; the Solo / Ensemble choice follows. */
+  animation: rise 1s 1.5s var(--ease) both;
+}
+
+.mode-btn.last-used {
+  border-color: var(--paper-dim);
 }
 
 .mode-btn {
@@ -830,7 +830,7 @@ button:disabled {
 
 #song-title {
   margin: 0;
-  font: italic 500 28px/1.1 var(--f-display);
+  font: 500 28px/1.1 var(--f-display);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -906,8 +906,27 @@ button:disabled {
   transition: opacity var(--t-fast);
 }
 
-.voice-row:has(.rename-voice) {
-  grid-template-columns: 14px minmax(0, 1fr) 40px 40px 32px;
+.voice-row:has(.voice-more) {
+  grid-template-columns: 14px minmax(0, 1fr) 34px 34px 28px;
+}
+
+.voice-more {
+  width: 28px;
+  opacity: 0.6;
+}
+
+.voice-row:hover .voice-more,
+.voice-more:focus-visible {
+  opacity: 1;
+}
+
+.sheet-body .voice-row:has(.voice-more) {
+  grid-template-columns: 14px minmax(0, 1fr) 40px 40px 36px;
+}
+
+.sheet-body .voice-more {
+  width: 36px;
+  opacity: 1;
 }
 
 .voice-row:hover {

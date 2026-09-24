@@ -38,13 +38,14 @@ files anywhere — the "recording" is just a MusicXML file, synthesized live eve
 ## 2. What it does (feature tour)
 
 ### Title screen: Solo vs. Ensemble
-The very first time the app loads (only when a shared backend is configured — otherwise this
-step is skipped entirely), it shows the title screen: just the app's name over the moving voice
-ribbons (see §2.x Design) and two buttons, **Practise alone** (Solo) and **Rehearse together**
-(Ensemble). Solo is fully local — nothing about playback is shared with anyone else. Ensemble is
-the synced-playback experience described below. The choice is remembered (`localStorage`) so it's
-only asked once; afterwards the **Solo | Ensemble** switch in the repertoire header (or the mode
-badge in the player) changes it after a confirmation, which reloads the app. Either way, the
+Every time the app starts (when a shared backend is configured — otherwise this step is skipped),
+it opens on the title screen: the app's name over the moving voice ribbons (see Design below),
+and after a moment the two buttons fade in, **Practise alone** (Solo) and **Rehearse together**
+(Ensemble), with the last-used one outlined. Solo is fully local — nothing about playback is shared with anyone else. Ensemble is
+the synced-playback experience described below. The last choice is remembered (`localStorage`) and
+marked; the **Solo | Ensemble** switch in the repertoire header (or the mode badge in the player)
+changes it after a confirmation, reloading straight into the new mode (a one-shot
+`sessionStorage` flag skips the title screen for that one reload). Either way, the
 shared song library itself is always available — Solo only opts out of shared *playback*, not
 shared *songs*. See §4.7. The storage key is versioned (`ai-capella-mode-v2`) so it can be bumped
 again if every device should see the choice once more.
@@ -145,7 +146,9 @@ and popovers can't drift apart.
 - **Keyboard**: Space plays/pauses, ←/→ step a bar, L toggles loop, M toggles the metronome
   (all ignored while typing in a field or while a dialog is open).
 - **Tempo**: presets (50/80/100/120/140), − / + in steps of 5, or any custom value (20–300).
-  Tempo is independent of any tempo in the source file. Changing it while playing reschedules
+  Opening a song never carries over the previous song's tempo: it starts at the song's saved
+  default, else the first tempo written in the file (MusicXML `<sound tempo>` or a metronome mark,
+  MIDI set-tempo; `Score.tempo`), else 100. Changing it while playing reschedules
   from the current position without a perceptible jump.
 - **Metronome**: an optional click on every beat pulse (accented on downbeats), synthesized
   the same way as the notes.
@@ -176,6 +179,16 @@ score, with a mixer button that opens the same rows in a sheet.
   soloing" level (a slider, 0–75%) rather than silencing them.
 - **Clicking or tapping a voice's name** (sidebar name or phone chip) toggles *only this voice*:
   mutes and hides every other voice entirely; again restores everyone. **Reset** clears the mix.
+
+### Voice menu: clef and removing voices
+Each voice's ⋯ button (sidebar on a laptop, mixer sheet on a phone; library songs only) opens a
+menu with Rename, the **clef** (treble, tenor = treble with a small 8, bass — MusicXML songs only,
+since only they have a sheet-music view) and **Remove voice**. Both are stored beside the score,
+never in it, like voice renames: `clefOverrides` (dot-path per voice) and `removedParts` (a list of
+part ids) on the song's Firestore document, applied in `applyVoiceSetup()` when the song loads.
+Removing asks for confirmation (it affects everyone) and can be undone from the player's ⋯ menu
+(**Restore removed voices**); the last voice can't be removed. Other devices pick up clef and
+voice changes as soon as their playback is paused.
 
 ### Editable song and voice names
 Rename a song from its ⋯ menu in the repertoire, from the player's ⋯ menu, or by double-clicking
@@ -241,7 +254,7 @@ The visual system, from the September 2026 redesign:
   whole spectrum for however many voices a song has, so the highest voice is always warmest and
   the lowest always coolest, and neighbouring voices never share a hue. Canvas code reads the
   same tokens from `theme.ts` that CSS reads from `style.css`.
-- **Type**: Bodoni Moda (titles, wordmark), Atkinson Hyperlegible Next (everything read while
+- **Type**: Bodoni Moda (titles, wordmark; upright only — no italics anywhere), Atkinson Hyperlegible Next (everything read while
   singing, designed for legibility at a distance), Atkinson Hyperlegible Mono (bar, tempo and
   key readouts, so digits don't jump). All bundled via `@fontsource-variable/*` rather than
   loaded from Google (no visitor data to a third party — German courts have fined sites for

@@ -90,6 +90,7 @@ export function parseMIDI(buffer: ArrayBuffer): Score {
   reader.pos = headerEnd; // tolerate a header chunk longer than the 6 bytes we read
 
   let title: string | undefined;
+  let tempo: number | undefined;
   const timeSigChanges: TimeSigChange[] = [];
   const parts = new Map<string, PartBuild>(); // keyed by "trackIndex:channel"
 
@@ -134,6 +135,10 @@ export function parseMIDI(buffer: ArrayBuffer): Score {
         } else if (metaType === 0x01 || metaType === 0x05) {
           // Text / Lyric: attached to whichever note-on comes next in this track.
           pendingLyric = reader.text(len).trim();
+        } else if (metaType === 0x51 && len === 3 && tempo === undefined) {
+          // Set Tempo: microseconds per quarter note. Only the first one sets the starting tempo.
+          const usPerQuarter = (reader.u8() << 16) | (reader.u8() << 8) | reader.u8();
+          if (usPerQuarter > 0) tempo = Math.round(60_000_000 / usPerQuarter);
         } else if (metaType === 0x58 && len >= 2) {
           const numerator = reader.u8();
           const denomPow = reader.u8();
@@ -246,6 +251,7 @@ export function parseMIDI(buffer: ArrayBuffer): Score {
     slurs: [],
     totalBeats,
     rehearsalMarks: [], // MIDI has no equivalent concept this parser reads (a Marker meta-event exists but isn't parsed here)
+    tempo,
   };
 }
 

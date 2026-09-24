@@ -687,7 +687,8 @@ export class StaffView {
       this.drawKeySignature(ctx, fifths, layout.clef, bottomLineY, clefX + CLEF_W + 8);
 
       const name = this.score.parts.find((p) => p.id === layout.partId)?.name ?? '';
-      const labelY = layout.topY - 16;
+      // Above the treble clef's top curl (Bravura's G clef reaches ~12.5px above the top line).
+      const labelY = layout.topY - 21;
       ctx.fillStyle = this.partColor(layout.partId);
       ctx.beginPath();
       ctx.arc(16, labelY, 3.5, 0, Math.PI * 2);

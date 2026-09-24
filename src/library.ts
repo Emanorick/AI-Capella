@@ -42,7 +42,14 @@ export interface StoredSong {
   // populated here for a song whose MusicXML has no <rehearsal> marks of its own (see
   // Score.rehearsalMarks) -- when it does, those are used directly and nothing needs saving.
   savedConfig?: { transpose?: number; bpm?: number; sections?: { label: string; beat: number }[] };
+  // Per-voice clef chosen in the app (keyed by part id), overriding the file's own <clef>.
+  clefOverrides?: Record<string, VoiceClef>;
+  // Voices removed in the app (part ids). The stored score itself is never rewritten, so a removed
+  // voice can be restored at any time; it is filtered out when the song loads.
+  removedParts?: string[];
 }
+
+export type VoiceClef = 'treble' | 'treble8' | 'bass';
 
 const SONGS_COLLECTION = 'songs';
 const ACCESS_DOC_PATH = ['config', 'access'] as const;
@@ -62,6 +69,8 @@ function parseSongDoc(id: string, data: Record<string, unknown>): StoredSong {
     importedAt: (data.importedAt as number) ?? 0,
     partNameOverrides: data.partNameOverrides as Record<string, string> | undefined,
     savedConfig: data.savedConfig as StoredSong['savedConfig'],
+    clefOverrides: data.clefOverrides as StoredSong['clefOverrides'],
+    removedParts: Array.isArray(data.removedParts) ? (data.removedParts as string[]) : undefined,
   };
 }
 
@@ -131,11 +140,17 @@ export async function deleteImportedSong(id: string): Promise<void> {
  * other voice's already-saved rename the next time this ran. The dot-path form updates just that
  * one nested key, leaving the rest of the map untouched.
  */
-export async function updateSongMetadata(id: string, patch: { title?: string; partName?: { partId: string; name: string } }): Promise<void> {
+export async function updateSongMetadata(
+  id: string,
+  patch: { title?: string; partName?: { partId: string; name: string }; clef?: { partId: string; clef: VoiceClef }; removedParts?: string[] },
+): Promise<void> {
   if (!db) throw new Error('Firebase is not configured');
   const fields: Record<string, unknown> = {};
   if (patch.title !== undefined) fields.title = patch.title;
   if (patch.partName) fields[`partNameOverrides.${patch.partName.partId}`] = patch.partName.name;
+  // Dot-path for the same reason as partNameOverrides: only this one voice's entry changes.
+  if (patch.clef) fields[`clefOverrides.${patch.clef.partId}`] = patch.clef.clef;
+  if (patch.removedParts) fields.removedParts = patch.removedParts;
   await updateDoc(doc(db, SONGS_COLLECTION, id), fields);
 }
 

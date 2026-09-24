@@ -105,6 +105,18 @@ const en = {
   zoomOut: 'Zoom out',
   wholePiece: 'Whole piece: click to jump, drag to mark a loop',
   close: 'Close',
+  voiceMenu: 'More for {name}',
+  clef: 'Clef',
+  clefTreble: 'Treble clef',
+  clefTenor: 'Tenor clef (treble, sung an octave lower)',
+  clefBass: 'Bass clef',
+  removeVoice: 'Remove voice',
+  removeVoiceTitle: 'Remove “{name}”?',
+  removeVoiceBody: 'The voice disappears from this arrangement for everyone in your choir. You can bring it back from the menu at any time.',
+  remove: 'Remove',
+  restoreVoices: 'Restore removed voices ({n})',
+  lastVoice: "The last voice can't be removed.",
+  changeFailed: "Couldn't save the change: {msg}",
 };
 
 const de: Record<keyof typeof en, string> = {
@@ -209,6 +221,18 @@ const de: Record<keyof typeof en, string> = {
   zoomOut: 'Verkleinern',
   wholePiece: 'Ganzes Stück: klicken zum Springen, ziehen für eine Wiederholung',
   close: 'Schließen',
+  voiceMenu: 'Mehr zu {name}',
+  clef: 'Notenschlüssel',
+  clefTreble: 'Violinschlüssel',
+  clefTenor: 'Tenorschlüssel (Violinschlüssel, eine Oktave tiefer)',
+  clefBass: 'Bassschlüssel',
+  removeVoice: 'Stimme entfernen',
+  removeVoiceTitle: '„{name}“ entfernen?',
+  removeVoiceBody: 'Die Stimme verschwindet für alle in deinem Chor aus diesem Arrangement. Über das Menü kannst du sie jederzeit wiederherstellen.',
+  remove: 'Entfernen',
+  restoreVoices: 'Entfernte Stimmen wiederherstellen ({n})',
+  lastVoice: 'Die letzte Stimme kann nicht entfernt werden.',
+  changeFailed: 'Die Änderung konnte nicht gespeichert werden: {msg}',
 };
 
 export type MessageKey = keyof typeof en;

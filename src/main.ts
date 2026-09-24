@@ -2,7 +2,6 @@
 // to a third party (German courts have fined sites for remotely loaded Google Fonts), and they keep
 // working on weak rehearsal-room Wi-Fi.
 import '@fontsource-variable/bodoni-moda/opsz.css';
-import '@fontsource-variable/bodoni-moda/opsz-italic.css';
 import '@fontsource-variable/atkinson-hyperlegible-next/wght.css';
 import '@fontsource-variable/atkinson-hyperlegible-mono/wght.css';
 import './style.css';
@@ -14,7 +13,7 @@ import { StaffView, STAFF_RULER_HEIGHT_PX } from './staffView';
 import { OverviewStrip } from './overview';
 import { colorForPart } from './palette';
 import { measureAtBeat, type Score } from './score';
-import { deleteImportedSong, readScoreFile, saveImportedSong, saveSongConfig, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong } from './library';
+import { deleteImportedSong, readScoreFile, saveImportedSong, saveSongConfig, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong, type VoiceClef } from './library';
 import { ensureSignedIn, isFirebaseConfigured } from './firebase';
 import { ensureAccess } from './pinGate';
 import { animateRibbons, coverDataFromScore, drawCover, drawMark, prepareCanvas, type CoverData } from './artwork';
@@ -34,6 +33,8 @@ interface SongEntry {
   imported?: boolean;
   partNameOverrides?: Record<string, string>;
   savedConfig?: StoredSong['savedConfig'];
+  clefOverrides?: StoredSong['clefOverrides'];
+  removedParts?: string[];
 }
 
 // import.meta.env.BASE_URL (not a bare "/...") since the app is served from a subpath on
@@ -46,6 +47,7 @@ const ACCEPTED_EXTENSIONS = ['.musicxml', '.xml', '.mxl', '.mid', '.midi'];
 const MIDI_EXTENSIONS = ['.mid', '.midi'];
 
 const BPM_PRESETS = [50, 80, 100, 120, 140];
+const DEFAULT_BPM = 100;
 const MIN_BPM = 20;
 const MAX_BPM = 300;
 const MIN_TRANSPOSE = -7;
@@ -63,7 +65,7 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <section id="landing" class="view" aria-label="AI-Capella">
     <canvas class="ribbons" id="landing-ribbons" aria-hidden="true"></canvas>
-    <h1 class="landing-name"><i>AI</i>-Capella</h1>
+    <h1 class="landing-name">AI-Capella</h1>
     <div class="landing-modes">
       <button type="button" class="mode-btn" id="mode-solo-btn">${icon('user')}<span>${t('practiseAlone')}</span></button>
       <button type="button" class="mode-btn" id="mode-ensemble-btn">${icon('users')}<span>${t('rehearseTogether')}</span></button>
@@ -72,7 +74,7 @@ app.innerHTML = `
 
   <section id="library" class="view">
     <header class="lib-top">
-      <span class="brand"><canvas class="mark" aria-hidden="true"></canvas><span class="wordmark"><i>AI</i>-Capella</span></span>
+      <span class="brand"><canvas class="mark" aria-hidden="true"></canvas><span class="wordmark">AI-Capella</span></span>
       <div class="lib-top-r">
         <div class="seg mode-seg" id="mode-seg" role="group" aria-label="${t('mode')}">
           <button type="button" data-action="mode" data-mode="solo">${icon('user')}<span>${t('solo')}</span></button>
@@ -200,6 +202,7 @@ const staffCanvas = document.querySelector<HTMLCanvasElement>('#staff')!;
 const overviewCanvas = document.querySelector<HTMLCanvasElement>('#overview')!;
 
 let currentScore: Score | null = null;
+let currentPartColor: ((partId: string) => string) | null = null;
 let audioEngine: AudioEngine | null = null;
 let pianoRoll: PianoRoll | null = null;
 let staffView: StaffView | null = null;
@@ -234,7 +237,7 @@ let renderPending = false;
 let canvasLeft = 0;
 let canvasTop = 0;
 // Sorted notes per part, for the voice activity lights (who is singing at the playhead).
-let notesByPart = new Map<string, { startBeat: number; durationBeats: number }[]>();
+let notesByPart = new Map<string, { startBeat: number; durationBeats: number; midi: number }[]>();
 
 // Multi-device sync: which song is currently loaded locally, plus bookkeeping so an incoming
 // shared-session update only actually touches AudioEngine when something timing-relevant
@@ -341,8 +344,11 @@ async function requestModeSwitch(mode: 'solo' | 'ensemble') {
   if (!ok) return;
   stopPlayback();
   localStorage.setItem(MODE_STORAGE_KEY, mode);
+  // The title screen shows on every start; after an explicit switch, go straight on in the new mode.
+  sessionStorage.setItem(MODE_SWITCH_KEY, mode);
   location.reload();
 }
+const MODE_SWITCH_KEY = 'ai-capella-mode-switch';
 modeBadge.addEventListener('click', () => requestModeSwitch(sessionMode === 'solo' ? 'ensemble' : 'solo'));
 
 function chooseMode(mode: 'solo' | 'ensemble') {
@@ -382,6 +388,7 @@ function allSongs(): SongEntry[] {
 }
 
 interface SongMeta {
+  tempo?: number;
   voices: number;
   bars: number;
   key: string;
@@ -415,6 +422,7 @@ function songMeta(song: SongEntry): Promise<SongMeta | null> {
               const score = parseSong(song, await readSongText(song));
               const first = score.measures[0];
               resolve({
+                tempo: score.tempo,
                 voices: score.parts.length,
                 bars: score.measures.at(-1)?.number ?? score.measures.length,
                 // MIDI imports carry no key signature (older ones not even a fifths field), so no key is named for them.
@@ -577,7 +585,7 @@ songGridEl.addEventListener('click', (e) => {
     );
     return;
   }
-  if (target.closest('.song-open')) selectSong(song);
+  if (target.closest('.song-open')) void selectSong(song);
 });
 
 async function confirmDelete(song: SongEntry) {
@@ -668,7 +676,7 @@ async function importFiles(files: FileList | File[]) {
   }
   // The onSnapshot listener will render the confirmed list; select the new song immediately
   // rather than waiting on that round trip.
-  if (lastImported) selectSong(lastImported);
+  if (lastImported) void selectSong(lastImported);
 }
 
 importBtn.addEventListener('click', () => importInput.click());
@@ -704,19 +712,19 @@ libraryEl.addEventListener('drop', (e) => {
  * actually loads it once that choice comes back through applyPlaybackState(), same as every other
  * control below -- see pushState()'s doc comment for why nothing here applies state directly.
  */
-function selectSong(song: SongEntry) {
+async function selectSong(song: SongEntry) {
+  // Every song starts at its own tempo -- never the previous song's: the saved default, else the
+  // tempo written in the file, else 100.
+  const fileTempo = (await songMeta(song))?.tempo;
+  const startBpm = Math.min(Math.max(Math.round(song.savedConfig?.bpm ?? fileTempo ?? DEFAULT_BPM), MIN_BPM), MAX_BPM);
   pushState({
     songId: song.id,
     playing: false,
     originBeat: 0,
     originServerTimeMs: 0,
-    // A saved default (the "Save" action, see saveSongConfig) takes over from the usual hardcoded
-    // reset -- transpose always explicit (0 with no saved config); bpm only included when actually
-    // saved, so a song with no saved config keeps whatever BPM the previous song was left at (bpm
-    // is otherwise never reset on song selection, and pushState's merge write would otherwise need
-    // it omitted, not zeroed).
+    // A saved default (the "Save" action, see saveSongConfig) takes over from the plain reset.
     transpose: song.savedConfig?.transpose ?? 0,
-    ...(song.savedConfig?.bpm != null ? { bpm: song.savedConfig.bpm } : {}),
+    bpm: startBpm,
     metronomeOn: false,
     loopEnabled: false,
     loopRegion: null,
@@ -741,6 +749,7 @@ async function loadSongLocally(song: SongEntry) {
       if (override) part.name = override;
     }
   }
+  applyVoiceSetup(score, song);
   // The library title wins over the title embedded in the file -- it's what the repertoire shows,
   // and the only one a rename changes.
   if (song.title) score.title = song.title;
@@ -762,9 +771,11 @@ async function loadSongLocally(song: SongEntry) {
   lastAppliedTiming = null;
   lastAppliedMetronomeOn = false;
 
+  audioEngine?.dispose();
   audioEngine = new AudioEngine(score);
   audioEngine.setDuckedVolume(duckVolume);
   const partColor = (partId: string) => colorForPart(score.parts.findIndex((p) => p.id === partId), score.parts.length);
+  currentPartColor = partColor;
   // Shown first so the canvases have a real layout size when the views measure themselves.
   setViewMode('player');
   pianoRoll = new PianoRoll(canvas, score, partColor);
@@ -1042,6 +1053,15 @@ function voiceRow(partId: string, name: string, color: string): HTMLLIElement {
     b.setAttribute('aria-pressed', 'false');
     li.appendChild(b);
   }
+  if (currentSong?.imported) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'icon-btn small voice-more';
+    more.setAttribute('aria-label', t('voiceMenu', { name }));
+    more.title = t('voiceMenu', { name });
+    more.innerHTML = icon('more');
+    li.appendChild(more);
+  }
   return li;
 }
 
@@ -1136,6 +1156,131 @@ async function renameVoice(partId: string) {
   });
 }
 
+const CLEF_SPECS: Record<VoiceClef, NonNullable<Score['parts'][number]['clef']>> = {
+  treble: { sign: 'G', line: 2 },
+  treble8: { sign: 'G', line: 2, octaveChange: -1 },
+  bass: { sign: 'F', line: 4 },
+};
+
+/** Applies the song's removed voices and clef choices (both stored beside the score, never in it). */
+function applyVoiceSetup(score: Score, song: SongEntry) {
+  const removed = new Set(song.removedParts ?? []);
+  // Never leave a song without voices, even if the stored list says otherwise.
+  if (removed.size && score.parts.some((p) => !removed.has(p.id))) {
+    score.parts = score.parts.filter((p) => !removed.has(p.id));
+    score.notes = score.notes.filter((n) => !removed.has(n.partId));
+    score.slurs = score.slurs.filter((sl) => !removed.has(sl.partId));
+  }
+  for (const part of score.parts) {
+    const choice = song.clefOverrides?.[part.id];
+    if (choice) part.clef = CLEF_SPECS[choice];
+  }
+}
+
+function voiceSetupKey(song: SongEntry): string {
+  return JSON.stringify([song.removedParts ?? [], song.clefOverrides ?? {}]);
+}
+
+/** The clef a voice is shown with -- its chosen/notated clef, else the same pitch heuristic the sheet view uses. */
+function currentClef(partId: string): VoiceClef {
+  const part = currentScore?.parts.find((p) => p.id === partId);
+  if (part?.clef?.sign === 'F') return 'bass';
+  if (part?.clef?.sign === 'G') return part.clef.octaveChange === -1 ? 'treble8' : 'treble';
+  const notes = notesByPart.get(partId) ?? [];
+  const avg = notes.length ? notes.reduce((sum, n) => sum + n.midi, 0) / notes.length : 60;
+  return avg >= 60 ? 'treble' : 'bass';
+}
+
+function openVoiceMenu(anchor: HTMLElement, partId: string) {
+  const part = currentScore?.parts.find((p) => p.id === partId);
+  if (!part || !currentSong?.imported) return;
+  const items: Parameters<typeof openMenu>[1] = [{ label: t('renameVoice'), icon: 'pencil', onSelect: () => void renameVoice(partId) }];
+  // Clefs only matter for the sheet music view, which MIDI imports don't have.
+  if (currentSong.format !== 'score') {
+    const clef = currentClef(partId);
+    for (const [value, label] of [
+      ['treble', t('clefTreble')],
+      ['treble8', t('clefTenor')],
+      ['bass', t('clefBass')],
+    ] as const) {
+      items.push({ label, icon: 'sheet', checked: clef === value, onSelect: () => void setVoiceClef(partId, value) });
+    }
+  }
+  items.push({ label: t('removeVoice'), icon: 'trash', danger: true, onSelect: () => void confirmRemoveVoice(partId) });
+  openMenu(anchor, items, part.name);
+}
+
+async function setVoiceClef(partId: string, clef: VoiceClef) {
+  const song = currentSong;
+  const part = currentScore?.parts.find((p) => p.id === partId);
+  if (!song?.imported || !part) return;
+  // Applied locally straight away; written for everyone in the background (rolled back if it fails).
+  const previous = { ...(song.clefOverrides ?? {}) };
+  song.clefOverrides = { ...previous, [partId]: clef };
+  part.clef = CLEF_SPECS[clef];
+  rebuildStaffView();
+  try {
+    await updateSongMetadata(song.id, { clef: { partId, clef } });
+  } catch (err) {
+    song.clefOverrides = previous;
+    toast(t('changeFailed', { msg: errorText(err) }), 'error');
+    void reloadCurrentSong();
+  }
+}
+
+async function confirmRemoveVoice(partId: string) {
+  const part = currentScore?.parts.find((p) => p.id === partId);
+  if (!part || !currentSong?.imported || !currentScore) return;
+  if (currentScore.parts.length <= 1) {
+    toast(t('lastVoice'), 'error');
+    return;
+  }
+  const ok = await confirmDialog({ title: t('removeVoiceTitle', { name: part.name }), body: t('removeVoiceBody'), confirmLabel: t('remove'), danger: true });
+  if (!ok) return;
+  await setRemovedParts([...(currentSong.removedParts ?? []), partId]);
+}
+
+/** Writes the song's removed-voice list for everyone and reloads the open song with it. */
+async function setRemovedParts(removedParts: string[]) {
+  const song = currentSong;
+  if (!song?.imported) return;
+  const previous = song.removedParts;
+  song.removedParts = removedParts;
+  const entry = importedSongs.find((s) => s.id === song.id);
+  if (entry) entry.removedParts = removedParts;
+  closeOverlay();
+  await reloadCurrentSong();
+  try {
+    await updateSongMetadata(song.id, { removedParts });
+  } catch (err) {
+    song.removedParts = previous;
+    if (entry) entry.removedParts = previous;
+    toast(t('changeFailed', { msg: errorText(err) }), 'error');
+    await reloadCurrentSong();
+  }
+}
+
+/** Reloads the open song (paused, same position/tempo/key) after its voice setup changed. */
+async function reloadCurrentSong() {
+  if (!currentSong) return;
+  const song = importedSongs.find((s) => s.id === currentSong!.id) ?? currentSong;
+  const state = currentStateSnapshot();
+  audioEngine?.stop();
+  loadedSongId = null;
+  await applyPlaybackState({ ...state, songId: song.id, playing: false, originServerTimeMs: 0 });
+}
+
+/** Recreates the sheet view (after a clef change), keeping its zoom/transpose/mix/sections. */
+function rebuildStaffView() {
+  if (!currentScore || !currentPartColor) return;
+  staffView = new StaffView(staffCanvas, currentScore, currentPartColor);
+  staffView.setTranspose(transpose);
+  staffView.setZoom(zoom);
+  staffView.setPartMix(partMix);
+  staffView.setSections(effectiveSections());
+  resizeCanvases();
+}
+
 function openMixerSheet(opener: HTMLElement) {
   if (!currentScore) return;
   const wrap = document.createElement('div');
@@ -1143,17 +1288,7 @@ function openMixerSheet(opener: HTMLElement) {
   const list = document.createElement('ul');
   list.className = 'voice-list';
   currentScore.parts.forEach((p, i) => {
-    const row = voiceRow(p.id, p.name, colorForPart(i, currentScore!.parts.length));
-    if (currentSong?.imported) {
-      const rename = document.createElement('button');
-      rename.type = 'button';
-      rename.className = 'icon-btn small rename-voice';
-      rename.dataset.part = p.id;
-      rename.setAttribute('aria-label', t('renameVoice'));
-      rename.innerHTML = icon('pencil');
-      row.appendChild(rename);
-    }
-    list.appendChild(row);
+    list.appendChild(voiceRow(p.id, p.name, colorForPart(i, currentScore!.parts.length)));
   });
   const duck = document.createElement('div');
   duck.className = 'duck';
@@ -1470,6 +1605,8 @@ function openPlayerMenu(anchor: HTMLElement) {
   const items: Parameters<typeof openMenu>[1] = [];
   if (currentSong?.imported) {
     items.push({ label: t('renameSong'), icon: 'pencil', onSelect: () => currentSong && void renameSong(currentSong) });
+    const removed = currentSong.removedParts?.length ?? 0;
+    if (removed) items.push({ label: t('restoreVoices', { n: removed }), icon: 'users', onSelect: () => void setRemovedParts([]) });
     // Saving defaults is a laptop task, like adding sections.
     if (!isNarrow()) items.push({ label: t('saveDefaults'), icon: 'save', onSelect: saveDefaults });
   }
@@ -1493,7 +1630,7 @@ document.addEventListener('click', (e) => {
     const partId = voiceRowEl.dataset.part!;
     const mixBtn = target.closest<HTMLElement>('.mix-btn');
     if (mixBtn) toggleMix(partId, mixBtn.dataset.mix as PartMixState);
-    else if (target.closest('.rename-voice')) void renameVoice(partId);
+    else if (target.closest('.voice-more')) openVoiceMenu(target.closest<HTMLElement>('.voice-more')!, partId);
     else if (target.closest('.voice-name')) toggleTrueSolo(partId);
     return;
   }
@@ -2216,8 +2353,22 @@ async function runBootstrap() {
     subscribeToSongs(
       (songs) => {
         libraryState = 'ready';
-        importedSongs = songs.map((s) => ({ id: s.id, title: s.title, xml: s.xml, format: s.format, imported: true, partNameOverrides: s.partNameOverrides, savedConfig: s.savedConfig }));
+        importedSongs = songs.map((s) => ({
+          id: s.id,
+          title: s.title,
+          xml: s.xml,
+          format: s.format,
+          imported: true,
+          partNameOverrides: s.partNameOverrides,
+          savedConfig: s.savedConfig,
+          clefOverrides: s.clefOverrides,
+          removedParts: s.removedParts,
+        }));
         renderSongList();
+        // Clef changes and removed voices from another device apply to the open song too (once
+        // it's paused -- reloading mid-playback would cut the music off).
+        const fresh = currentSong && importedSongs.find((s) => s.id === currentSong!.id);
+        if (fresh && currentSong && voiceSetupKey(fresh) !== voiceSetupKey(currentSong) && !audioEngine?.isPlaying()) void reloadCurrentSong();
         // A remote songId can arrive before this device's own library listener has caught up
         // with it (e.g. it was just imported elsewhere) -- re-apply the last state we got once
         // the library list might actually contain it.
@@ -2249,14 +2400,17 @@ async function runBootstrap() {
   }
 }
 
-// Mode resolution: a stored choice skips straight to the repertoire; with no stored choice, show
-// the title screen only if there's actually a backend to choose Ensemble on.
+// Mode resolution: with a shared backend, every start opens on the title screen and the Solo /
+// Ensemble choice comes after it (the last choice is marked). The one exception is the reload right
+// after switching modes from inside the app, which goes straight on in the new mode.
 const storedMode = localStorage.getItem(MODE_STORAGE_KEY);
-if (storedMode === 'solo' || storedMode === 'ensemble') {
-  sessionMode = storedMode;
-  setViewMode('library');
-  void runBootstrap();
+const switchedMode = sessionStorage.getItem(MODE_SWITCH_KEY);
+sessionStorage.removeItem(MODE_SWITCH_KEY);
+if (storedMode === 'solo' || storedMode === 'ensemble') sessionMode = storedMode;
+if (isFirebaseConfigured && (switchedMode === 'solo' || switchedMode === 'ensemble')) {
+  chooseMode(switchedMode);
 } else if (isFirebaseConfigured) {
+  document.querySelector(storedMode === 'ensemble' ? '#mode-ensemble-btn' : '#mode-solo-btn')?.classList.toggle('last-used', storedMode === 'solo' || storedMode === 'ensemble');
   setViewMode('landing');
 } else {
   setViewMode('library');

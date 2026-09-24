@@ -304,5 +304,23 @@ export function parseMusicXML(xmlText: string): Score {
   notes.sort((a, b) => a.startBeat - b.startBeat);
   rehearsalMarks.sort((a, b) => a.beat - b.beat);
 
-  return { title, parts, notes, measures, slurs, totalBeats, rehearsalMarks };
+  return { title, parts, notes, measures, slurs, totalBeats, rehearsalMarks, tempo: readTempo(doc) };
+}
+
+/**
+ * The file's first stated tempo in quarter notes per minute: a <sound tempo> (always in quarter
+ * notes by definition) wins; otherwise a printed metronome mark, converted from its beat unit.
+ */
+function readTempo(doc: Document): number | undefined {
+  const sound = doc.querySelector('sound[tempo]')?.getAttribute('tempo');
+  const fromSound = sound ? parseFloat(sound) : NaN;
+  if (Number.isFinite(fromSound) && fromSound > 0) return Math.round(fromSound);
+  const metronome = doc.querySelector('direction-type > metronome');
+  const perMinute = parseFloat(metronome?.querySelector('per-minute')?.textContent ?? '');
+  if (!Number.isFinite(perMinute) || perMinute <= 0) return undefined;
+  const unit = metronome?.querySelector('beat-unit')?.textContent?.trim() ?? 'quarter';
+  const quarters: Record<string, number> = { whole: 4, half: 2, quarter: 1, eighth: 0.5, '16th': 0.25 };
+  let factor = quarters[unit] ?? 1;
+  if (metronome?.querySelector('beat-unit-dot')) factor *= 1.5;
+  return Math.round(perMinute * factor);
 }

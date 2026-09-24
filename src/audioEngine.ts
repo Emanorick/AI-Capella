@@ -452,6 +452,13 @@ export class AudioEngine {
     return this.playing;
   }
 
+  /** Stops everything and releases the AudioContext -- called when another song replaces this one. */
+  dispose() {
+    this.clearSchedule();
+    this.playing = false;
+    void this.ctx.close().catch(() => {});
+  }
+
   getPausedBeat() {
     return this.pausedBeat;
   }

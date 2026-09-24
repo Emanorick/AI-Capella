@@ -79,6 +79,10 @@ export interface Score {
   // main.ts falls back to letting the user mark their own section boundaries instead (persisted
   // per-song via library.ts's savedConfig, not part of this parsed-from-source Score at all).
   rehearsalMarks: RehearsalMark[];
+  // The first tempo the file states, in quarter-note beats per minute (MusicXML <sound tempo> or a
+  // metronome mark, MIDI set-tempo) -- the starting tempo when a song is opened without a saved
+  // default. Absent when the file states none.
+  tempo?: number;
 }
 
 export interface BeatMarker {
