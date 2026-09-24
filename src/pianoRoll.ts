@@ -1,11 +1,12 @@
 import type { NoteEvent, Score, SlurArc } from './score';
 import { getBeatMarkers } from './score';
+import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper } from './theme';
 
 export const BASE_PIXELS_PER_BEAT = 70;
 // The only place a click/drag sets the playback start point or defines a loop region -- clicks in
 // the scrollable note area below are just for previewing a note's pitch, and can't accidentally
 // jump playback (a real problem before: any click during scrolling or note-preview would seek).
-export const RULER_HEIGHT_PX = 22;
+export const RULER_HEIGHT_PX = 28;
 const PLAYHEAD_X_RATIO = 0.2;
 const ROW_PADDING_SEMITONES = 2;
 // Row height in css px is the larger of MIN_ROW_HEIGHT_PX and "stretch to fill the viewport": a
@@ -17,10 +18,13 @@ const ROW_PADDING_SEMITONES = 2;
 // even a small overlap between the lyric and the bar of an adjacent voice on the next semitone
 // (common in close choral harmony) reads as broken/misaligned, and it's less readable than text
 // sitting clearly below its note.
-const MIN_ROW_HEIGHT_PX = 30;
-const BAR_PAD_PX = 2; // gap from the top of the row to the note bar
-const LYRIC_AREA_PX = 15; // space reserved below the bar for its lyric, within the same row
-const DIMMED_ALPHA = 0.5;
+const MIN_ROW_HEIGHT_PX = 32;
+const BAR_PAD_PX = 3; // gap from the top of the row to the note pill
+// Space kept below the pill for a syllable that doesn't fit inside its note (short notes) -- most
+// lyrics sit inside the pill itself, the way vocal-synth editors print them.
+const LYRIC_AREA_PX = 12;
+const DIMMED_ALPHA = 0.3;
+const PAST_SHADE = 'rgba(13,12,22,0.38)'; // laid over everything left of the playhead: played notes step back
 const MAX_DPR = 2; // native Retina density; only caps 3x phones, doesn't soften a normal laptop screen
 const BUFFER_SPAN_MULTIPLIER = 3; // scrolling-content buffer covers this many viewport-widths of beats
 const MAX_BUFFER_DEVICE_PX = 8192; // defensive cap on the content buffer's width in device px (see ensureContentBuffer)
@@ -31,7 +35,8 @@ const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 
 // gain) drawn once immediately before beat 0, as part of the scrollable content itself rather
 // than a persistent left-edge sidebar (the old, already-removed design) -- it scrolls out of view
 // naturally once the user scrolls past the piece's start, same as any other content.
-const KEYBOARD_WIDTH_PX = 40;
+const KEYBOARD_WIDTH_PX = 44;
+const KEYBOARD_GAP_PX = 8; // space between the keyboard and the first beat
 const BLACK_KEY_PITCH_CLASSES = new Set([1, 3, 6, 8, 10]); // C#, D#, F#, G#, A#
 
 function clamp(v: number, min: number, max: number): number {
@@ -94,6 +99,7 @@ export class PianoRoll {
   // frame (as playback beat progresses continuously) is exactly what makes text look like it's
   // shimmering/blurring: see snapToDevicePx below for the other half of that fix.
   private rulerBuffer: HTMLCanvasElement | null = null;
+  private sections: { label: string; beat: number }[] = [];
 
   constructor(canvas: HTMLCanvasElement, score: Score, partColor: (partId: string) => string) {
     this.canvas = canvas;
@@ -111,6 +117,7 @@ export class PianoRoll {
       if (list) list.push(note);
       else this.notesByPart.set(note.partId, [note]);
     }
+    for (const list of this.notesByPart.values()) list.sort((a, b) => a.startBeat - b.startBeat);
     this.slursByPart = new Map();
     for (const slur of score.slurs) {
       const list = this.slursByPart.get(slur.partId);
@@ -199,6 +206,12 @@ export class PianoRoll {
 
   setLoopRegion(region: LoopRegion | null) {
     this.loopRegion = region;
+  }
+
+  /** Section letters (rehearsal marks) printed as boxed letters in the ruler. */
+  setSections(sections: { label: string; beat: number }[]) {
+    this.sections = sections;
+    this.contentBufferDirty = true;
   }
 
   /** Shows the pitch name label at a clicked note's position (or clears it, if null). */
@@ -301,8 +314,9 @@ export class PianoRoll {
    */
   hitTestKeyboard(x: number, y: number, displayBeat: number): number | null {
     const keyboardWidthBeats = KEYBOARD_WIDTH_PX / this.pixelsPerBeat;
+    const gapBeats = KEYBOARD_GAP_PX / this.pixelsPerBeat;
     const beat = this.xToBeat(x, displayBeat);
-    if (beat < -keyboardWidthBeats || beat >= 0) return null;
+    if (beat < -keyboardWidthBeats - gapBeats || beat >= -gapBeats) return null;
     const midi = this.yToMidi(y);
     if (midi < this.minMidi || midi > this.maxMidi) return null;
     return midi;
@@ -326,27 +340,29 @@ export class PianoRoll {
     // red line sits right at anchorX) exactly when the view hasn't been panned away from it.
     const beatToX = (beat: number) => anchorX + (beat - displayBeat) * this.pixelsPerBeat;
 
-    ctx.fillStyle = '#12141c';
+    ctx.fillStyle = INK0;
     ctx.fillRect(0, 0, width, height);
 
     // Ruler: the only clickable strip for setting the playback start point or a loop region (see
     // RULER_HEIGHT_PX). Fixed at the top, never scrolls vertically, but shares the same horizontal
-    // beat->x mapping as the note content below so measure numbers/markers line up with their bars.
-    ctx.fillStyle = '#181b26';
+    // beat->x mapping as the note content below so bar numbers/section letters line up with bars.
+    ctx.fillStyle = INK1;
     ctx.fillRect(0, 0, width, RULER_HEIGHT_PX);
-    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, RULER_HEIGHT_PX - 0.5);
-    ctx.lineTo(width, RULER_HEIGHT_PX - 0.5);
-    ctx.stroke();
+    ctx.fillStyle = paper(0.12);
+    ctx.fillRect(0, RULER_HEIGHT_PX - 1, width, 1);
     if (this.loopRegion) {
       const x1 = beatToX(this.loopRegion.start);
       const x2 = beatToX(this.loopRegion.end);
-      ctx.fillStyle = 'rgba(79,168,255,0.35)';
-      ctx.fillRect(x1, 0, x2 - x1, RULER_HEIGHT_PX);
+      ctx.fillStyle = paper(0.14);
+      roundedRect(ctx, x1, 5, x2 - x1, RULER_HEIGHT_PX - 10, 4);
+      ctx.fill();
+      ctx.fillStyle = PAPER;
+      roundedRect(ctx, x1 - 2, 4, 4, RULER_HEIGHT_PX - 8, 2);
+      ctx.fill();
+      roundedRect(ctx, x2 - 2, 4, 4, RULER_HEIGHT_PX - 8, 2);
+      ctx.fill();
     }
-    // Measure-number labels themselves are pre-rendered into rulerBuffer (see ensureContentBuffer)
+    // Bar numbers and section letters are pre-rendered into rulerBuffer (see ensureContentBuffer)
     // and just blitted here, same as the note content below -- see snapToDevicePx's doc comment.
     this.ensureContentBuffer(displayBeat, width, rowHeight);
     if (this.rulerBuffer) {
@@ -356,17 +372,7 @@ export class PianoRoll {
       const srcEndCss = Math.min(bufferCssWidth, width - destX);
       const srcWidthCss = srcEndCss - srcStartCss;
       if (srcWidthCss > 0) {
-        ctx.drawImage(
-          this.rulerBuffer,
-          srcStartCss * this.dpr,
-          0,
-          srcWidthCss * this.dpr,
-          RULER_HEIGHT_PX * this.dpr,
-          destX + srcStartCss,
-          0,
-          srcWidthCss,
-          RULER_HEIGHT_PX,
-        );
+        ctx.drawImage(this.rulerBuffer, srcStartCss * this.dpr, 0, srcWidthCss * this.dpr, RULER_HEIGHT_PX * this.dpr, destX + srcStartCss, 0, srcWidthCss, RULER_HEIGHT_PX);
       }
     }
 
@@ -376,34 +382,23 @@ export class PianoRoll {
     ctx.clip();
     ctx.translate(0, RULER_HEIGHT_PX);
 
-    // loop region highlight
     // Thin vertical markers below are drawn as fillRect, not stroke(): a 1-2px straight line is
     // exactly representable as a filled rectangle, and stroked paths go through a much heavier
-    // rasterization path than plain rect fills in most renderers -- this was the single biggest
-    // per-frame cost during playback (a stroked 2-point playhead line, redrawn every frame).
+    // rasterization path in most renderers.
     if (this.loopRegion) {
       const x1 = beatToX(this.loopRegion.start);
       const x2 = beatToX(this.loopRegion.end);
-      ctx.fillStyle = 'rgba(79,168,255,0.14)';
+      ctx.fillStyle = paper(0.035);
       ctx.fillRect(x1, 0, x2 - x1, contentAreaHeight);
-      ctx.fillStyle = 'rgba(79,168,255,0.7)';
-      ctx.fillRect(x1 - 0.75, 0, 1.5, contentAreaHeight);
-      ctx.fillRect(x2 - 0.75, 0, 1.5, contentAreaHeight);
+      ctx.fillStyle = paper(0.3);
+      ctx.fillRect(Math.round(x1), 0, 1, contentAreaHeight);
+      ctx.fillRect(Math.round(x2), 0, 1, contentAreaHeight);
     }
 
-    // Scrolling content (gridlines, notes, slurs): rebuilt only occasionally (already ensured
-    // above, alongside the ruler buffer); every frame is a single cheap blit of the pre-rendered
-    // buffer at the correct scroll offset. Only the slice that actually lands in the visible
-    // content area is blitted -- the buffer itself spans several viewport-widths so it doesn't
-    // need rebuilding every frame, but drawing all of that every frame (most of which the clip
-    // would throw away anyway) defeats the point.
-    // Self-correcting: the incremental rebuild-margin check above assumes steady, smooth beat
-    // progression, but a dropped frame, a tab coming back from the background, or anything else
-    // that lets the beat jump further than expected in one tick can still leave the buffer not
-    // actually covering the full visible width. Rather than trust that assumption blindly (which
-    // showed up in the field as a black, unpainted strip next to the content), verify the blit
-    // will really cover [0, width] and force one immediate rebuild if it won't -- this makes "the
-    // buffer covers what's on screen" an invariant checked every frame instead of a hope.
+    // Scrolling content (rows, gridlines, notes, lyrics, slurs): pre-rendered, blitted each frame.
+    // Self-correcting: a dropped frame or a tab returning from the background can let the beat
+    // jump further than the incremental rebuild check expects -- verify the blit will really cover
+    // [0, width] and force one immediate rebuild if it won't.
     if (this.contentBuffer) {
       const destXCheck = anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
       const bufferCssWidthCheck = this.contentBufferBeatsSpan * this.pixelsPerBeat;
@@ -421,52 +416,100 @@ export class PianoRoll {
       const srcWidthCss = srcEndCss - srcStartCss;
       const srcHeightCss = Math.min(contentAreaHeight, contentH - scrollYSnapped);
       if (srcWidthCss > 0 && srcHeightCss > 0) {
-        ctx.drawImage(
-          this.contentBuffer,
-          srcStartCss * this.dpr,
-          scrollYSnapped * this.dpr,
-          srcWidthCss * this.dpr,
-          srcHeightCss * this.dpr,
-          destX + srcStartCss,
-          0,
-          srcWidthCss,
-          srcHeightCss,
-        );
+        ctx.drawImage(this.contentBuffer, srcStartCss * this.dpr, scrollYSnapped * this.dpr, srcWidthCss * this.dpr, srcHeightCss * this.dpr, destX + srcStartCss, 0, srcWidthCss, srcHeightCss);
       }
     }
 
-    // preview note label: set by a click on a note (see hitTestNote); shows its pitch name at the
-    // start of that note's bar. Drawn fresh each frame (not baked into the content buffer) since
-    // it's transient UI state, not part of the score.
+    const playheadXPos = this.snapToDevicePx(beatToX(playheadBeat));
+    // Played music steps back; the notes sounding right now light up. Both are per-frame overlays
+    // on top of the buffer (they depend on the playhead), and cheap: one rect, plus one glowing
+    // pill per voice that is actually singing at this instant.
+    if (playheadXPos > 0) {
+      ctx.fillStyle = PAST_SHADE;
+      ctx.fillRect(0, 0, Math.min(width, playheadXPos), contentAreaHeight);
+    }
+    this.drawSoundingNotes(ctx, playheadBeat, beatToX, rowHeight, contentAreaHeight);
+
+    // Preview note label: set by a click on a note (see hitTestNote); shows its pitch name at the
+    // start of that note. Drawn fresh each frame since it's transient UI state, not score content.
     if (this.previewNote) {
       const x = this.snapToDevicePx(beatToX(this.previewNote.startBeat));
       const y = this.rowY(this.previewNote.midi) - rowHeight - this.scrollY;
       if (x >= -60 && x <= width + 10 && y >= -20 && y <= contentAreaHeight) {
         const label = midiName(this.previewNote.midi);
-        ctx.font = 'bold 12px system-ui, sans-serif';
+        ctx.font = `600 12px ${FONT_MONO}`;
         const textWidth = ctx.measureText(label).width;
-        ctx.fillStyle = 'rgba(10,11,16,0.85)';
-        ctx.fillRect(x, y - 18, textWidth + 10, 16);
-        ctx.fillStyle = '#ffd166';
+        ctx.fillStyle = PAPER;
+        roundedRect(ctx, x, y - 22, textWidth + 14, 20, 6);
+        ctx.fill();
+        ctx.fillStyle = INK0;
         ctx.textBaseline = 'middle';
-        ctx.fillText(label, x + 5, y - 10);
+        ctx.fillText(label, x + 7, y - 11.5);
       }
     }
 
     ctx.restore();
 
-    // playhead: always the actual current-or-paused position (playheadBeat), not necessarily
-    // displayBeat -- panning the view away from it (e.g. browsing the score while paused) is
-    // allowed, and this keeps genuinely tracking where the piece is/will resume from as you do,
-    // rather than silently relabeling whatever's under the view's fixed anchor point. So its x is
-    // recomputed from playheadBeat like anything else in the content, and it can end up off-screen
-    // if you've panned far enough away -- correct, since that position isn't visible right now.
-    // Drawn last, full height (ruler + content), unclipped/untranslated.
-    const playheadXPos = this.snapToDevicePx(beatToX(playheadBeat));
-    if (playheadXPos >= -2 && playheadXPos <= width + 2) {
-      ctx.fillStyle = '#ff3b57';
+    // Playhead: always the actual current-or-paused position (playheadBeat), not necessarily
+    // displayBeat -- panning the view away from it (e.g. browsing while paused) is allowed, and
+    // this keeps tracking where the piece is/will resume from. Drawn last, full height.
+    if (playheadXPos >= -16 && playheadXPos <= width + 16) {
+      const glow = ctx.createLinearGradient(playheadXPos - 16, 0, playheadXPos + 16, 0);
+      glow.addColorStop(0, paper(0));
+      glow.addColorStop(0.5, paper(0.13));
+      glow.addColorStop(1, paper(0));
+      ctx.fillStyle = glow;
+      ctx.fillRect(playheadXPos - 16, 0, 32, height);
+      ctx.fillStyle = PAPER;
       ctx.fillRect(playheadXPos - 1, 0, 2, height);
+      ctx.beginPath();
+      ctx.moveTo(playheadXPos - 6, 0);
+      ctx.lineTo(playheadXPos + 6, 0);
+      ctx.lineTo(playheadXPos, 8);
+      ctx.closePath();
+      ctx.fill();
     }
+  }
+
+  /** Redraws, lit and glowing, the pill of every note sounding at the playhead (in content-area coordinates). */
+  private drawSoundingNotes(ctx: CanvasRenderingContext2D, beat: number, beatToX: (b: number) => number, rowHeight: number, areaHeight: number) {
+    const pillH = this.pillHeight(rowHeight);
+    for (const part of this.score.parts) {
+      if (this.hiddenParts.has(part.id) || this.dimmedParts.has(part.id)) continue;
+      const notes = this.notesByPart.get(part.id);
+      if (!notes) continue;
+      let lo = 0;
+      let hi = notes.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (notes[mid].startBeat <= beat) lo = mid + 1;
+        else hi = mid;
+      }
+      const color = this.partColor(part.id);
+      for (let i = lo - 1; i >= Math.max(0, lo - 6); i--) {
+        const note = notes[i];
+        if (note.startBeat + note.durationBeats <= beat) continue;
+        const x = beatToX(note.startBeat);
+        const w = note.durationBeats * this.pixelsPerBeat;
+        const y = this.rowY(note.midi + this.transpose) - rowHeight - this.scrollY + BAR_PAD_PX;
+        if (y + pillH < 0 || y > areaHeight) continue;
+        ctx.save();
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 16;
+        ctx.fillStyle = towardPaper(color, 0.3);
+        roundedRect(ctx, x + 1, y, Math.max(w - 3, 7), pillH, pillH / 2);
+        ctx.fill();
+        ctx.restore();
+        if (note.lyric) {
+          const bmp = this.getLyricBitmap(note.lyric, true);
+          if (bmp.cssWidth + 10 <= w - 3) ctx.drawImage(bmp.canvas, x + 7, y + (pillH - bmp.cssHeight) / 2, bmp.cssWidth, bmp.cssHeight);
+        }
+      }
+    }
+  }
+
+  private pillHeight(rowHeight: number): number {
+    return Math.max(6, rowHeight - BAR_PAD_PX * 2 - LYRIC_AREA_PX);
   }
 
   private ensureContentBuffer(currentBeat: number, contentWidth: number, rowHeight: number) {
@@ -511,13 +554,45 @@ export class PianoRoll {
       rctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
       rctx.imageSmoothingEnabled = false;
       rctx.clearRect(0, 0, bufCssWidth, RULER_HEIGHT_PX);
-      rctx.fillStyle = 'rgba(255,255,255,0.6)';
-      rctx.font = 'bold 10px system-ui, sans-serif';
+      rctx.textBaseline = 'alphabetic';
       for (const marker of this.beatMarkers) {
+        const x = Math.round((marker.beat - originBeat) * this.pixelsPerBeat);
+        if (x < -30 || x > bufCssWidth + 30) continue;
+        rctx.fillStyle = paper(marker.isDownbeat ? 0.4 : 0.16);
+        rctx.fillRect(x, RULER_HEIGHT_PX - (marker.isDownbeat ? 10 : 5), 1, marker.isDownbeat ? 9 : 4);
         if (!marker.isDownbeat) continue;
-        const x = (marker.beat - originBeat) * this.pixelsPerBeat;
-        if (x < -20 || x > bufCssWidth + 20) continue;
-        rctx.fillText(String(marker.measureNumber), x + 4, 15);
+        let textX = x + 6;
+        const section = this.sections.find((sec) => Math.abs(sec.beat - marker.beat) < 1e-6);
+        if (section) {
+          // A rehearsal letter as printed in the score: bold serif capital in a square box.
+          rctx.strokeStyle = PAPER;
+          rctx.lineWidth = 1.3;
+          const boxW = Math.max(17, rctx.measureText(section.label).width + 8);
+          rctx.strokeRect(x + 5.5, 5.5, boxW, 17);
+          rctx.font = `700 12px ${FONT_DISPLAY}`;
+          rctx.fillStyle = PAPER;
+          rctx.textAlign = 'center';
+          rctx.fillText(section.label, x + 5.5 + boxW / 2, 18.5);
+          rctx.textAlign = 'start';
+          textX = x + boxW + 11;
+        }
+        rctx.font = `600 11px ${FONT_MONO}`;
+        rctx.fillStyle = paper(0.62);
+        rctx.fillText(String(marker.measureNumber), textX, 18);
+      }
+      // Section letters that don't sit on a bar line (hand-marked mid-bar) still get their box.
+      for (const section of this.sections) {
+        if (this.beatMarkers.some((m) => m.isDownbeat && Math.abs(m.beat - section.beat) < 1e-6)) continue;
+        const x = Math.round((section.beat - originBeat) * this.pixelsPerBeat);
+        if (x < -30 || x > bufCssWidth + 30) continue;
+        rctx.strokeStyle = PAPER;
+        rctx.lineWidth = 1.3;
+        rctx.strokeRect(x + 0.5, 5.5, 17, 17);
+        rctx.font = `700 12px ${FONT_DISPLAY}`;
+        rctx.fillStyle = PAPER;
+        rctx.textAlign = 'center';
+        rctx.fillText(section.label, x + 9, 18.5);
+        rctx.textAlign = 'start';
       }
       this.rulerBuffer = rulerBuf;
     }
@@ -530,111 +605,86 @@ export class PianoRoll {
     const localBeatToX = (beat: number) => (beat - originBeat) * this.pixelsPerBeat;
     ctx.clearRect(0, 0, widthCss, heightCss);
 
-    // octave row shading (C rows)
+    // Rows shaded like piano keys: black-key rows a touch darker, and a hairline under every C, so
+    // intervals and octaves can be read at a glance without a persistent keyboard.
     for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
-      if (((midi % 12) + 12) % 12 !== 0) continue;
+      const pc = ((midi % 12) + 12) % 12;
       const y = this.rowY(midi) - rowHeight;
-      ctx.fillStyle = 'rgba(255,255,255,0.03)';
-      ctx.fillRect(0, y, widthCss, rowHeight);
-    }
-
-    // Piano keyboard strip, just before beat 0 -- see KEYBOARD_WIDTH_PX's comment. Uses the exact
-    // same rowY/rowHeight as note rows, so it lines up with the pitch gridlines. widthCss-anchored
-    // pixel width converted to beats at the current pixelsPerBeat, so it renders as a consistent
-    // physical size regardless of zoom (recomputed on every rebuild, which zoom changes trigger).
-    const keyboardWidthBeats = KEYBOARD_WIDTH_PX / this.pixelsPerBeat;
-    const keyboardStartX = localBeatToX(-keyboardWidthBeats);
-    const keyboardEndX = localBeatToX(0);
-    if (keyboardEndX > 0 && keyboardStartX < widthCss) {
-      for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
-        const isBlack = BLACK_KEY_PITCH_CLASSES.has(((midi % 12) + 12) % 12);
-        ctx.fillStyle = isBlack ? '#1a1a1a' : '#e8e8e8';
-        ctx.fillRect(keyboardStartX, this.rowY(midi) - rowHeight, keyboardEndX - keyboardStartX, rowHeight);
+      if (BLACK_KEY_PITCH_CLASSES.has(pc)) {
+        ctx.fillStyle = 'rgba(0,0,0,0.26)';
+        ctx.fillRect(0, y, widthCss, rowHeight);
+      }
+      if (pc === 0) {
+        ctx.fillStyle = paper(0.08);
+        ctx.fillRect(0, Math.round(y + rowHeight - 1), widthCss, 1);
       }
     }
 
-    // semitone gridlines: a barely-visible line at every pitch row boundary, just enough to give
-    // a sense of interval distance at a glance without competing with the beat/measure gridlines.
-    const semitonePath = new Path2D();
-    for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
-      const y = this.rowY(midi);
-      semitonePath.moveTo(0, y);
-      semitonePath.lineTo(widthCss, y);
-    }
-    ctx.strokeStyle = 'rgba(255,255,255,0.045)';
-    ctx.lineWidth = 1;
-    ctx.stroke(semitonePath);
-
-    // beat / measure gridlines, batched into one stroke() per tier instead of one per line. Measure
-    // numbers are drawn in the fixed ruler strip instead (see render()), not here: this buffer
-    // scrolls with pitch, so a label baked in here would scroll away with whatever voice happened
-    // to be on top when the buffer was last rebuilt.
-    let thinPath: Path2D | null = null;
-    let thickPath: Path2D | null = null;
+    // Beat / bar gridlines as plain 1px rects (see render()'s note on fillRect vs stroke).
     for (const marker of this.beatMarkers) {
-      const x = localBeatToX(marker.beat);
+      const x = Math.round(localBeatToX(marker.beat));
       if (x < -20 || x > widthCss + 20) continue;
-      const path = marker.isDownbeat ? (thickPath ??= new Path2D()) : (thinPath ??= new Path2D());
-      path.moveTo(x, 0);
-      path.lineTo(x, heightCss);
+      ctx.fillStyle = paper(marker.isDownbeat ? 0.15 : 0.05);
+      ctx.fillRect(x, 0, 1, heightCss);
     }
-    if (thinPath) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.1)';
-      ctx.lineWidth = 1;
-      ctx.stroke(thinPath);
-    }
-    if (thickPath) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-      ctx.lineWidth = 1.5;
-      ctx.stroke(thickPath);
+    const endX = Math.round(localBeatToX(this.score.totalBeats));
+    if (endX > -20 && endX < widthCss + 20) {
+      ctx.fillStyle = paper(0.3);
+      ctx.fillRect(endX, 0, 1, heightCss);
+      ctx.fillRect(endX + 3, 0, 3, heightCss);
     }
 
-    // notes: dimmed (non-soloed) parts first, then normal/soloed parts on top so a soloed voice's
-    // color is never partially covered by an overlapping dimmed bar at the same pitch/time.
-    // Batched into one fill() per part rather than per note.
-    // The bar fills the row down to where the lyric area starts: when rows stretch to fill a tall
-    // viewport (few enough distinct pitches that the whole range fits), the bar grows with them
-    // instead of staying a thin sliver in a comparatively tall row.
-    const barPad = BAR_PAD_PX;
-    const barH = Math.max(4, rowHeight - barPad * 2 - LYRIC_AREA_PX);
+    this.paintKeyboard(ctx, localBeatToX(0) - KEYBOARD_GAP_PX - KEYBOARD_WIDTH_PX, widthCss, rowHeight);
+
+    // Notes: dimmed (ducked) parts first, then normal/soloed parts on top, so a soloed voice is
+    // never partly covered by a dimmed pill at the same pitch/time. One fill() per part.
+    const pillH = this.pillHeight(rowHeight);
+    const lyricLane = new Map<number, [number, number][]>(); // per row: x-ranges already holding an under-note syllable
     const drawPart = (partId: string) => {
       const notes = this.notesByPart.get(partId);
       if (!notes || !notes.length) return;
       const dimmed = this.dimmedParts.has(partId);
+      const color = this.partColor(partId);
       const path = new Path2D();
-      const lyricNotes: NoteEvent[] = [];
+      const lyricNotes: { note: NoteEvent; x: number; w: number; y: number }[] = [];
       for (const note of notes) {
         const midi = note.midi + this.transpose;
         const x = localBeatToX(note.startBeat);
         const w = note.durationBeats * this.pixelsPerBeat;
         if (x + w < -10 || x > widthCss + 10) continue;
-        const y = this.rowY(midi) - rowHeight;
-        addRoundRectSubpath(path, x, y + barPad, Math.max(w - 2, 3), barH, 3);
-        if (!dimmed && note.lyric && w > 14) lyricNotes.push(note);
+        const y = this.rowY(midi) - rowHeight + BAR_PAD_PX;
+        addRoundRectSubpath(path, x + 1, y, Math.max(w - 3, 7), pillH, Math.min(pillH / 2, Math.max(w - 3, 7) / 2));
+        if (!dimmed && note.lyric) lyricNotes.push({ note, x, w, y });
       }
       ctx.globalAlpha = dimmed ? DIMMED_ALPHA : 1;
-      ctx.fillStyle = this.partColor(partId);
+      ctx.fillStyle = color;
       ctx.fill(path);
       ctx.globalAlpha = 1;
 
-      // Draw each syllable from a cached bitmap instead of fillText: re-shaping/rasterizing text
-      // for every note on every buffer rebuild adds up fast. Drawn below the bar, but still fully
-      // inside this note's own row (the row is sized to fit bar + text) so it never reaches into
-      // the neighboring pitch row's territory.
-      for (const note of lyricNotes) {
-        const midi = note.midi + this.transpose;
-        const x = localBeatToX(note.startBeat);
-        const w = note.durationBeats * this.pixelsPerBeat;
-        const y = this.rowY(midi) - rowHeight;
-        const bmp = this.getLyricBitmap(note.lyric!);
-        const textY = y + barPad + barH + 1;
-        ctx.drawImage(bmp.canvas, x + w / 2 - bmp.cssWidth / 2, textY, bmp.cssWidth, bmp.cssHeight);
+      // Syllables from cached bitmaps (re-shaping text per note per rebuild adds up fast): inside
+      // the pill when it fits, otherwise in the small lane under it -- skipped there if another
+      // voice already printed a syllable at that spot (unison voices would print over each other).
+      for (const { note, x, w, y } of lyricNotes) {
+        const inside = this.getLyricBitmap(note.lyric!, true);
+        if (inside.cssWidth + 10 <= w - 3) {
+          ctx.drawImage(inside.canvas, x + 7, y + (pillH - inside.cssHeight) / 2, inside.cssWidth, inside.cssHeight);
+          continue;
+        }
+        const below = this.getLyricBitmap(note.lyric!, false);
+        const row = Math.round(y);
+        const used = lyricLane.get(row) ?? [];
+        const x1 = x + 1;
+        const x2 = x1 + below.cssWidth;
+        if (used.some(([a, b]) => x1 < b + 3 && a < x2 + 3)) continue;
+        used.push([x1, x2]);
+        lyricLane.set(row, used);
+        ctx.drawImage(below.canvas, x1, y + pillH + 1, below.cssWidth, below.cssHeight);
       }
     };
     for (const part of this.score.parts) if (!this.hiddenParts.has(part.id) && this.dimmedParts.has(part.id)) drawPart(part.id);
     for (const part of this.score.parts) if (!this.hiddenParts.has(part.id) && !this.dimmedParts.has(part.id)) drawPart(part.id);
 
-    // slurs, drawn in each voice's color above its notes, batched into one stroke() per part
+    // Slurs: thin arcs in each voice's colour, under-weighted so they don't compete with the notes.
     for (const part of this.score.parts) {
       if (this.hiddenParts.has(part.id)) continue;
       const slurs = this.slursByPart.get(part.id);
@@ -642,39 +692,76 @@ export class PianoRoll {
       const path = new Path2D();
       let any = false;
       for (const slur of slurs) {
-        const startMidi = slur.startMidi + this.transpose;
-        const endMidi = slur.endMidi + this.transpose;
-        const x1 = localBeatToX(slur.startBeat) + 2;
-        const x2 = localBeatToX(slur.endBeat) + 2;
+        const x1 = localBeatToX(slur.startBeat) + 6;
+        const x2 = localBeatToX(slur.endBeat) + 6;
         if (x2 < -10 || x1 > widthCss + 10) continue;
-        const y1 = this.rowY(startMidi) - rowHeight + barPad;
-        const y2 = this.rowY(endMidi) - rowHeight + barPad;
-        const arcLift = Math.min(18, 6 + Math.abs(x2 - x1) * 0.08);
-        const midX = (x1 + x2) / 2;
-        const topY = Math.min(y1, y2) - arcLift;
+        const y1 = this.rowY(slur.startMidi + this.transpose) - rowHeight + BAR_PAD_PX;
+        const y2 = this.rowY(slur.endMidi + this.transpose) - rowHeight + BAR_PAD_PX;
+        const arcLift = Math.min(16, 6 + Math.abs(x2 - x1) * 0.08);
         path.moveTo(x1, y1);
-        path.quadraticCurveTo(midX, topY, x2, y2);
+        path.quadraticCurveTo((x1 + x2) / 2, Math.min(y1, y2) - arcLift, x2, y2);
         any = true;
       }
       if (!any) continue;
-      ctx.globalAlpha = this.dimmedParts.has(part.id) ? DIMMED_ALPHA : 0.9;
+      ctx.globalAlpha = this.dimmedParts.has(part.id) ? DIMMED_ALPHA * 0.6 : 0.55;
       ctx.strokeStyle = this.partColor(part.id);
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 1.4;
       ctx.stroke(path);
       ctx.globalAlpha = 1;
     }
-
   }
 
-  private getLyricBitmap(text: string): { canvas: HTMLCanvasElement; cssWidth: number; cssHeight: number } {
-    const cached = this.lyricBitmaps.get(text);
+  /**
+   * A small piano keyboard just before beat 0 (part of the scrolling content, so it scrolls away
+   * with the piece's start): white keys with hairline joins, shorter black keys on top, C labels.
+   * Uses the note rows' own geometry, so every key lines up with its pitch row.
+   */
+  private paintKeyboard(ctx: CanvasRenderingContext2D, x0: number, widthCss: number, rowHeight: number) {
+    if (x0 + KEYBOARD_WIDTH_PX < 0 || x0 > widthCss) return;
+    const rowTop = (midi: number) => this.rowY(midi) - rowHeight;
+    const yTop = rowTop(this.maxMidi);
+    const yBottom = rowTop(this.minMidi) + rowHeight;
+    ctx.fillStyle = '#E8E0D2';
+    ctx.fillRect(x0, yTop, KEYBOARD_WIDTH_PX, yBottom - yTop);
+    ctx.fillStyle = 'rgba(13,12,22,0.3)';
+    for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
+      const pc = ((midi % 12) + 12) % 12;
+      if (BLACK_KEY_PITCH_CLASSES.has(pc)) continue;
+      // Between two white keys with a black key in between, the join sits mid-way through the
+      // black key's row; E-F and B-C have no black key, so their join is the row boundary.
+      if (BLACK_KEY_PITCH_CLASSES.has((pc + 1) % 12)) ctx.fillRect(x0, Math.round(rowTop(midi + 1) + rowHeight / 2), KEYBOARD_WIDTH_PX, 1);
+      else ctx.fillRect(x0, Math.round(rowTop(midi)), KEYBOARD_WIDTH_PX, 1);
+    }
+    ctx.fillStyle = '#17151F';
+    for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
+      if (!BLACK_KEY_PITCH_CLASSES.has(((midi % 12) + 12) % 12)) continue;
+      roundedRect(ctx, x0 - 3, rowTop(midi) + 1.5, KEYBOARD_WIDTH_PX * 0.62 + 3, rowHeight - 3, 3);
+      ctx.fill();
+    }
+    ctx.font = `600 9px ${FONT_MONO}`;
+    ctx.fillStyle = 'rgba(13,12,22,0.62)';
+    ctx.textBaseline = 'middle';
+    for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
+      if (((midi % 12) + 12) % 12 === 0) ctx.fillText(midiName(midi), x0 + KEYBOARD_WIDTH_PX - 19, rowTop(midi) + rowHeight / 2);
+    }
+    const shadow = ctx.createLinearGradient(x0 + KEYBOARD_WIDTH_PX, 0, x0 + KEYBOARD_WIDTH_PX + 10, 0);
+    shadow.addColorStop(0, 'rgba(0,0,0,0.45)');
+    shadow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = shadow;
+    ctx.fillRect(x0 + KEYBOARD_WIDTH_PX, yTop, 10, yBottom - yTop);
+  }
+
+  /** A syllable rendered once and cached: `inside` = dark bold text for inside a pill, otherwise light text for under it. */
+  private getLyricBitmap(text: string, inside: boolean): { canvas: HTMLCanvasElement; cssWidth: number; cssHeight: number } {
+    const key = (inside ? 'i:' : 'o:') + text;
+    const cached = this.lyricBitmaps.get(key);
     if (cached) return cached;
 
-    const font = '11px system-ui, sans-serif';
+    const font = inside ? `650 11.5px ${FONT_TEXT}` : `500 10.5px ${FONT_TEXT}`;
     const measurer = (this.lyricMeasureCtx ??= document.createElement('canvas').getContext('2d')!);
     measurer.font = font;
     const cssWidth = Math.ceil(measurer.measureText(text).width) + 2;
-    const cssHeight = 13;
+    const cssHeight = inside ? 14 : 12;
 
     const bmp = document.createElement('canvas');
     bmp.width = Math.max(1, Math.round(cssWidth * this.dpr));
@@ -682,16 +769,26 @@ export class PianoRoll {
     const bctx = bmp.getContext('2d')!;
     bctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     bctx.font = font;
-    bctx.fillStyle = 'rgba(255,255,255,0.92)';
-    bctx.textAlign = 'center';
+    bctx.fillStyle = inside ? 'rgba(13,12,22,0.9)' : paper(0.8);
     bctx.textBaseline = 'alphabetic';
-    bctx.fillText(text, cssWidth / 2, cssHeight - 3);
+    bctx.fillText(text, 1, cssHeight - (inside ? 3.5 : 2.5));
 
     const entry = { canvas: bmp, cssWidth, cssHeight };
-    this.lyricBitmaps.set(text, entry);
+    this.lyricBitmaps.set(key, entry);
     return entry;
   }
+}
 
+/** Adds a rounded-rect subpath to the current path of `ctx` (for single shapes; see addRoundRectSubpath for batched ones). */
+function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
 }
 
 function addRoundRectSubpath(path: Path2D, x: number, y: number, w: number, h: number, r: number) {

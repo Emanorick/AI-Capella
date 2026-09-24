@@ -1448,6 +1448,8 @@ function sectionButton(label: string, index: number): HTMLButtonElement {
 /** Places the section letters over the whole-piece strip, and sets whether + (add) is offered. */
 function renderSections() {
   const sections = effectiveSections();
+  pianoRoll?.setSections(sections);
+  staffView?.setSections(sections);
   const total = currentScore?.totalBeats || 1;
   sectionMarksEl.replaceChildren(
     ...sections.map((s, i) => {
@@ -1578,6 +1580,7 @@ document.addEventListener('click', (e) => {
         manualSections.push({ label, beat: engineBeat() });
         manualSections.sort((a, b) => a.beat - b.beat);
         renderSections();
+        renderNow();
       }
       break;
   }
