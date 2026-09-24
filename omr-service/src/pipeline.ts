@@ -112,10 +112,40 @@ async function pump() {
     console.error(`job ${job.id} failed:`, err);
   } finally {
     job.finishedAt = Date.now();
+    await persist(job);
     running = false;
     void rm(join(dir(job), 'audiveris'), { recursive: true, force: true });
     void pump();
   }
+}
+
+/** Finished scans are kept on disk too, so a restart of the service doesn't lose them. */
+async function persist(job: Job) {
+  try {
+    const { result, ...meta } = job;
+    if (result) await writeFile(join(dir(job), 'result.musicxml'), result);
+    await writeFile(join(dir(job), 'job.json'), JSON.stringify(meta));
+  } catch (err) {
+    console.error(`could not save job ${job.id}:`, err);
+  }
+}
+
+/** Loads the finished scans saved before a restart; scans that were still running are gone. */
+export async function restoreJobs() {
+  const entries = await readdir(WORK_ROOT, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const folder = join(WORK_ROOT, entry.name);
+    try {
+      const meta = JSON.parse(await readFile(join(folder, 'job.json'), 'utf8')) as Omit<Job, 'result'>;
+      const result = meta.status === 'done' ? await readFile(join(folder, 'result.musicxml'), 'utf8') : null;
+      jobs.set(meta.id, { ...meta, result });
+    } catch {
+      // no saved state: a scan interrupted by the restart
+      void rm(folder, { recursive: true, force: true });
+    }
+  }
+  cleanup();
 }
 
 function cleanup() {

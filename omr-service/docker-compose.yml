@@ -1,0 +1,33 @@
+# Scan service on your own server: the service itself plus Caddy in front of it, which fetches and
+# renews the HTTPS certificate for OMR_DOMAIN automatically (the app on GitHub Pages is HTTPS, so
+# browsers only talk to an HTTPS address). Setup: see README.md, "Eigener Server".
+services:
+  omr:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OMR_WORK_DIR: /data/jobs
+    volumes:
+      - omr-jobs:/data/jobs
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - omr
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file: .env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  omr-jobs:
+  caddy-data:
+  caddy-config:

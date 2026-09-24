@@ -253,8 +253,8 @@ marks never offers hand-added ones.
 - The scan sheet (`scan.ts`) takes one PDF (≤ 30 MB, ≤ 40 pages) or up to 40 photos — taken with
   the camera on a phone, or chosen from the device — shown as numbered thumbnails that can be
   reordered and removed. Photos are scaled to ≤ 3000 px (EXIF orientation applied) and sent as JPEG.
-- The service (`omr-service/`, a Node server in a container on Google Cloud Run, with its own
-  README for setup) runs **Audiveris** over all pages as one book, then asks **GPT** (OpenAI
+- The service (`omr-service/`, a Node server in a Docker container — on the choir's own server
+  via Docker Compose with Caddy for HTTPS, or on Google Cloud Run; its README covers both) runs **Audiveris** over all pages as one book, then asks **GPT** (OpenAI
   Responses API, model configurable) about every page: the page image next to what Audiveris read
   from it, in a compact JSON notation (per measure and part: voice, staff, chord, pitch as "F#4",
   duration as a quarter-note fraction, tie, lyric syllable). GPT answers with the complete
@@ -363,7 +363,7 @@ AI-Capella/
 │   ├── pinGate.ts             # the PIN screen
 │   ├── scan.ts                # "Scan sheet music" sheet: pages, upload, progress, result
 │   └── style.css              # all styling
-├── omr-service/            # scan service for Cloud Run: Audiveris + GPT check (own README, tests)
+├── omr-service/            # scan service (Docker: own server or Cloud Run): Audiveris + GPT check
 ├── .github/workflows/deploy.yml   # builds and deploys dist/ to GitHub Pages on every push
 ├── vite.config.ts             # sets base: '/AI-Capella/' for GitHub Pages' subpath hosting
 ├── tsconfig.json

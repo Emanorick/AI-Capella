@@ -11,7 +11,56 @@ Wandelt ein PDF oder bis zu 40 Fotos von Notenseiten in MusicXML um:
 Die App (GitHub Pages) lädt die Seiten hoch, zeigt den Fortschritt und übernimmt das Ergebnis ins
 Repertoire. Der Dienst läuft als Container auf **Google Cloud Run** im Firebase-Projekt `ai-capella`.
 
-## Einrichtung (einmalig, ca. 20 Minuten)
+Der Dienst läuft entweder auf einem **eigenen Server** (Docker, siehe direkt unten) oder auf
+**Google Cloud Run** (weiter unten). Die App merkt keinen Unterschied.
+
+## Variante A: eigener Server (Docker)
+
+### Voraussetzungen
+
+- Linux-Server mit **x86_64/amd64**-Prozessor (Audiveris gibt es für Linux nur dafür, nicht für
+  ARM wie einen Raspberry Pi), mindestens **4 GB RAM** (besser 8 GB) und ca. 5 GB freiem Speicher.
+- **Docker** mit dem Compose-Plugin (`docker compose version` muss etwas ausgeben;
+  Installation: docs.docker.com/engine/install).
+- Eine **(Sub-)Domain**, die auf den Server zeigt, z. B. `scan.mein-chor.de` (beim Domain-Anbieter
+  einen A-Eintrag auf die IP des Servers anlegen), und die Ports **80 und 443** müssen von außen
+  erreichbar sein (ggf. im Router/Firewall freigeben). Darüber holt Caddy automatisch ein
+  HTTPS-Zertifikat. HTTPS ist Pflicht: die App läuft auf GitHub Pages über HTTPS, und Browser
+  blockieren Aufrufe an unverschlüsselte Adressen.
+- Ein OpenAI-API-Key (platform.openai.com → API keys).
+
+### Einrichten
+
+```sh
+git clone https://github.com/Emanorick/AI-Capella.git
+cd AI-Capella/omr-service
+git checkout claude/amazing-bardeen-c4fcke
+cp .env.example .env
+nano .env        # OMR_DOMAIN und OPENAI_API_KEY eintragen (OPENAI_MODEL nach Wunsch)
+docker compose up -d --build
+```
+
+Das erste Bauen dauert ca. 10 Minuten (Audiveris wird heruntergeladen). Prüfen:
+
+```sh
+curl https://scan.mein-chor.de/healthz
+# {"ok":true,"review":true,"maxPages":40}
+docker compose logs -f omr     # laufende Protokolle
+```
+
+Dann die App verbinden wie in Schritt 5 unten beschrieben (GitHub-Variable `OMR_URL` =
+`https://scan.mein-chor.de`).
+
+**Aktualisieren:** `git pull && docker compose up -d --build`. Fertige Scans bleiben dabei
+erhalten (sie liegen im Docker-Volume `omr-jobs`); nur ein gerade laufender Scan geht verloren.
+
+**Keine Domain oder keine offenen Ports?** Dann geht es auch mit einem Cloudflare Tunnel
+(kostenlos, gibt eine HTTPS-Adresse ohne Portfreigabe) statt Caddy – sag Bescheid, dann baue ich
+die Variante dazu.
+
+**Kosten:** nur die OpenAI-Aufrufe (siehe „Kosten“ unten); der Server selbst läuft ja ohnehin.
+
+## Variante B: Google Cloud Run (einmalig, ca. 20 Minuten)
 
 Du brauchst: Zugang zum Firebase-/Google-Cloud-Projekt `ai-capella`, einen OpenAI-API-Key
 (platform.openai.com → API keys) und Admin-Rechte im GitHub-Repo.
@@ -78,7 +127,7 @@ GitHub → Repo `AI-Capella` → **Settings → Secrets and variables → Action
 Dann **Actions → Deploy to GitHub Pages → Run workflow**. Danach bietet „Arrangement hinzufügen“
 zusätzlich **„Noten scannen (PDF, Fotos)“** an.
 
-## Aktualisieren
+## Aktualisieren (Cloud Run)
 
 In der Cloud Shell: `cd AI-Capella && git pull && cd omr-service` und Schritt 4 wiederholen.
 Anderes Modell: `OPENAI_MODEL=…` in Schritt 4 ändern (z. B. ein neueres GPT-Modell). Optional
@@ -96,9 +145,9 @@ Anderes Modell: `OPENAI_MODEL=…` in Schritt 4 ändern (z. B. ein neueres GPT-M
 - Nur Geräte, die in der App angemeldet sind (Firebase-Anmeldung, wie für die Bibliothek), können
   Scans starten; jeder Scan ist nur für das Gerät sichtbar, das ihn gestartet hat. Anfragen werden
   nur von `ALLOWED_ORIGINS` (der GitHub-Pages-Adresse) angenommen. Höchstens 2 laufende Scans pro Gerät.
-- Laufende Scans liegen im Speicher des einen Containers: wird er neu gestartet (z. B. durch ein
-  Update), gehen laufende Scans verloren, und die App sagt Bescheid. Fertige Ergebnisse bleiben
-  6 Stunden abrufbar.
+- Wird der Dienst neu gestartet (z. B. durch ein Update), geht ein gerade laufender Scan verloren,
+  und die App sagt Bescheid. Fertige Ergebnisse werden auf der Platte gespeichert und bleiben
+  6 Stunden abrufbar (auf Cloud Run nur bis zum nächsten Neustart des Containers).
 - Fotos werden in der App auf max. 3000 px verkleinert; ein PDF darf höchstens 30 MB haben.
 - Scans werden nacheinander verarbeitet (Audiveris braucht den ganzen Rechner).
 

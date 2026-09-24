@@ -12,24 +12,28 @@ const AI_PORT = 18191;
 const base = `http://localhost:${PORT}`;
 const mocks = new URL('./mocks/bin/', import.meta.url).pathname;
 let server, ai;
-
-before(async () => {
-  ai = await startFakeOpenAI(AI_PORT);
-  server = spawn('node', ['dist/server.js'], {
+const workDir = mkdtempSync(join(tmpdir(), 'omr-test-'));
+function startServer() {
+  const child = spawn('node', ['dist/server.js'], {
     env: {
       ...process.env,
       PORT: String(PORT),
       PATH: `${mocks}:${process.env.PATH}`,
       AUDIVERIS_CMD: join(mocks, 'audiveris'),
       OMR_SKIP_AUTH: '1',
-      OMR_WORK_DIR: mkdtempSync(join(tmpdir(), 'omr-test-')),
+      OMR_WORK_DIR: workDir,
       OPENAI_API_KEY: 'test',
       OPENAI_BASE_URL: `http://localhost:${AI_PORT}/v1`,
       ALLOWED_ORIGINS: 'http://localhost:5200',
     },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
-  await new Promise((resolve) => server.stdout.on('data', (d) => d.toString().includes('OMR service') && resolve()));
+  return new Promise((resolve) => child.stdout.on('data', (d) => d.toString().includes('OMR service') && resolve(child)));
+}
+
+before(async () => {
+  ai = await startFakeOpenAI(AI_PORT);
+  server = await startServer();
 });
 after(() => {
   server.kill();
@@ -101,4 +105,19 @@ test('PDF path and input checks', async () => {
   assert.equal(done.status, 'done', done.error);
   assert.equal(done.pages, 2);
   assert.equal((await fetch(`${base}/jobs/nope`)).status, 404);
+});
+
+test('finished scans survive a restart of the service', async () => {
+  const { body } = await json(await fetch(`${base}/jobs`, { method: 'POST', body: JSON.stringify({ kind: 'pdf', files: 1 }) }));
+  await fetch(`${base}/jobs/${body.id}/files/0`, { method: 'PUT', headers: { 'Content-Type': 'application/pdf' }, body: '%PDF' });
+  await fetch(`${base}/jobs/${body.id}/start`, { method: 'POST' });
+  assert.equal((await waitDone(body.id)).status, 'done');
+  server.kill();
+  await new Promise((r) => server.once('exit', r));
+  server = await startServer();
+  const again = await json(await fetch(`${base}/jobs/${body.id}`));
+  assert.equal(again.body.status, 'done');
+  const res = await fetch(`${base}/jobs/${body.id}/result`);
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /<score-partwise/);
 });

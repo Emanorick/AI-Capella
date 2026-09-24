@@ -10,7 +10,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
-import { activeJobs, createJob, getJob, MAX_PAGES, REVIEW_ENABLED, startJob, storeFile, type Job, type JobKind } from './pipeline.js';
+import { activeJobs, createJob, getJob, restoreJobs, MAX_PAGES, REVIEW_ENABLED, startJob, storeFile, type Job, type JobKind } from './pipeline.js';
 
 const PORT = Number(process.env.PORT) || 8080;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
@@ -161,6 +161,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 
   throw new HttpError(404, 'Not found');
 }
+
+await restoreJobs();
 
 createServer((req, res) => {
   handle(req, res).catch((err) => {
