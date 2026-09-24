@@ -18,17 +18,19 @@ const LOOKAHEAD_REFILL_SEC = 3; // top up once the scheduled horizon is within t
 // audible click/pop. This just needs to be short enough that an early Stop/Pause/reschedule
 // doesn't feel laggy.
 const FADE_SEC = 0.01;
-// Starting tones ("Anfangstöne"): each voice's tone one after another ("du du du"), then all of
-// them together as the chord they make, then a breath before the count-in/music.
-const START_TONE_SPACING_SEC = 0.5;
-const START_TONE_DURATION_SEC = 0.4;
-const START_CHORD_SEC = 1.4;
-const START_TONE_GAP_SEC = 0.35;
+// Starting tones ("Anfangstöne"): each voice's tone one after another ("du du du"), one beat
+// apart at the current tempo, then all of them together as the chord they make (two beats), then
+// half a beat's breath before the count-in/music. Kept within sensible limits at extreme tempos.
+function startToneTiming(bpm: number) {
+  const beat = Math.min(Math.max(60 / bpm, 0.3), 1.0);
+  return { spacing: beat, duration: beat * 0.8, chord: Math.max(beat * 2, 1.0), gap: beat * 0.5 };
+}
 
-/** How much extra lead time `count` starting tones (plus their chord) need before the count-in/music. */
-export function startTonesLeadSec(count: number): number {
+/** How much extra lead time `count` starting tones (plus their chord) need before the count-in/music at `bpm`. */
+export function startTonesLeadSec(count: number, bpm: number): number {
   if (!count) return 0;
-  return count * START_TONE_SPACING_SEC + (count > 1 ? START_CHORD_SEC : 0) + START_TONE_GAP_SEC;
+  const t = startToneTiming(bpm);
+  return count * t.spacing + (count > 1 ? t.chord : 0) + t.gap;
 }
 
 /** An audible "voice": whichever oscillators make up one note or click, sharing one gain node
@@ -429,18 +431,19 @@ export class AudioEngine {
       // Starting tones: each voice's first note, top voice first, one after another, ending a
       // short breath before the count-in (or the music) -- see startTonesLeadSec().
       const countInSec = countInBeats * countInPulseBeats * this.secPerBeat;
-      const end = this.playStartCtxTime - countInSec - START_TONE_GAP_SEC;
-      const first = this.playStartCtxTime - countInSec - startTonesLeadSec(startTones.length);
+      const timing = startToneTiming(bpm);
+      const end = this.playStartCtxTime - countInSec - timing.gap;
+      const first = this.playStartCtxTime - countInSec - startTonesLeadSec(startTones.length, bpm);
       // Same rule as the count-in below: skipped entirely if there's no room left (a late joiner).
       if (first > now + 0.05) {
-        const chordAt = first + startTones.length * START_TONE_SPACING_SEC;
+        const chordAt = first + startTones.length * timing.spacing;
         // Quieter per voice in the chord, so it sums to about the loudness of a single tone.
         const chordLevel = 1 / Math.sqrt(startTones.length);
         startTones.forEach((midi, i) => {
           try {
             const pitch = midi + transposeSemitones;
-            this.scheduledVoices.push(playDuNote(this.ctx, this.masterGain, first + i * START_TONE_SPACING_SEC, START_TONE_DURATION_SEC, pitch));
-            if (startTones.length > 1) this.scheduledVoices.push(playDuNote(this.ctx, this.masterGain, chordAt, START_CHORD_SEC - 0.15, pitch, chordLevel));
+            this.scheduledVoices.push(playDuNote(this.ctx, this.masterGain, first + i * timing.spacing, timing.duration, pitch));
+            if (startTones.length > 1) this.scheduledVoices.push(playDuNote(this.ctx, this.masterGain, chordAt, timing.chord - 0.15, pitch, chordLevel));
           } catch (err) {
             console.error('Skipping a starting tone that could not be scheduled:', err);
           }

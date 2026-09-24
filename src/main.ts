@@ -1523,29 +1523,31 @@ function togglePlay() {
     const measure = measureAtBeat(currentScore, fromBeat);
     const countInPulseBeats = measure ? 4 / measure.beatType : 1;
     const countInBeats = metronomeOn && measure && freshStart ? measure.beats : 0;
-    // Starting tones, when switched on: only for a fresh start (same rule as the count-in).
-    const startTones = startTonesOn && freshStart ? startingPitches(fromBeat) : [];
-    const extraLeadMs = (countInBeats > 0 ? countInBeats * countInPulseBeats * (60_000 / bpm) : 0) + startTonesLeadSec(startTones.length) * 1000;
+    // Starting tones, when switched on: before every Play, including a resume.
+    const startTones = startTonesOn ? startingPitches(fromBeat) : [];
+    const extraLeadMs = (countInBeats > 0 ? countInBeats * countInPulseBeats * (60_000 / bpm) : 0) + startTonesLeadSec(startTones.length, bpm) * 1000;
     void publishPlayingAt(fromBeat, { countInBeats, countInPulseBeats, startTones }, extraLeadMs);
   }
 }
 
 /**
- * Each voice's first pitch at `beat` (the note sounding there, else its next note), ordered from
- * the highest voice to the lowest by the voices' average pitch -- "top to bottom" as a choir hears
- * it, independent of how the file happens to order its parts.
+ * The starting tone of each voice that sings in the bar playback starts in -- the note sounding at
+ * `beat`, else its next note within that bar; voices that only come in later are left out. In the
+ * score's voice order, top to bottom, as the voice list shows them.
  */
 function startingPitches(beat: number): number[] {
   if (!currentScore) return [];
-  const voices: { avg: number; midi: number }[] = [];
-  for (const [, notes] of notesByPart) {
-    if (!notes.length) continue;
+  const measure = measureAtBeat(currentScore, beat);
+  const barEnd = measure ? measure.startBeat + measure.beats * (4 / measure.beatType) : beat + 4;
+  const pitches: number[] = [];
+  for (const part of currentScore.parts) {
+    const notes = notesByPart.get(part.id);
+    if (!notes?.length) continue;
     const sounding = notes.find((n) => n.startBeat <= beat + 1e-6 && beat < n.startBeat + n.durationBeats);
-    const next = sounding ?? notes.find((n) => n.startBeat >= beat - 1e-6);
-    if (!next) continue;
-    voices.push({ avg: notes.reduce((sum, n) => sum + n.midi, 0) / notes.length, midi: next.midi });
+    const next = sounding ?? notes.find((n) => n.startBeat >= beat - 1e-6 && n.startBeat < barEnd - 1e-6);
+    if (next) pitches.push(next.midi);
   }
-  return voices.sort((a, b) => b.avg - a.avg).map((v) => v.midi);
+  return pitches;
 }
 
 /** Stops playback and resets to the loop region's start, the last ruler-set start point, or the beginning. */

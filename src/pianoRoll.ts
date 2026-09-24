@@ -659,6 +659,7 @@ export class PianoRoll {
       ctx.globalAlpha = dimmed ? DIMMED_ALPHA : 1;
       ctx.fillStyle = color;
       ctx.fill(path);
+      this.paintSlurThreads(ctx, partId, localBeatToX, widthCss, rowHeight, color, dimmed);
       ctx.globalAlpha = 1;
 
       // Syllables from cached bitmaps (re-shaping text per note per rebuild adds up fast): inside
@@ -684,31 +685,54 @@ export class PianoRoll {
     for (const part of this.score.parts) if (!this.hiddenParts.has(part.id) && this.dimmedParts.has(part.id)) drawPart(part.id);
     for (const part of this.score.parts) if (!this.hiddenParts.has(part.id) && !this.dimmedParts.has(part.id)) drawPart(part.id);
 
-    // Slurs: thin arcs in each voice's colour, under-weighted so they don't compete with the notes.
-    for (const part of this.score.parts) {
-      if (this.hiddenParts.has(part.id)) continue;
-      const slurs = this.slursByPart.get(part.id);
-      if (!slurs || !slurs.length) continue;
-      const path = new Path2D();
-      let any = false;
-      for (const slur of slurs) {
-        const x1 = localBeatToX(slur.startBeat) + 6;
-        const x2 = localBeatToX(slur.endBeat) + 6;
-        if (x2 < -10 || x1 > widthCss + 10) continue;
-        const y1 = this.rowY(slur.startMidi + this.transpose) - rowHeight + BAR_PAD_PX;
-        const y2 = this.rowY(slur.endMidi + this.transpose) - rowHeight + BAR_PAD_PX;
-        const arcLift = Math.min(16, 6 + Math.abs(x2 - x1) * 0.08);
-        path.moveTo(x1, y1);
-        path.quadraticCurveTo((x1 + x2) / 2, Math.min(y1, y2) - arcLift, x2, y2);
-        any = true;
+  }
+
+  /**
+   * Slurs as threads in the logo's style: a glowing line in a light tint of the voice's colour,
+   * running from inside the tail of each slurred note into the head of the next, a small dot where
+   * it lands on each note. On top of the notes (lyrics are drawn over it), since back-to-back notes
+   * leave no room between them for a bow of any real shape.
+   */
+  private paintSlurThreads(ctx: CanvasRenderingContext2D, partId: string, localBeatToX: (beat: number) => number, widthCss: number, rowHeight: number, color: string, dimmed: boolean) {
+    const slurs = this.slursByPart.get(partId);
+    const notes = this.notesByPart.get(partId);
+    if (!slurs?.length || !notes?.length) return;
+    const capR = this.pillHeight(rowHeight) / 2;
+    const path = new Path2D();
+    const dots = new Path2D();
+    const reach = (n: NoteEvent) => Math.min(Math.max(capR, n.durationBeats * this.pixelsPerBeat * 0.4), capR * 6);
+    for (const slur of slurs) {
+      if (localBeatToX(slur.endBeat) < -60 || localBeatToX(slur.startBeat) > widthCss + 60) continue;
+      const chain = slurChain(notes, slur);
+      for (let i = 0; i + 1 < chain.length; i++) {
+        const a = chain[i];
+        const b = chain[i + 1];
+        const x0 = localBeatToX(a.startBeat + a.durationBeats) - 2 - reach(a);
+        const x1 = localBeatToX(b.startBeat) + 1 + reach(b);
+        const y0 = this.rowY(a.midi + this.transpose) - rowHeight + BAR_PAD_PX + capR;
+        const y1 = this.rowY(b.midi + this.transpose) - rowHeight + BAR_PAD_PX + capR;
+        const pull = (x1 - x0) * 0.5;
+        path.moveTo(x0, y0);
+        path.bezierCurveTo(x0 + pull, y0, x1 - pull, y1, x1, y1);
+        for (const [x, y] of [[x0, y0], [x1, y1]]) {
+          dots.moveTo(x + 2.4, y);
+          dots.arc(x, y, 2.4, 0, Math.PI * 2);
+        }
       }
-      if (!any) continue;
-      ctx.globalAlpha = this.dimmedParts.has(part.id) ? DIMMED_ALPHA * 0.6 : 0.55;
-      ctx.strokeStyle = this.partColor(part.id);
-      ctx.lineWidth = 1.4;
-      ctx.stroke(path);
-      ctx.globalAlpha = 1;
     }
+    const dim = dimmed ? DIMMED_ALPHA : 1;
+    const light = towardPaper(color, 0.6);
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.3 * dim;
+    ctx.lineWidth = Math.max(5, capR);
+    ctx.stroke(path);
+    ctx.strokeStyle = light;
+    ctx.globalAlpha = 0.95 * dim;
+    ctx.lineWidth = 1.6;
+    ctx.stroke(path);
+    ctx.fillStyle = light;
+    ctx.fill(dots);
   }
 
   /**
@@ -798,4 +822,25 @@ function addRoundRectSubpath(path: Path2D, x: number, y: number, w: number, h: n
   path.arcTo(x, y + h, x, y, r);
   path.arcTo(x, y, x + w, y, r);
   path.closePath();
+}
+
+/**
+ * The notes a slur binds, in order: every note of the voice from the slur's first to its last note.
+ * Where a voice has two notes at once (a divisi), the one closest in pitch to the line so far is followed.
+ */
+function slurChain(notes: NoteEvent[], slur: SlurArc): NoteEvent[] {
+  const eps = 1e-6;
+  const chain: NoteEvent[] = [];
+  for (const n of notes) {
+    if (n.startBeat < slur.startBeat - eps) continue;
+    if (n.startBeat > slur.endBeat + eps) break;
+    const last = chain.at(-1);
+    if (last && Math.abs(last.startBeat - n.startBeat) < eps) {
+      const target = chain.length === 1 ? slur.startMidi : chain[chain.length - 2].midi;
+      if (Math.abs(n.midi - target) < Math.abs(last.midi - target)) chain[chain.length - 1] = n;
+      continue;
+    }
+    chain.push(n);
+  }
+  return chain;
 }

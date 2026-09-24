@@ -107,8 +107,10 @@ connected device — so nobody is left with music playing to an empty player.
   the line and the audio can never visually desync.
 - **Ties** (a note sustained across a bar-line, or any tie) are merged into a single note at parse
   time rather than kept as two notes joined by a line — see §4.2 — so a tied note renders as one
-  seamless bar and plays back with a single attack, not a retrigger. **Slurs** are drawn as an
-  arched curve in the voice's own color.
+  seamless bar and plays back with a single attack, not a retrigger. **Slurs** are drawn in the
+  title screen's ribbon style: a glowing thread in a light tint of the voice's colour, from inside
+  the tail of each slurred note into the head of the next, with a small dot where it lands on each
+  note (on top of the notes, lyrics above it — back-to-back notes leave no room for a bow between them).
 
 ### Sheet music view
 An alternative view (the **Piano roll | Sheet music** switch in the player's top bar) for anyone
@@ -160,15 +162,15 @@ and popovers can't drift apart.
   playing. Tracked by a `freshStart` flag (`sync.ts`), see §4.7. A late-joining device skips the
   count-in and joins the music already in progress.
 - **Starting tones ("Anfangstöne")**: a toggle next to the metronome (in the Tempo & key sheet on
-  a phone), off by default and synced like the metronome. When on, a fresh Play first sounds each
-  voice's starting note one after another — the note sounding at the start position, else its
-  next note — from the highest voice to the lowest (ordered by each voice's average pitch, not
-  the file's part order), sung as a synthesized "du" (`playDuNote` in `audioEngine.ts`: a
-  sawtooth source through "u" vowel formants, F2 gliding down at the onset for the "d"), then all
-  of them together as the chord they make, then the count-in if the metronome is on, then the
-  music. Same
-  fresh-start rule as the count-in; synced in Ensemble via `PlaybackState.startTones` (explicitly
-  `[]` on every other play publish — merge-write rule). A late joiner skips them.
+  a phone), off by default and synced like the metronome. When on, every Play (a resume too)
+  first sings the starting note of each voice that sings in the bar playback starts in — the note
+  sounding at the start position, else its next note within that bar; voices entering later are
+  left out — one after another in the score's voice order, top to bottom. Each is a synthesized
+  "du" (`playDuNote` in `audioEngine.ts`: a sawtooth source through "u" vowel formants, F2 gliding
+  down at the onset for the "d"), one beat apart at the current tempo; then all of them together
+  as the chord (two beats), half a beat's breath, the count-in if the metronome is on, then the
+  music. Synced in Ensemble via `PlaybackState.startTones` (explicitly `[]` on every other play
+  publish — merge-write rule). A late joiner skips them.
 - **Loop**: either loop the whole piece, or mark a region — drag across the score's ruler, or
   (with a mouse) across the whole-piece strip — and loop just that. The Loop toggle decides
   whether hitting the boundary wraps around or stops there.
