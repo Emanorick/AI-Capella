@@ -44,9 +44,18 @@ export interface PlaybackState {
   // must set this explicitly or a merge write would leave it at its previous (possibly stale)
   // value.
   freshStart: boolean;
+  // Starting tones ("Anfangstöne"): whether they're switched on (synced like the metronome), and
+  // for a play publish, the pitches (untransposed MIDI, top voice first) to sound before the
+  // count-in/music. Same merge-write rule as countInBeats: every play publish sets startTones
+  // explicitly ([] for none) so a stale list can never reattach itself to a later update.
+  startTonesOn: boolean;
+  startTones: number[];
+  // Leading mode: the device id that controls playback for everyone (null = anyone can). Other
+  // devices follow and their transport controls are locked -- see isFollower() in main.ts.
+  leaderId: string | null;
 }
 
-function getDeviceId(): string {
+export function getDeviceId(): string {
   let id = localStorage.getItem(DEVICE_ID_STORAGE_KEY);
   if (!id) {
     id = crypto.randomUUID();
@@ -170,6 +179,9 @@ export function subscribePlaybackState(callback: (state: PlaybackState | null) =
         countInBeats: (data.countInBeats as number) ?? 0,
         countInPulseBeats: (data.countInPulseBeats as number) ?? 1,
         freshStart: (data.freshStart as boolean) ?? true,
+        startTonesOn: (data.startTonesOn as boolean) ?? false,
+        startTones: Array.isArray(data.startTones) ? (data.startTones as number[]) : [],
+        leaderId: (data.leaderId as string | null) ?? null,
       });
     },
     onError,

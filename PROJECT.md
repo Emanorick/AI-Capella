@@ -159,6 +159,13 @@ and popovers can't drift apart.
   seek) — never a plain Pause→Play resume, and never a tempo/key change or a seek while already
   playing. Tracked by a `freshStart` flag (`sync.ts`), see §4.7. A late-joining device skips the
   count-in and joins the music already in progress.
+- **Starting tones ("Anfangstöne")**: a toggle next to the metronome (in the Tempo & key sheet on
+  a phone), off by default and synced like the metronome. When on, a fresh Play first sounds each
+  voice's starting note one after another — the note sounding at the start position, else its
+  next note — from the highest voice to the lowest (ordered by each voice's average pitch, not
+  the file's part order), then the count-in if the metronome is on, then the music. Same
+  fresh-start rule as the count-in; synced in Ensemble via `PlaybackState.startTones` (explicitly
+  `[]` on every other play publish — merge-write rule). A late joiner skips them.
 - **Loop**: either loop the whole piece, or mark a region — drag across the score's ruler, or
   (with a mouse) across the whole-piece strip — and loop just that. The Loop toggle decides
   whether hitting the boundary wraps around or stops there.
@@ -245,7 +252,26 @@ marks never offers hand-added ones.
   hears independently of every other device, so e.g. a soprano can isolate their own part while
   everyone else in the room still hears the full mix. Not synced, personal per-device viewing
   preference too: zoom level, vertical scroll position, and the solo-ducking volume level.
+- **Leading mode**: in Ensemble, the mode badge in the player opens a menu with **Lead the
+  rehearsal**. The leading device's id is stored in the shared session (`leaderId`); every other
+  device then follows — its shared transport controls (play, stop, jumps, tempo, key, loop,
+  metronome, starting tones, song choice) are shown dimmed and answer with a short explanation
+  instead of acting (one guard in `pushState`/`publishPlayingAt`), while mute, solo and zoom stay
+  personal. The leader can hand the lead back; anyone else can **take over** after a
+  confirmation (in case the leader's phone died). Leaving Ensemble as the leader releases it.
+  Client-side enforcement, consistent with the app's soft trust model.
 - See §4.7 for how the cross-device timing actually works.
+
+### Offline
+The app works without a connection once it has been opened online on that device:
+- `public/sw.js` (service worker, production builds only) keeps the app itself — page, scripts,
+  styles, the Latin font subsets, the music font, icons and the sample song. Page loads are
+  network-first with the stored copy as fallback; build files are served from storage first (their
+  names change with every build) and older builds' files are pruned.
+- Firestore's persistent local cache (IndexedDB, `firebase.ts`) keeps every song that has been
+  listed, including its score, so the repertoire and every song open and play offline. The
+  repertoire shows "Offline: showing the songs saved on this device" in that case. Changes made
+  offline (renames etc.) are sent when the connection returns. Ensemble mode needs a connection.
 
 ### Design ("Dusk")
 The visual system, from the September 2026 redesign:

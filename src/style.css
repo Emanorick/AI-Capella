@@ -2001,3 +2001,21 @@ button.stepper-value:hover {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---- Leading mode ---------------------------------------------------------------- */
+
+/* Following another device's lead: shared transport controls are shown locked (they still respond
+   with a short explanation). Mute, solo and zoom stay fully usable -- they're personal. */
+.following .transport .t-center,
+.following .transport .t-right,
+.following .transport .pos,
+.following .info-row,
+.following #overview,
+.following #section-marks {
+  opacity: 0.4;
+}
+
+.badge.is-leading {
+  border-color: var(--paper);
+  background: var(--ink-3);
+}

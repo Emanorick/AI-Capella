@@ -18,6 +18,16 @@ const LOOKAHEAD_REFILL_SEC = 3; // top up once the scheduled horizon is within t
 // audible click/pop. This just needs to be short enough that an early Stop/Pause/reschedule
 // doesn't feel laggy.
 const FADE_SEC = 0.01;
+// Starting tones ("Anfangstöne"): spacing between successive voices' tones, each tone's length, and
+// the breath between the last tone and the count-in/music.
+const START_TONE_SPACING_SEC = 0.85;
+const START_TONE_DURATION_SEC = 0.75;
+const START_TONE_GAP_SEC = 0.45;
+
+/** How much extra lead time `count` starting tones need before the count-in/music. */
+export function startTonesLeadSec(count: number): number {
+  return count ? count * START_TONE_SPACING_SEC + START_TONE_GAP_SEC : 0;
+}
 
 /** An audible "voice": whichever oscillators make up one note or click, sharing one gain node
  *  that controls its envelope/volume. clearSchedule() fades/stops a whole voice at once. */
@@ -262,6 +272,7 @@ export class AudioEngine {
   }
 
   private lastTranspose = 0;
+  private startTonesEndCtxTime = 0;
   private lastCountInBeats = 0; // set by play(); isCountingIn() needs this to tell "pre-roll before a count-in" apart from "pre-roll before a plain synced Play"
   // Set by setMetronomeEnabled() when a toggle arrives mid-count-in and the reschedule it would
   // normally do has to wait until the count-in actually ends -- see its comment for why.
@@ -306,7 +317,7 @@ export class AudioEngine {
    * spare), the count-in is silently skipped and playback just starts as scheduled, same
    * principle as the "join already in progress" branch above.
    */
-  play(fromBeat: number, bpm: number, transposeSemitones: number, startAtEpochMs?: number, countInBeats = 0, countInPulseBeats = 1) {
+  play(fromBeat: number, bpm: number, transposeSemitones: number, startAtEpochMs?: number, countInBeats = 0, countInPulseBeats = 1, startTones: number[] = []) {
     this.pendingMetronomeReschedule = false; // this call is itself a full reschedule -- nothing left deferred
     this.clearSchedule();
     if (this.ctx.state === 'suspended') this.ctx.resume();
@@ -316,7 +327,7 @@ export class AudioEngine {
     // whole loop).
     this.secPerBeat = Number.isFinite(bpm) && bpm > 0 ? 60 / bpm : this.secPerBeat;
     this.lastTranspose = transposeSemitones;
-    this.lastCountInBeats = countInBeats;
+    this.lastCountInBeats = countInBeats + startTones.length;
     const now = this.ctx.currentTime;
     if (startAtEpochMs != null) {
       const deltaSec = (startAtEpochMs - Date.now()) / 1000;
@@ -333,6 +344,25 @@ export class AudioEngine {
     }
     this.playing = true;
     this.scheduledUpToBeat = this.playStartBeat;
+    this.startTonesEndCtxTime = 0;
+    if (startTones.length) {
+      // Starting tones: each voice's first note, top voice first, one after another, ending a
+      // short breath before the count-in (or the music) -- see startTonesLeadSec().
+      const countInSec = countInBeats * countInPulseBeats * this.secPerBeat;
+      const end = this.playStartCtxTime - countInSec - START_TONE_GAP_SEC;
+      const first = end - startTones.length * START_TONE_SPACING_SEC;
+      // Same rule as the count-in below: skipped entirely if there's no room left (a late joiner).
+      if (first > now + 0.05) {
+        startTones.forEach((midi, i) => {
+          try {
+            this.scheduledVoices.push(playPianoNote(this.ctx, this.masterGain, first + i * START_TONE_SPACING_SEC, START_TONE_DURATION_SEC, midi + transposeSemitones));
+          } catch (err) {
+            console.error('Skipping a starting tone that could not be scheduled:', err);
+          }
+        });
+        this.startTonesEndCtxTime = end;
+      }
+    }
     if (countInBeats > 0) {
       const pulseSec = countInPulseBeats * this.secPerBeat;
       if (this.playStartCtxTime - countInBeats * pulseSec > now + 0.05) {
@@ -354,7 +384,12 @@ export class AudioEngine {
     this.scheduleAhead(true);
   }
 
-  /** True while a count-in scheduled by the most recent play() is still sounding, before the actual music starts. */
+  /** True while the starting tones of the most recent play() are still sounding. */
+  isPlayingStartTones(): boolean {
+    return this.playing && this.ctx.currentTime < this.startTonesEndCtxTime;
+  }
+
+  /** True while a count-in (or starting tones) scheduled by the most recent play() is still sounding, before the actual music starts. */
   isCountingIn(): boolean {
     return this.playing && this.lastCountInBeats > 0 && this.ctx.currentTime < this.playStartCtxTime;
   }

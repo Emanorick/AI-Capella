@@ -75,7 +75,7 @@ function parseSongDoc(id: string, data: Record<string, unknown>): StoredSong {
 }
 
 /** Live-subscribes to the shared song library; the callback fires immediately and again on every change from any device. */
-export function subscribeToSongs(callback: (songs: StoredSong[]) => void, onError: (err: unknown) => void): Unsubscribe {
+export function subscribeToSongs(callback: (songs: StoredSong[], fromCache: boolean) => void, onError: (err: unknown) => void): Unsubscribe {
   if (!db) {
     onError(new Error('Firebase is not configured'));
     return () => {};
@@ -92,13 +92,16 @@ export function subscribeToSongs(callback: (songs: StoredSong[]) => void, onErro
   const cache = new Map<string, StoredSong>();
   return onSnapshot(
     q,
+    // Metadata changes too, so the app learns when the list switches between the offline copy and
+    // the live server data (fromCache), not only when documents change.
+    { includeMetadataChanges: true },
     (snapshot) => {
       for (const change of snapshot.docChanges()) {
         if (change.type === 'removed') cache.delete(change.doc.id);
         else cache.set(change.doc.id, parseSongDoc(change.doc.id, change.doc.data()));
       }
       const songs = snapshot.docs.map((d) => cache.get(d.id)).filter((s): s is StoredSong => s != null);
-      callback(songs);
+      callback(songs, snapshot.metadata.fromCache);
     },
     onError,
   );

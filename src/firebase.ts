@@ -1,6 +1,6 @@
 import { initializeApp, type FirebaseApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, type Auth } from 'firebase/auth';
-import { initializeFirestore, type Firestore } from 'firebase/firestore';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, type Firestore } from 'firebase/firestore';
 import { firebaseConfig, isFirebaseConfigured } from './firebaseConfig';
 
 let app: FirebaseApp | null = null;
@@ -13,7 +13,13 @@ if (isFirebaseConfigured) {
   // Firestore's default streaming (WebChannel) transport can stall indefinitely behind some
   // proxies, VPNs, and restrictive school/office networks -- auto-detect and fall back to plain
   // long-polling in those cases, per Firebase's own documented workaround for this exact symptom.
-  db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+  // A persistent (IndexedDB) copy of everything read, so the song library -- including every
+  // song's score -- keeps working without a connection (rehearsal rooms without Wi-Fi); changes
+  // made offline are sent once the connection is back. Shared between open tabs.
+  db = initializeFirestore(app, {
+    experimentalAutoDetectLongPolling: true,
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager(), cacheSizeBytes: 200 * 1024 * 1024 }),
+  });
 }
 
 export { db, isFirebaseConfigured };

@@ -7,7 +7,7 @@ import '@fontsource-variable/atkinson-hyperlegible-mono/wght.css';
 import './style.css';
 import { parseMusicXML } from './musicxml';
 import { parseMIDI } from './midi';
-import { AudioEngine, type PartMixState } from './audioEngine';
+import { AudioEngine, startTonesLeadSec, type PartMixState } from './audioEngine';
 import { PianoRoll, RULER_HEIGHT_PX, type LoopRegion } from './pianoRoll';
 import { StaffView, STAFF_RULER_HEIGHT_PX } from './staffView';
 import { OverviewStrip } from './overview';
@@ -148,6 +148,7 @@ app.innerHTML = `
       <span class="info-tempo">${icon('quarter')}<b data-bind="bpm"></b></span>
       <span>${t('key')} <b data-bind="transpose"></b></span>
       <span class="info-metro" data-bind-metro>${icon('metronome')}</span>
+      <span class="info-metro" data-bind-tones>${icon('fork')}</span>
       ${icon('chevronUp')}
     </button>
     <footer class="transport">
@@ -163,6 +164,7 @@ app.innerHTML = `
         <span class="t-sep" aria-hidden="true"></span>
         <button type="button" class="t-btn toggle" data-action="loop" aria-pressed="false">${icon('loop')}</button>
         <button type="button" class="t-btn toggle t-metro" data-action="metronome" aria-pressed="false" aria-label="${t('metronome')}" title="${t('metronome')}">${icon('metronome')}</button>
+        <button type="button" class="t-btn toggle t-metro" data-action="start-tones" aria-pressed="false" aria-label="${t('startTones')}" title="${t('startTonesHint')}">${icon('fork')}</button>
       </div>
       <div class="t-right">
         <div class="stepper" role="group" aria-label="${t('tempo')}">
@@ -229,6 +231,11 @@ let loopRegion: LoopRegion | null = null;
 // from the song's savedConfig on every fresh load in the meantime.
 let manualSections: { label: string; beat: number }[] = [];
 let loopEnabled = false;
+let startTonesOn = false;
+// Leading mode (Ensemble): the device controlling playback for everyone, or null.
+let leaderId: string | null = null;
+const myDeviceId = sync.getDeviceId();
+let libraryFromCache = false;
 // Whether the next Play should count-in (see PlaybackState.freshStart's doc comment in sync.ts).
 // Kept in sync via applyPlaybackState the same way metronomeOn/loopEnabled are.
 let freshStart = true;
@@ -251,7 +258,7 @@ let loadedSongId: string | null = null;
 let currentSong: SongEntry | null = null;
 let pendingSongId: string | null = null; // set when a remote songId isn't in our library list yet
 let lastReceivedPlaybackState: PlaybackState | null = null;
-let lastAppliedTiming: { playing: boolean; originBeat: number; originServerTimeMs: number; bpm: number; transpose: number; countInBeats: number; countInPulseBeats: number } | null = null;
+let lastAppliedTiming: { playing: boolean; originBeat: number; originServerTimeMs: number; bpm: number; transpose: number; countInBeats: number; countInPulseBeats: number; startTones: number[] } | null = null;
 let lastAppliedMetronomeOn = false;
 
 type LibraryState = 'loading' | 'ready' | 'offline' | 'unconfigured';
@@ -329,8 +336,16 @@ function renderModeControls() {
     b.setAttribute('aria-pressed', String(b.dataset.mode === sessionMode));
   });
   document.querySelector<HTMLElement>('#mode-seg')!.hidden = !isFirebaseConfigured;
-  modeBadge.innerHTML = sessionMode === 'ensemble' ? `${icon('users')}<span>${t('ensemble')}</span><i class="live-dot" aria-hidden="true"></i>` : `${icon('user')}<span>${t('solo')}</span>`;
+  const leading = syncEnabled() && leaderId === myDeviceId;
+  const following = isFollower();
+  if (sessionMode === 'solo') modeBadge.innerHTML = `${icon('user')}<span>${t('solo')}</span>`;
+  else if (leading) modeBadge.innerHTML = `${icon('crown')}<span>${t('leading')}</span><i class="live-dot" aria-hidden="true"></i>`;
+  else if (following) modeBadge.innerHTML = `${icon('users')}<span>${t('following')}</span><i class="live-dot" aria-hidden="true"></i>`;
+  else modeBadge.innerHTML = `${icon('users')}<span>${t('ensemble')}</span><i class="live-dot" aria-hidden="true"></i>`;
+  modeBadge.classList.toggle('is-leading', leading);
+  modeBadge.title = following ? t('followingHint') : '';
   modeBadge.hidden = !isFirebaseConfigured;
+  app.classList.toggle('following', following);
 }
 
 async function requestModeSwitch(mode: 'solo' | 'ensemble') {
@@ -343,13 +358,35 @@ async function requestModeSwitch(mode: 'solo' | 'ensemble') {
   });
   if (!ok) return;
   stopPlayback();
+  if (leaderId === myDeviceId) await sync.publishPlaybackState({ leaderId: null }).catch(() => {});
   localStorage.setItem(MODE_STORAGE_KEY, mode);
   // The title screen shows on every start; after an explicit switch, go straight on in the new mode.
   sessionStorage.setItem(MODE_SWITCH_KEY, mode);
   location.reload();
 }
 const MODE_SWITCH_KEY = 'ai-capella-mode-switch';
-modeBadge.addEventListener('click', () => requestModeSwitch(sessionMode === 'solo' ? 'ensemble' : 'solo'));
+modeBadge.addEventListener('click', () => {
+  if (sessionMode === 'solo') {
+    openMenu(modeBadge, [{ label: t('switchToEnsembleItem'), icon: 'users', onSelect: () => void requestModeSwitch('ensemble') }], t('mode'));
+    return;
+  }
+  const items: Parameters<typeof openMenu>[1] = [];
+  if (leaderId === myDeviceId) items.push({ label: t('releaseLead'), icon: 'crown', onSelect: () => pushState({ leaderId: null }, { leadershipChange: true }) });
+  else if (leaderId) items.push({ label: t('takeOverLead'), icon: 'crown', onSelect: () => void takeOverLead() });
+  else items.push({ label: t('leadRehearsal'), icon: 'crown', onSelect: () => takeLead() });
+  items.push({ label: t('switchToSoloItem'), icon: 'user', onSelect: () => void requestModeSwitch('solo') });
+  openMenu(modeBadge, items, t('ensemble'));
+});
+
+function takeLead() {
+  pushState({ leaderId: myDeviceId }, { leadershipChange: true });
+  toast(t('nowLeading'));
+}
+
+async function takeOverLead() {
+  const ok = await confirmDialog({ title: t('takeOverTitle'), body: t('takeOverBody'), confirmLabel: t('takeOver') });
+  if (ok) takeLead();
+}
 
 function chooseMode(mode: 'solo' | 'ensemble') {
   sessionMode = mode;
@@ -543,8 +580,14 @@ function renderSongList() {
 
 function renderLibraryBanner() {
   libBannerEl.replaceChildren();
-  libBannerEl.hidden = libraryState === 'ready';
-  if (libraryState === 'ready') return;
+  libBannerEl.hidden = libraryState === 'ready' && !libraryFromCache;
+  if (libraryState === 'ready') {
+    if (libraryFromCache) {
+      libBannerEl.classList.add('muted');
+      libBannerEl.textContent = t('offlineSaved');
+    }
+    return;
+  }
   libBannerEl.classList.toggle('muted', libraryState !== 'offline');
   const text = document.createElement('div');
   if (libraryState === 'loading') text.textContent = t('loadingLibrary');
@@ -824,6 +867,9 @@ function currentStateSnapshot(): PlaybackState {
     countInBeats: 0,
     countInPulseBeats: 1,
     freshStart,
+    startTonesOn,
+    startTones: [],
+    leaderId,
   };
 }
 
@@ -837,16 +883,23 @@ function currentStateSnapshot(): PlaybackState {
  * one exception -- deliberately local-only, see PlaybackState's doc comment in sync.ts -- so they
  * mutate state directly instead of going through here.
  */
-function pushState(patch: Partial<PlaybackState>) {
+function pushState(patch: Partial<PlaybackState>, opts?: { leadershipChange?: boolean }) {
+  // Following another device's lead: transport changes are locked (the leader's device is the only
+  // one that moves playback for everyone). Taking over the lead itself is the one exception.
+  if (isFollower() && !opts?.leadershipChange) {
+    toast(t('followingHint'));
+    return;
+  }
   if (syncEnabled()) {
     void sync.publishPlaybackState(patch).catch((err) => {
       toast(t('syncFailed', { msg: errorText(err) }), 'error');
     });
   } else {
-    // The sync-buffer skip below only applies when there's no count-in: a count-in still needs
-    // real scheduling room even with nobody else to sync with, so it keeps a real future instant
-    // instead of collapsing to "now."
-    const local = patch.playing && !patch.countInBeats ? { ...patch, originServerTimeMs: 0 } : patch;
+    // The sync-buffer skip below only applies when there's no count-in or starting tones: those
+    // need real scheduling room even with nobody else to sync with, so they keep a real future
+    // instant instead of collapsing to "now."
+    const needsLeadTime = !!patch.countInBeats || !!patch.startTones?.length;
+    const local = patch.playing && !needsLeadTime ? { ...patch, originServerTimeMs: 0 } : patch;
     void applyPlaybackState({ ...currentStateSnapshot(), ...local });
   }
 }
@@ -860,8 +913,17 @@ function pushState(patch: Partial<PlaybackState>) {
  * to play before it -- see sync.computeFutureOriginServerTimeMs's doc comment.
  */
 async function publishPlayingAt(originBeat: number, extra: Partial<PlaybackState> = {}, extraLeadMs = 0) {
+  if (isFollower()) {
+    toast(t('followingHint'));
+    return;
+  }
   await sync.ensureCalibrated();
-  pushState({ ...extra, playing: true, originBeat, originServerTimeMs: sync.computeFutureOriginServerTimeMs(extraLeadMs) });
+  // startTones explicitly empty unless this is a fresh Play that asked for them (merge-write rule).
+  pushState({ startTones: [], ...extra, playing: true, originBeat, originServerTimeMs: sync.computeFutureOriginServerTimeMs(extraLeadMs) });
+}
+
+function isFollower(): boolean {
+  return syncEnabled() && leaderId != null && leaderId !== myDeviceId;
 }
 
 /** The single place that applies shared-session state locally -- see pushState()'s doc comment. */
@@ -889,6 +951,9 @@ async function applyPlaybackState(state: PlaybackState) {
   // No side effect of its own (only read later, synchronously, inside togglePlay) -- kept
   // unconditional/undedup'd so it's never staler than necessary.
   freshStart = state.freshStart;
+  startTonesOn = state.startTonesOn;
+  leaderId = syncEnabled() ? state.leaderId : null;
+  renderModeControls();
 
   if (!audioEngine) {
     refreshBindings();
@@ -910,7 +975,8 @@ async function applyPlaybackState(state: PlaybackState) {
     lastAppliedTiming.bpm !== state.bpm ||
     lastAppliedTiming.transpose !== state.transpose ||
     lastAppliedTiming.countInBeats !== state.countInBeats ||
-    lastAppliedTiming.countInPulseBeats !== state.countInPulseBeats;
+    lastAppliedTiming.countInPulseBeats !== state.countInPulseBeats ||
+    lastAppliedTiming.startTones.join() !== state.startTones.join();
   lastAppliedTiming = {
     playing: state.playing,
     originBeat: state.originBeat,
@@ -919,6 +985,7 @@ async function applyPlaybackState(state: PlaybackState) {
     transpose: state.transpose,
     countInBeats: state.countInBeats,
     countInPulseBeats: state.countInPulseBeats,
+    startTones: state.startTones,
   };
   if (!timingChanged) {
     renderNow();
@@ -938,7 +1005,7 @@ async function applyPlaybackState(state: PlaybackState) {
   // A zero originServerTimeMs is the single-device-fallback sentinel from pushState() above --
   // no shared instant to translate, so AudioEngine.play() falls back to its own "now" default.
   const startAtEpochMs = state.originServerTimeMs > 0 ? state.originServerTimeMs - sync.getServerTimeOffsetMs() : undefined;
-  audioEngine.play(state.originBeat, state.bpm, state.transpose, startAtEpochMs, state.countInBeats, state.countInPulseBeats);
+  audioEngine.play(state.originBeat, state.bpm, state.transpose, startAtEpochMs, state.countInBeats, state.countInPulseBeats, state.startTones);
   syncPlayButtons(true);
   startRenderLoop();
 }
@@ -974,6 +1041,10 @@ function refreshBindings() {
     el.setAttribute(el.getAttribute('role') === 'switch' ? 'aria-checked' : 'aria-pressed', String(metronomeOn));
   });
   document.querySelectorAll<HTMLElement>('[data-bind-metro]').forEach((el) => el.classList.toggle('on', metronomeOn));
+  document.querySelectorAll<HTMLElement>('[data-bind-tones]').forEach((el) => el.classList.toggle('on', startTonesOn));
+  document.querySelectorAll<HTMLElement>('[data-action="start-tones"]').forEach((el) => {
+    el.setAttribute(el.getAttribute('role') === 'switch' ? 'aria-checked' : 'aria-pressed', String(startTonesOn));
+  });
   let loopTitle: string;
   if (loopEnabled) loopTitle = t('stopLooping');
   else if (loopRegion && currentScore) {
@@ -1388,10 +1459,17 @@ function metronomeBlock(): HTMLElement {
   return block;
 }
 
+function startTonesBlock(): HTMLElement {
+  const block = document.createElement('div');
+  block.className = 'ctl-block switch-row';
+  block.innerHTML = `<span><b>${t('startTones')}</b><span class="ctl-note">${t('startTonesHint')}</span></span><button type="button" class="switch" role="switch" data-action="start-tones" aria-checked="false" aria-label="${t('startTones')}"></button>`;
+  return block;
+}
+
 function openControlsSheet(opener: HTMLElement) {
   const body = document.createElement('div');
   body.className = 'sheet-body';
-  body.append(tempoBlock(), keyBlock(), metronomeBlock());
+  body.append(tempoBlock(), keyBlock(), metronomeBlock(), startTonesBlock());
   const sections = sectionsBlock();
   if (sections) body.appendChild(sections);
   body.appendChild(gotoBlock());
@@ -1426,9 +1504,29 @@ function togglePlay() {
     const measure = measureAtBeat(currentScore, fromBeat);
     const countInPulseBeats = measure ? 4 / measure.beatType : 1;
     const countInBeats = metronomeOn && measure && freshStart ? measure.beats : 0;
-    const extraLeadMs = countInBeats > 0 ? countInBeats * countInPulseBeats * (60_000 / bpm) : 0;
-    void publishPlayingAt(fromBeat, { countInBeats, countInPulseBeats }, extraLeadMs);
+    // Starting tones, when switched on: only for a fresh start (same rule as the count-in).
+    const startTones = startTonesOn && freshStart ? startingPitches(fromBeat) : [];
+    const extraLeadMs = (countInBeats > 0 ? countInBeats * countInPulseBeats * (60_000 / bpm) : 0) + startTonesLeadSec(startTones.length) * 1000;
+    void publishPlayingAt(fromBeat, { countInBeats, countInPulseBeats, startTones }, extraLeadMs);
   }
+}
+
+/**
+ * Each voice's first pitch at `beat` (the note sounding there, else its next note), ordered from
+ * the highest voice to the lowest by the voices' average pitch -- "top to bottom" as a choir hears
+ * it, independent of how the file happens to order its parts.
+ */
+function startingPitches(beat: number): number[] {
+  if (!currentScore) return [];
+  const voices: { avg: number; midi: number }[] = [];
+  for (const [, notes] of notesByPart) {
+    if (!notes.length) continue;
+    const sounding = notes.find((n) => n.startBeat <= beat + 1e-6 && beat < n.startBeat + n.durationBeats);
+    const next = sounding ?? notes.find((n) => n.startBeat >= beat - 1e-6);
+    if (!next) continue;
+    voices.push({ avg: notes.reduce((sum, n) => sum + n.midi, 0) / notes.length, midi: next.midi });
+  }
+  return voices.sort((a, b) => b.avg - a.avg).map((v) => v.midi);
 }
 
 /** Stops playback and resets to the loop region's start, the last ruler-set start point, or the beginning. */
@@ -1653,6 +1751,9 @@ document.addEventListener('click', (e) => {
       break;
     case 'metronome':
       if (audioEngine) pushState({ metronomeOn: !metronomeOn });
+      break;
+    case 'start-tones':
+      pushState({ startTonesOn: !startTonesOn });
       break;
     case 'bpm-down':
       applyBpm(bpm - (bpm > 60 ? 5 : 2));
@@ -2092,7 +2193,7 @@ function setBound(bind: string, text: string) {
 function updatePositionDisplay(beat: number) {
   if (!currentScore) return;
   if (audioEngine?.isCountingIn()) {
-    setBound('pos-bar', t('countIn'));
+    setBound('pos-bar', audioEngine.isPlayingStartTones() ? t('startTonesPlaying') : t('countIn'));
     setBound('pos-beat', '');
     setBound('pos-beat-short', '');
     return;
@@ -2351,8 +2452,9 @@ async function runBootstrap() {
     await ensureSignedIn();
     await ensureAccess(); // PIN gate; resolves immediately if already granted on this device
     subscribeToSongs(
-      (songs) => {
+      (songs, fromCache) => {
         libraryState = 'ready';
+        libraryFromCache = fromCache && !navigator.onLine;
         importedSongs = songs.map((s) => ({
           id: s.id,
           title: s.title,
@@ -2420,3 +2522,14 @@ renderModeControls();
 renderSongList();
 refreshBindings();
 requestAnimationFrame(drawMarks);
+window.addEventListener('online', renderSongList);
+window.addEventListener('offline', renderSongList);
+
+// Offline support: the service worker keeps the app itself (code, fonts, icons, the sample song)
+// on the device; the songs come from Firestore's own offline copy (see firebase.ts). Production
+// only -- in development it would serve stale modules.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL }).catch(() => {});
+  });
+}
