@@ -20,6 +20,7 @@ import { animateRibbons, coverDataFromScore, drawCover, drawMark, prepareCanvas,
 import { icon } from './icons';
 import { countLabel, keyName, lang, setLang, t } from './i18n';
 import { canvasFontsReady } from './theme';
+import { initScan, openScanSheet, scanAvailable, scanStatusLine } from './scan';
 import { closeOverlay, confirmDialog, isNarrow, openMenu, openPopover, openSheet, promptDialog, toast } from './ui';
 import * as sync from './sync';
 import type { PlaybackState } from './sync';
@@ -91,6 +92,7 @@ app.innerHTML = `
         </div>
         <div class="lib-tools">
           <label class="search" id="lib-search-wrap" hidden>${icon('search')}<input id="lib-search" type="search" placeholder="${t('searchTitles')}" aria-label="${t('searchTitles')}" /></label>
+          <button type="button" class="scan-chip" id="scan-chip" hidden></button>
           <button type="button" class="btn primary" id="import-btn">${icon('plus')}<span>${t('addArrangement')}</span></button>
         </div>
       </div>
@@ -191,6 +193,7 @@ const searchWrapEl = document.querySelector<HTMLLabelElement>('#lib-search-wrap'
 const searchInput = document.querySelector<HTMLInputElement>('#lib-search')!;
 const importBtn = document.querySelector<HTMLButtonElement>('#import-btn')!;
 const importInput = document.querySelector<HTMLInputElement>('#import-input')!;
+const scanChip = document.querySelector<HTMLButtonElement>('#scan-chip')!;
 const songTitleEl = document.querySelector<HTMLHeadingElement>('#song-title')!;
 const songMetaEl = document.querySelector<HTMLSpanElement>('#song-meta')!;
 const voiceListEl = document.querySelector<HTMLUListElement>('#voice-list')!;
@@ -741,7 +744,36 @@ async function importFiles(files: FileList | File[]) {
   if (lastImported) void selectSong(lastImported);
 }
 
-importBtn.addEventListener('click', () => importInput.click());
+// With the scan service configured, "Add arrangement" offers importing a file or scanning sheet music.
+importBtn.addEventListener('click', () => {
+  if (!scanAvailable()) {
+    importInput.click();
+    return;
+  }
+  openMenu(importBtn, [
+    { label: t('importFile'), icon: 'upload', onSelect: () => importInput.click() },
+    { label: t('scanMenu'), icon: 'camera', onSelect: () => openScanSheet(importBtn) },
+  ], t('addArrangement'));
+});
+scanChip.addEventListener('click', () => openScanSheet(scanChip));
+
+/** Shows a running or finished scan next to "Add arrangement". */
+function renderScanChip() {
+  const status = scanStatusLine();
+  scanChip.hidden = !status;
+  if (!status) return;
+  scanChip.textContent = status.text;
+  scanChip.classList.toggle('busy', status.busy);
+  scanChip.classList.toggle('ready', !status.busy && status.text === t('scanReady'));
+}
+
+/** A checked scan goes into the repertoire like an imported MusicXML file. */
+async function importScannedScore(title: string, xml: string) {
+  parseMusicXML(xml); // throws on anything the player couldn't open
+  const id = await saveImportedSong({ title, xml, format: 'musicxml' });
+  toast(t('added', { title }));
+  void selectSong({ id, title, xml, format: 'musicxml', imported: true });
+}
 importInput.addEventListener('change', () => {
   if (importInput.files?.length) void importFiles(importInput.files);
   importInput.value = '';
@@ -2472,6 +2504,7 @@ async function runBootstrap() {
     // require request.auth != null, so an unsigned-in read would just hang/get rejected.
     await ensureSignedIn();
     await ensureAccess(); // PIN gate; resolves immediately if already granted on this device
+    initScan({ onImport: importScannedScore, onStatusChange: renderScanChip });
     subscribeToSongs(
       (songs, fromCache) => {
         libraryState = 'ready';

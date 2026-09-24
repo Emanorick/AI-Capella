@@ -50,3 +50,11 @@ export function ensureSignedIn(): Promise<void> {
     );
   });
 }
+
+/** The signed-in device's Firebase ID token, for the scan service to check who's asking. */
+export async function getIdToken(): Promise<string> {
+  await ensureSignedIn();
+  const user = auth?.currentUser;
+  if (!user) throw new Error('Not signed in');
+  return user.getIdToken();
+}

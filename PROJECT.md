@@ -246,6 +246,30 @@ marks never offers hand-added ones.
   not just the one that clicked it), unlike the trust model everywhere else in this app (renames,
   playback state) of applying shared-state changes immediately with no confirmation step.
 
+### Scan sheet music (PDF / photos)
+- When the scan service is configured (`VITE_OMR_URL` at build time, from the GitHub variable
+  `OMR_URL`), **Add arrangement** opens a small menu: import a file, or **Scan sheet music**.
+  Without it, the button imports files directly as before.
+- The scan sheet (`scan.ts`) takes one PDF (≤ 30 MB, ≤ 40 pages) or up to 40 photos — taken with
+  the camera on a phone, or chosen from the device — shown as numbered thumbnails that can be
+  reordered and removed. Photos are scaled to ≤ 3000 px (EXIF orientation applied) and sent as JPEG.
+- The service (`omr-service/`, a Node server in a container on Google Cloud Run, with its own
+  README for setup) runs **Audiveris** over all pages as one book, then asks **GPT** (OpenAI
+  Responses API, model configurable) about every page: the page image next to what Audiveris read
+  from it, in a compact JSON notation (per measure and part: voice, staff, chord, pitch as "F#4",
+  duration as a quarter-note fraction, tie, lyric syllable). GPT answers with the complete
+  corrected note list of each measure it would change (structured output with a strict JSON
+  schema), plus voice names and the title. A correction is only written back when every voice
+  still fills its bar (the time signature, or what the original measure had for pickups);
+  otherwise Audiveris' reading stays and the report lists the suggestion as not applied.
+- Progress (upload → reading → checking page n of N → done) shows in the sheet and, once it's
+  closed, as a chip next to Add arrangement. The job id is kept per device, so a reload picks the
+  scan back up. The result shows a per-page report (corrections, confidence, remarks), an editable
+  title, **Add to repertoire** (imported like a MusicXML file) and **Download MusicXML**.
+- Requests carry the device's Firebase ID token (checked by the service with firebase-admin);
+  a job is only visible to the device that started it. The older `functions/` spike (Claude
+  vision only, one page) is superseded by this and isn't used by the app.
+
 ### Synced multi-device playback
 - Every connected device is a full remote control for one shared playback session: hitting
   Play/Pause/Stop, changing BPM, transpose, or the metronome, seeking via the ruler, marking a
@@ -337,15 +361,18 @@ AI-Capella/
 │   ├── firebase.ts            # Firebase app/auth/Firestore initialization, anonymous sign-in
 │   ├── firebaseConfig.ts      # Firebase web app config (not secret; see file comment)
 │   ├── pinGate.ts             # the PIN screen
+│   ├── scan.ts                # "Scan sheet music" sheet: pages, upload, progress, result
 │   └── style.css              # all styling
+├── omr-service/            # scan service for Cloud Run: Audiveris + GPT check (own README, tests)
 ├── .github/workflows/deploy.yml   # builds and deploys dist/ to GitHub Pages on every push
 ├── vite.config.ts             # sets base: '/AI-Capella/' for GitHub Pages' subpath hosting
 ├── tsconfig.json
 └── package.json
 ```
 
-No test suite, no server code, no bundler plugins beyond stock Vite + TypeScript. The entire
-app is a single-page client-side bundle.
+No bundler plugins beyond stock Vite + TypeScript. The app itself is a single-page client-side
+bundle; the only server code is the optional scan service in `omr-service/` (with its own tests:
+`cd omr-service && npm test`).
 
 ---
 

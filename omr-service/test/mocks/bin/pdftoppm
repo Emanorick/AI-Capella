@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stand-in: two "page images" next to the prefix (last argument).
+eval last=\${$#}
+printf 'fakejpg' > "$last-1.jpg"; printf 'fakejpg' > "$last-2.jpg"

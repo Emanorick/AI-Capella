@@ -25,6 +25,10 @@ jobs:
           node-version: 20
       - run: npm ci
       - run: npm run build
+        env:
+          # The scan service's address (Settings -> Secrets and variables -> Actions -> Variables).
+          # Without it the app simply doesn't offer "Scan sheet music".
+          VITE_OMR_URL: ${{ vars.OMR_URL }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

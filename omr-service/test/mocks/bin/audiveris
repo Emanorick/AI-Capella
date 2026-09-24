@@ -1,0 +1,14 @@
+#!/usr/bin/env node
+// Stand-in for Audiveris in local tests: "recognizes" Evening Rise, with a page break after bar 4,
+// and logs sheet numbers the way Audiveris does.
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { zipSync, strToU8 } from 'fflate';
+const args = process.argv.slice(2);
+const out = args[args.indexOf('-output') + 1];
+let xml = readFileSync(new URL('../../../../public/evening-rise.musicxml', import.meta.url), 'utf8');
+let count = 0;
+xml = xml.replace(/<measure\b[^>]*>/g, (tag) => (++count === 5 ? `${tag}<print new-page="yes"/>` : tag));
+for (let i = 1; i <= 2; i++) { console.log(`INFO [scan#${i}] processing sheet`); }
+mkdirSync(out, { recursive: true });
+writeFileSync(join(out, 'scan.mxl'), zipSync({ 'META-INF/container.xml': strToU8('<container><rootfiles><rootfile full-path="scan.xml"/></rootfiles></container>'), 'scan.xml': strToU8(xml) }));
