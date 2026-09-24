@@ -18,15 +18,17 @@ const LOOKAHEAD_REFILL_SEC = 3; // top up once the scheduled horizon is within t
 // audible click/pop. This just needs to be short enough that an early Stop/Pause/reschedule
 // doesn't feel laggy.
 const FADE_SEC = 0.01;
-// Starting tones ("Anfangstöne"): spacing between successive voices' tones, each tone's length, and
-// the breath between the last tone and the count-in/music.
-const START_TONE_SPACING_SEC = 0.85;
-const START_TONE_DURATION_SEC = 0.75;
-const START_TONE_GAP_SEC = 0.45;
+// Starting tones ("Anfangstöne"): each voice's tone one after another ("du du du"), then all of
+// them together as the chord they make, then a breath before the count-in/music.
+const START_TONE_SPACING_SEC = 0.5;
+const START_TONE_DURATION_SEC = 0.4;
+const START_CHORD_SEC = 1.4;
+const START_TONE_GAP_SEC = 0.35;
 
-/** How much extra lead time `count` starting tones need before the count-in/music. */
+/** How much extra lead time `count` starting tones (plus their chord) need before the count-in/music. */
 export function startTonesLeadSec(count: number): number {
-  return count ? count * START_TONE_SPACING_SEC + START_TONE_GAP_SEC : 0;
+  if (!count) return 0;
+  return count * START_TONE_SPACING_SEC + (count > 1 ? START_CHORD_SEC : 0) + START_TONE_GAP_SEC;
 }
 
 /** An audible "voice": whichever oscillators make up one note or click, sharing one gain node
@@ -138,6 +140,84 @@ function playPianoNote(
   });
 
   return { oscillators, gain: ampGain };
+}
+
+// Vowel "u" formants (Hz, relative level, bandwidth Hz) -- a dark, rounded "oo" that sits well
+// under any voice range. F2 starts higher and glides down at the onset, which is what the ear
+// hears as the "d" in "du".
+const DU_FORMANTS = [
+  { freq: 330, gain: 1.0, bw: 170 },
+  { freq: 780, gain: 0.5, bw: 140 },
+  { freq: 2400, gain: 0.06, bw: 200 },
+];
+const DU_F2_ONSET_HZ = 1650;
+
+/** A sung "du": a buzzy glottal source through vowel formant filters, with a soft consonant onset and gentle vibrato. */
+export function playDuNote(ctx: AudioContext, destination: AudioNode, startTime: number, duration: number, midi: number, level = 1): Voice {
+  const freq = midiToFreq(midi);
+  const source = ctx.createOscillator();
+  source.type = 'sawtooth';
+  // A sung note scoops very slightly into pitch rather than starting dead on it.
+  source.frequency.setValueAtTime(freq * 0.985, startTime);
+  source.frequency.exponentialRampToValueAtTime(freq, startTime + 0.06);
+  // Vibrato only on longer notes (the chord), fading in like a singer's would.
+  const lfo = ctx.createOscillator();
+  lfo.frequency.value = 5.3;
+  const lfoDepth = ctx.createGain();
+  lfoDepth.gain.setValueAtTime(0, startTime);
+  lfoDepth.gain.linearRampToValueAtTime(duration > 0.8 ? freq * 0.004 : 0, startTime + Math.min(duration, 0.7));
+  lfo.connect(lfoDepth).connect(source.frequency);
+
+  const mix = ctx.createGain();
+  const nodes: AudioNode[] = [lfoDepth, mix];
+  for (const [i, f] of DU_FORMANTS.entries()) {
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = f.freq / f.bw;
+    bp.frequency.setValueAtTime(i === 1 ? DU_F2_ONSET_HZ : f.freq, startTime);
+    if (i === 1) bp.frequency.exponentialRampToValueAtTime(f.freq, startTime + 0.07);
+    const g = ctx.createGain();
+    g.gain.value = f.gain * 3;
+    source.connect(bp).connect(g).connect(mix);
+    nodes.push(bp, g);
+  }
+  // A formant can sit below a high voice's fundamental, which would leave the note nearly silent --
+  // a softened copy of the source keeps the pitch itself present in every range.
+  const body = ctx.createBiquadFilter();
+  body.type = 'lowpass';
+  body.frequency.value = Math.max(700, freq * 1.5);
+  const bodyGain = ctx.createGain();
+  bodyGain.gain.value = 0.6;
+  source.connect(body).connect(bodyGain).connect(mix);
+  nodes.push(body, bodyGain);
+
+  const amp = ctx.createGain();
+  // Notes right on the first formant resonate loudest -- taken down a little so every voice's tone is about equally loud.
+  const onFormant = Math.exp(-(Math.log2(freq / DU_FORMANTS[0].freq) ** 2) / (2 * 0.35 ** 2));
+  const peak = 0.3 * level * (1 - 0.3 * onFormant);
+  const end = startTime + duration;
+  amp.gain.setValueAtTime(0, startTime);
+  amp.gain.linearRampToValueAtTime(peak, startTime + 0.03);
+  amp.gain.setValueAtTime(peak, Math.max(startTime + 0.03, end - 0.08));
+  amp.gain.exponentialRampToValueAtTime(0.0001, end + 0.12);
+  mix.connect(amp).connect(destination);
+  nodes.push(amp);
+
+  const stopTime = end + 0.17;
+  for (const osc of [source, lfo]) {
+    osc.start(startTime);
+    osc.stop(stopTime);
+  }
+  source.addEventListener('ended', () => {
+    for (const n of [source, lfo, ...nodes]) {
+      try {
+        n.disconnect();
+      } catch {
+        // already disconnected
+      }
+    }
+  });
+  return { oscillators: [source, lfo], gain: amp };
 }
 
 function playClick(ctx: AudioContext, destination: AudioNode, startTime: number, accent: boolean): Voice {
@@ -350,12 +430,17 @@ export class AudioEngine {
       // short breath before the count-in (or the music) -- see startTonesLeadSec().
       const countInSec = countInBeats * countInPulseBeats * this.secPerBeat;
       const end = this.playStartCtxTime - countInSec - START_TONE_GAP_SEC;
-      const first = end - startTones.length * START_TONE_SPACING_SEC;
+      const first = this.playStartCtxTime - countInSec - startTonesLeadSec(startTones.length);
       // Same rule as the count-in below: skipped entirely if there's no room left (a late joiner).
       if (first > now + 0.05) {
+        const chordAt = first + startTones.length * START_TONE_SPACING_SEC;
+        // Quieter per voice in the chord, so it sums to about the loudness of a single tone.
+        const chordLevel = 1 / Math.sqrt(startTones.length);
         startTones.forEach((midi, i) => {
           try {
-            this.scheduledVoices.push(playPianoNote(this.ctx, this.masterGain, first + i * START_TONE_SPACING_SEC, START_TONE_DURATION_SEC, midi + transposeSemitones));
+            const pitch = midi + transposeSemitones;
+            this.scheduledVoices.push(playDuNote(this.ctx, this.masterGain, first + i * START_TONE_SPACING_SEC, START_TONE_DURATION_SEC, pitch));
+            if (startTones.length > 1) this.scheduledVoices.push(playDuNote(this.ctx, this.masterGain, chordAt, START_CHORD_SEC - 0.15, pitch, chordLevel));
           } catch (err) {
             console.error('Skipping a starting tone that could not be scheduled:', err);
           }

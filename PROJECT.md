@@ -163,7 +163,10 @@ and popovers can't drift apart.
   a phone), off by default and synced like the metronome. When on, a fresh Play first sounds each
   voice's starting note one after another — the note sounding at the start position, else its
   next note — from the highest voice to the lowest (ordered by each voice's average pitch, not
-  the file's part order), then the count-in if the metronome is on, then the music. Same
+  the file's part order), sung as a synthesized "du" (`playDuNote` in `audioEngine.ts`: a
+  sawtooth source through "u" vowel formants, F2 gliding down at the onset for the "d"), then all
+  of them together as the chord they make, then the count-in if the metronome is on, then the
+  music. Same
   fresh-start rule as the count-in; synced in Ensemble via `PlaybackState.startTones` (explicitly
   `[]` on every other play publish — merge-write rule). A late joiner skips them.
 - **Loop**: either loop the whole piece, or mark a region — drag across the score's ruler, or
