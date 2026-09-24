@@ -443,7 +443,26 @@ async function readSongText(song: SongEntry): Promise<string> {
 function parseSong(song: SongEntry, text: string): Score {
   // Built-in songs (fetched by URL) and imported MusicXML/.mxl files are MusicXML text; MIDI
   // imports were already parsed into a Score at import time and stored as its JSON serialization.
-  return song.format === 'score' ? (JSON.parse(text) as Score) : parseMusicXML(text);
+  return song.format === 'score' ? normalizeStoredScore(JSON.parse(text) as Partial<Score>) : parseMusicXML(text);
+}
+
+/**
+ * MIDI imports are stored as the Score JSON of the parser version that imported them -- older
+ * ones predate fields added since (rehearsal marks, slurs, key signatures), so fill in the
+ * defaults a fresh import would have instead of letting a missing field crash the player.
+ */
+function normalizeStoredScore(raw: Partial<Score>): Score {
+  const notes = raw.notes ?? [];
+  return {
+    ...raw,
+    title: raw.title ?? '',
+    parts: raw.parts ?? [],
+    notes,
+    measures: (raw.measures ?? []).map((m) => ({ ...m, fifths: Number.isFinite(m.fifths) ? m.fifths : 0 })),
+    slurs: raw.slurs ?? [],
+    totalBeats: raw.totalBeats ?? notes.reduce((max, n) => Math.max(max, n.startBeat + n.durationBeats), 0),
+    rehearsalMarks: raw.rehearsalMarks ?? [],
+  };
 }
 
 /** Voices, bars, key, time signature and cover for a library card -- parsed once per song version, one at a time so a big library doesn't freeze the page. */
