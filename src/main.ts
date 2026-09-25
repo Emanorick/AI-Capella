@@ -783,6 +783,30 @@ async function importFiles(files: FileList | File[]) {
   if (lastImported) void selectSong(lastImported);
 }
 
+// Repertoire cards tilt a little toward the pointer, with a spot of light following it -- only
+// with a real mouse (not touch) and not when the system asks for reduced motion.
+const tiltQuery = window.matchMedia('(hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference)');
+songGridEl.addEventListener('pointermove', (e) => {
+  if (!tiltQuery.matches) return;
+  const card = (e.target as HTMLElement).closest<HTMLElement>('.song-card:not(.skeleton)');
+  if (!card) return;
+  const r = card.getBoundingClientRect();
+  const u = (e.clientX - r.left) / r.width;
+  const v = (e.clientY - r.top) / r.height;
+  card.style.setProperty('--rx', ((u - 0.5) * 2).toFixed(3));
+  card.style.setProperty('--ry', ((v - 0.5) * 2).toFixed(3));
+  card.style.setProperty('--mx', `${(u * 100).toFixed(1)}%`);
+  card.style.setProperty('--my', `${(v * 100).toFixed(1)}%`);
+  card.classList.add('is-tilted');
+});
+songGridEl.addEventListener('pointerout', (e) => {
+  const card = (e.target as HTMLElement).closest<HTMLElement>('.song-card');
+  if (!card || card.contains(e.relatedTarget as Node | null)) return;
+  card.classList.remove('is-tilted');
+  card.style.removeProperty('--rx');
+  card.style.removeProperty('--ry');
+});
+
 // With the scan service configured, "Add arrangement" offers importing a file or scanning sheet music.
 importBtn.addEventListener('click', () => {
   if (!scanAvailable()) {

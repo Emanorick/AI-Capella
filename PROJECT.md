@@ -71,6 +71,12 @@ connected device — so nobody is left with music playing to an empty player.
   semitone). Each note is a rounded colored bar, one lyric syllable drawn beneath it, sized so
   the bar plus its lyric both fit fully inside the note's own row even for tightly-spaced
   chords.
+- **Follows the music** on phones and in the sing-along view (`setAutoFit`): the rows zoom to the
+  pitch range sung by the visible voices around the playhead (plus two beats ahead), never fewer
+  than 11 rows or taller than 56 px, and glide (420 ms) to a new range only when the music leaves
+  the current one or it has become much wider than needed. The content buffer is repainted once at
+  the new row height and scaled during the glide, so a zoom change doesn't cost a repaint per
+  frame. Scrolling by hand takes over until the next Play.
 - A fixed **ruler strip** along the top (28px) is the *only* place in the score a click or drag
   can set where playback starts, or define a loop region (the whole-piece strip below the score
   is the other). Everywhere else, clicking is inert for
@@ -115,7 +121,9 @@ connected device — so nobody is left with music playing to an empty player.
 ### Sheet music view
 An alternative view (the **Piano roll | Sheet music** switch in the player's top bar) for anyone
 who reads traditional notation more comfortably — each voice gets its **own five-line staff,
-stacked vertically** (never overlaid), with barlines joining the staves into one system and a
+stacked vertically** (never overlaid; the staves grow to fill the view's height, up to 1.4× on
+phones and 1.3× on laptops, and spread out — the time axis grows only by the square root, so a
+phone still shows a few beats), with barlines joining the staves into one system and a
 classical thin+thick double bar at the end. All musical symbols — clefs (including the tenor's
 treble clef with a small 8), noteheads, flags, accidentals, rests and augmentation dots — are
 real engraving glyphs from the bundled **Bravura** SMuFL font, positioned with the font's own
@@ -289,6 +297,13 @@ marks never offers hand-added ones.
   personal. The leader can hand the lead back; anyone else can **take over** after a
   confirmation (in case the leader's phone died). Leaving Ensemble as the leader releases it.
   Client-side enforcement, consistent with the app's soft trust model.
+- **Sing-along view**: while someone else leads, a following device switches to a view with only
+  the music and the voices (`#app.sing-along`): no transport, whole-piece strip or info row; the
+  badge shows "Led · Bar 12". On a phone the voices become a dock at the bottom — **tap** switches a
+  voice on/off (the last one heard stays on), **hold** opens the voices sheet — and the piano roll
+  follows the music (below). The badge menu offers **Full view** (remembered per device,
+  `ai-capella-full-view`) and back. Development builds expose `window.__aiCapellaDev.setLeader(id)`
+  so tests can show the view without writing to the shared session.
 - See §4.7 for how the cross-device timing actually works.
 
 ### Offline
@@ -302,8 +317,21 @@ The app works without a connection once it has been opened online on that device
   repertoire shows "Offline: showing the songs saved on this device" in that case. Changes made
   offline (renames etc.) are sent when the connection returns. Ensemble mode needs a connection.
 
-### Design ("Dusk")
-The visual system, from the September 2026 redesign:
+### Design ("Dusk", with Samt & Glas)
+The visual system, from the September 2026 redesign, extended by the "Samt & Glas" materials
+layer (strength between "subtle" and "balanced" of its design draft):
+- **Three materials.** *Velvet* is the ground: a slow wave backdrop in close ink shades with a
+  faint voice-coloured rim on each crest (`backdrop.ts`: half resolution, 30 fps, still in a
+  background tab and with reduced motion, still on phones and slowed on laptops while music
+  plays) plus a fine pile texture; the score's stage and the repertoire cards are velvet too.
+  *Glass* is everything that floats: real frosted blur where something sharp passes behind (the
+  repertoire header over scrolling cards, the title screen's buttons, menus, sheets, dialogs);
+  the player's permanent panels are tinted glass without blur, because blur there is recomputed
+  every frame while the score plays (measured: 30 instead of 60 fps on a laptop) and only the soft
+  waves are behind them. *Light* is only for the voices: gel notes (`theme.ts gelPill`), a glow
+  in the voice colour on sounding notes, a warm beam for the playhead, the pearl play button,
+  and a soft glow on switches that are on. Repertoire cards tilt toward a mouse with a spot of
+  light following it. With reduced transparency everything glass becomes solid.
 - **Only the voices have colour.** Chrome is ink (`#0D0C16` → `#302C44`) and paper (`#EFE7DA`);
   voice colours come from an eight-step warm-to-cool spectrum (`palette.ts`), spread across the
   whole spectrum for however many voices a song has, so the highest voice is always warmest and
@@ -362,6 +390,7 @@ AI-Capella/
 │   ├── firebaseConfig.ts      # Firebase web app config (not secret; see file comment)
 │   ├── pinGate.ts             # the PIN screen
 │   ├── scan.ts                # "Scan sheet music" sheet: pages, upload, progress, result
+│   ├── backdrop.ts            # the velvet wave backdrop behind the whole app
 │   └── style.css              # all styling
 ├── omr-service/            # scan service (Docker: own server or Cloud Run): Audiveris + GPT check
 ├── .github/workflows/deploy.yml   # builds and deploys dist/ to GitHub Pages on every push

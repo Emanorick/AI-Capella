@@ -2508,21 +2508,39 @@ body::after {
   z-index: 1;
 }
 
-/* Glass: bars, panels, floating controls. */
+/* Glass: bars, panels, floating controls. Real blur where something sharp passes behind (the
+   repertoire header over scrolling cards, the title screen's buttons over the ribbons, overlays);
+   the player's permanent panels only have the soft waves behind them, so they are tinted glass
+   without blur -- blur there would be recomputed every frame while the score plays (measured:
+   30 instead of 60 frames per second on a laptop). */
 .lib-top,
-.p-top,
-.voices-panel,
-.transport,
-.info-row,
-.overview,
 .banner,
-.zoom,
 .search,
 .seg,
 .mode-btn {
   background: var(--glass-bg);
   -webkit-backdrop-filter: var(--glass-filter);
   backdrop-filter: var(--glass-filter);
+}
+
+.p-top,
+.voices-panel,
+.transport,
+.info-row,
+.overview,
+.zoom {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.p-top .seg {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.zoom {
+  background: var(--glass-bg-strong);
 }
 
 .transport,
@@ -2561,9 +2579,7 @@ body::after {
 }
 
 .chip {
-  background: linear-gradient(180deg, rgb(255 246 235 / 0.07), rgb(255 246 235 / 0.02)), rgb(22 18 33 / 0.6);
-  -webkit-backdrop-filter: blur(12px) saturate(1.4);
-  backdrop-filter: blur(12px) saturate(1.4);
+  background: linear-gradient(180deg, rgb(255 246 235 / 0.07), rgb(255 246 235 / 0.02)), rgb(22 18 33 / 0.66);
   border-color: var(--glass-edge);
   box-shadow: var(--glass-hi);
 }
@@ -2582,8 +2598,6 @@ body::after {
 
 #app.sing-along .chips {
   background: var(--glass-bg);
-  -webkit-backdrop-filter: var(--glass-filter);
-  backdrop-filter: var(--glass-filter);
   box-shadow: var(--glass-hi);
 }
 
@@ -2620,6 +2634,32 @@ body::after {
 
 .cover {
   background: transparent;
+}
+
+/* Cards tilt toward the mouse, a spot of light follows it (main.ts sets --rx/--ry/--mx/--my). */
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .song-card {
+    transform: perspective(1000px) rotateX(calc(var(--ry, 0) * -4deg)) rotateY(calc(var(--rx, 0) * 4deg));
+    transition: transform 0.6s var(--ease), border-color var(--t-fast), box-shadow var(--t-med);
+  }
+  .song-card.is-tilted {
+    transform: perspective(1000px) translateY(-3px) rotateX(calc(var(--ry, 0) * -4deg)) rotateY(calc(var(--rx, 0) * 4deg));
+    transition: transform 0.12s linear, border-color var(--t-fast), box-shadow var(--t-med);
+    box-shadow: 0 34px 50px -30px rgb(0 0 0 / 0.95);
+  }
+  .song-card::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: radial-gradient(circle at var(--mx, 50%) var(--my, 0%), rgb(255 250 240 / 0.13), transparent 45%);
+    opacity: 0;
+    transition: opacity 0.35s;
+  }
+  .song-card.is-tilted::after {
+    opacity: 1;
+  }
 }
 
 /* Light: the pearl play button, switches that glow when on. */
