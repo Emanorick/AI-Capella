@@ -21,6 +21,53 @@ export function stageFill(ctx: CanvasRenderingContext2D, height: number): Canvas
   return fill;
 }
 
+/**
+ * The roll's paper for punched notes: warm charcoal, a touch lighter than the stage so the cut
+ * edges read (its fibres are in the content buffer -- see paperGrain).
+ */
+let paperCache: { ctx: CanvasRenderingContext2D; h: number; fill: CanvasGradient } | null = null;
+export function rollPaper(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  if (!paperCache || paperCache.ctx !== ctx || paperCache.h !== height) {
+    const fill = ctx.createLinearGradient(0, 0, 0, height);
+    fill.addColorStop(0, '#1e1924');
+    fill.addColorStop(1, '#17131d');
+    paperCache = { ctx, h: height, fill };
+  }
+  ctx.fillStyle = paperCache.fill;
+  ctx.fillRect(0, 0, width, height);
+}
+
+let grainTile: HTMLCanvasElement | null = null;
+/**
+ * The paper's fibres, painted into the piano roll's content buffer (so they scroll with the roll
+ * like real paper, and cost nothing per frame).
+ */
+export function paperGrain(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  if (!grainTile) {
+    const tile = document.createElement('canvas');
+    tile.width = tile.height = 96;
+    const t = tile.getContext('2d')!;
+    const img = t.createImageData(96, 96);
+    let seed = 11;
+    const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = random() < 0.5 ? 255 : 0;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+      img.data[i + 3] = random() < 0.35 ? 9 : 0;
+    }
+    t.putImageData(img, 0, 0);
+    // Fibres run along the roll: the noise is stretched horizontally.
+    grainTile = document.createElement('canvas');
+    grainTile.width = 288;
+    grainTile.height = 96;
+    grainTile.getContext('2d')!.drawImage(tile, 0, 0, 288, 96);
+  }
+  const pattern = ctx.createPattern(grainTile, 'repeat');
+  if (!pattern) return;
+  ctx.fillStyle = pattern;
+  ctx.fillRect(0, 0, width, height);
+}
+
 /** Paper at the given opacity -- hairlines, grid, secondary text on the dark ground. */
 export function paper(alpha: number): string {
   return `rgba(239,231,218,${alpha})`;
@@ -80,6 +127,57 @@ export function gelPill(ctx: CanvasRenderingContext2D, x: number, y: number, w: 
   ctx.lineWidth = 1;
   roundRectPath(ctx, x + 0.5, y + 0.5, w - 1, h - 1, Math.max(0, r - 0.5));
   ctx.stroke();
+}
+
+/**
+ * A note as a hole punched in the roll, with the voice's light shining through it -- the piano
+ * roll's origin: the perforated paper rolls of player pianos. Four layers: light bleeding onto the
+ * paper around the hole, the light itself (a little brighter in the middle, like a lamp behind
+ * paper), the paper's cut edge as a thin dark rim inside the hole (heavier along the top), and a
+ * faint lip of light along the bottom edge. `lit`: the hole is at the reading line.
+ */
+export function punchedHole(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color: string, lit = false) {
+  const r = Math.min(3.5, h / 2, w / 2);
+  ctx.fillStyle = withAlpha(color, lit ? 0.2 : 0.08);
+  roundRectPath(ctx, x - 2.5, y - 2.5, w + 5, h + 5, r + 2.5);
+  ctx.fill();
+  if (lit) {
+    ctx.fillStyle = withAlpha(color, 0.08);
+    roundRectPath(ctx, x - 6, y - 6, w + 12, h + 12, r + 6);
+    ctx.fill();
+  }
+  const light = ctx.createLinearGradient(0, y, 0, y + h);
+  light.addColorStop(0, towardInk(color, lit ? 0.05 : 0.3));
+  light.addColorStop(0.5, lit ? towardPaper(color, 0.55) : towardPaper(color, 0.1));
+  light.addColorStop(1, lit ? towardPaper(color, 0.2) : towardInk(color, 0.08));
+  ctx.fillStyle = light;
+  roundRectPath(ctx, x, y, w, h, r);
+  ctx.fill();
+  // Light through a slot falls off toward its ends.
+  if (w > 16) {
+    roundRectPath(ctx, x, y, w, h, r);
+    const ends = ctx.createLinearGradient(x, 0, x + w, 0);
+    const edge = Math.min(0.35, 7 / w);
+    ends.addColorStop(0, 'rgba(8,6,14,0.3)');
+    ends.addColorStop(edge, 'rgba(8,6,14,0)');
+    ends.addColorStop(1 - edge, 'rgba(8,6,14,0)');
+    ends.addColorStop(1, 'rgba(8,6,14,0.3)');
+    ctx.fillStyle = ends;
+    ctx.fill();
+  }
+  roundRectPath(ctx, x, y, w, h, r);
+  // The paper's cut edge: a thin dark rim around and just inside the hole, heavier along the top.
+  ctx.strokeStyle = lit ? 'rgba(8,6,14,0.35)' : 'rgba(6,4,10,0.6)';
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+  if (h >= 7 && w > 2 * r + 2) {
+    ctx.fillStyle = lit ? 'rgba(8,6,14,0.22)' : 'rgba(8,6,14,0.38)';
+    ctx.fillRect(x + r, y + 0.7, w - 2 * r, 1.2);
+  }
+  if (w > 2 * r + 2) {
+    ctx.fillStyle = 'rgba(255,245,235,0.07)';
+    ctx.fillRect(x + r, y + h + 0.5, w - 2 * r, 1);
+  }
 }
 
 function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {

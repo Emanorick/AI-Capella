@@ -1,6 +1,6 @@
 import type { NoteEvent, Score, SlurArc } from './score';
 import { getBeatMarkers } from './score';
-import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, stageFill, gelPill, playheadBeam } from './theme';
+import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, stageFill, gelPill, playheadBeam, punchedHole, rollPaper, paperGrain } from './theme';
 
 export const BASE_PIXELS_PER_BEAT = 70;
 // The only place a click/drag sets the playback start point or defines a loop region -- clicks in
@@ -28,6 +28,8 @@ const LYRIC_MAX_PX = 15;
 // word and an extender line under a held syllable, as printed in choral scores. 'plain': neutral
 // syllables only.
 const LYRIC_STYLE: 'score' | 'plain' = 'score';
+// 'punched': notes as holes in the roll with the voice's light shining through; 'gel': glossy beads.
+const NOTE_STYLE: 'punched' | 'gel' = 'gel';
 
 function lyricFontPx(rowHeight: number): number {
   return clamp(rowHeight * 0.27, LYRIC_MIN_PX, LYRIC_MAX_PX);
@@ -551,8 +553,11 @@ export class PianoRoll {
     // red line sits right at anchorX) exactly when the view hasn't been panned away from it.
     const beatToX = (beat: number) => anchorX + (beat - displayBeat) * this.pixelsPerBeat;
 
-    ctx.fillStyle = stageFill(ctx, height);
-    ctx.fillRect(0, 0, width, height);
+    if (NOTE_STYLE === 'punched') rollPaper(ctx, width, height);
+    else {
+      ctx.fillStyle = stageFill(ctx, height);
+      ctx.fillRect(0, 0, width, height);
+    }
 
     // Ruler: the only clickable strip for setting the playback start point or a loop region (see
     // RULER_HEIGHT_PX). Fixed at the top, never scrolls vertically, but shares the same horizontal
@@ -711,7 +716,8 @@ export class PianoRoll {
         ctx.save();
         ctx.shadowColor = color;
         ctx.shadowBlur = 18;
-        gelPill(ctx, x + 1, y, Math.max(w - 3, 7), pillH, color, true);
+        if (NOTE_STYLE === 'punched') punchedHole(ctx, x + 1, y, Math.max(w - 3, 7), pillH, color, true);
+        else gelPill(ctx, x + 1, y, Math.max(w - 3, 7), pillH, color, true);
         ctx.restore();
         // The syllable being sung lights up in its lane (drawn over the buffer's quieter copy).
         if (note.lyric) {
@@ -819,6 +825,7 @@ export class PianoRoll {
   private paintContent(ctx: CanvasRenderingContext2D, originBeat: number, widthCss: number, heightCss: number, rowHeight: number) {
     const localBeatToX = (beat: number) => (beat - originBeat) * this.pixelsPerBeat;
     ctx.clearRect(0, 0, widthCss, heightCss);
+    if (NOTE_STYLE === 'punched') paperGrain(ctx, widthCss, heightCss);
 
     // Rows shaded like piano keys: black-key rows a touch darker, and a hairline under every C, so
     // intervals and octaves can be read at a glance without a persistent keyboard.
@@ -826,7 +833,7 @@ export class PianoRoll {
       const pc = ((midi % 12) + 12) % 12;
       const y = this.rowY(midi) - rowHeight;
       if (BLACK_KEY_PITCH_CLASSES.has(pc)) {
-        ctx.fillStyle = 'rgba(0,0,0,0.26)';
+        ctx.fillStyle = NOTE_STYLE === 'punched' ? 'rgba(0,0,0,0.13)' : 'rgba(0,0,0,0.26)';
         ctx.fillRect(0, y, widthCss, rowHeight);
       }
       if (pc === 0) {
@@ -872,9 +879,14 @@ export class PianoRoll {
         pills.push([x + 1, y, Math.max(w - 3, 7)]);
         if (!dimmed && note.lyric) lyricNotes.push({ note, x, y, index });
       }
+      // Punched: slurs are print on the paper, under the holes; gel: threads over the beads.
+      if (NOTE_STYLE === 'punched') this.paintSlurThreads(ctx, partId, localBeatToX, widthCss, rowHeight, color, dimmed);
       ctx.globalAlpha = dimmed ? DIMMED_ALPHA : 1;
-      for (const [px, py, pw] of pills) gelPill(ctx, px, py, pw, pillH, color);
-      this.paintSlurThreads(ctx, partId, localBeatToX, widthCss, rowHeight, color, dimmed);
+      for (const [px, py, pw] of pills) {
+        if (NOTE_STYLE === 'punched') punchedHole(ctx, px, py, pw, pillH, color);
+        else gelPill(ctx, px, py, pw, pillH, color);
+      }
+      if (NOTE_STYLE === 'gel') this.paintSlurThreads(ctx, partId, localBeatToX, widthCss, rowHeight, color, dimmed);
       ctx.globalAlpha = 1;
 
       // Syllables from cached bitmaps (re-shaping text per note per rebuild adds up fast), always in
@@ -955,6 +967,14 @@ export class PianoRoll {
     const dim = dimmed ? DIMMED_ALPHA : 1;
     const light = towardPaper(color, 0.6);
     ctx.lineCap = 'round';
+    if (NOTE_STYLE === 'punched') {
+      // Printed on the roll: a fine line in a tint of the voice, no glow.
+      ctx.strokeStyle = towardPaper(color, 0.35);
+      ctx.globalAlpha = 0.6 * dim;
+      ctx.lineWidth = 1.2;
+      ctx.stroke(path);
+      return;
+    }
     ctx.strokeStyle = color;
     ctx.globalAlpha = 0.3 * dim;
     ctx.lineWidth = Math.max(5, capR);
