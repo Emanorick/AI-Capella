@@ -324,7 +324,8 @@ The app works without a connection once it has been opened online on that device
 ### Design ("Dusk", with Samt & Glas)
 The visual system, from the September 2026 redesign, extended by the "Samt & Glas" materials
 layer (strength between "subtle" and "balanced" of its design draft):
-- **Three materials.** *Velvet* is the ground: a slow wave backdrop in close ink shades with a
+- **Three materials.** *Velvet* is the ground (the title screen keeps its plain ground with only
+  the voice ribbons moving): a slow wave backdrop in close ink shades with a
   faint voice-coloured rim on each crest (`backdrop.ts`: half resolution, 30 fps, still in a
   background tab and with reduced motion, still on phones and slowed on laptops while music
   plays) plus a fine pile texture; the score's stage and the repertoire cards are velvet too.
