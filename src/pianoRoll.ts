@@ -1,6 +1,6 @@
 import type { NoteEvent, Score, SlurArc } from './score';
 import { getBeatMarkers } from './score';
-import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, stageFill } from './theme';
+import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, stageFill, gelPill, playheadBeam } from './theme';
 
 export const BASE_PIXELS_PER_BEAT = 70;
 // The only place a click/drag sets the playback start point or defines a loop region -- clicks in
@@ -616,13 +616,8 @@ export class PianoRoll {
     // Playhead: always the actual current-or-paused position (playheadBeat), not necessarily
     // displayBeat -- panning the view away from it (e.g. browsing while paused) is allowed, and
     // this keeps tracking where the piece is/will resume from. Drawn last, full height.
-    if (playheadXPos >= -16 && playheadXPos <= width + 16) {
-      const glow = ctx.createLinearGradient(playheadXPos - 16, 0, playheadXPos + 16, 0);
-      glow.addColorStop(0, paper(0));
-      glow.addColorStop(0.5, paper(0.13));
-      glow.addColorStop(1, paper(0));
-      ctx.fillStyle = glow;
-      ctx.fillRect(playheadXPos - 16, 0, 32, height);
+    if (playheadXPos >= -36 && playheadXPos <= width + 36) {
+      playheadBeam(ctx, playheadXPos, 0, height);
       ctx.fillStyle = PAPER;
       ctx.fillRect(playheadXPos - 1, 0, 2, height);
       ctx.beginPath();
@@ -656,12 +651,11 @@ export class PianoRoll {
         const w = note.durationBeats * this.pixelsPerBeat;
         const y = (this.rowY(note.midi + this.transpose) - rowHeight - this.scrollY + BAR_PAD_PX) * scale;
         if (y + pillH < 0 || y > areaHeight) continue;
+        // Lit gel, glowing in the voice's colour.
         ctx.save();
         ctx.shadowColor = color;
-        ctx.shadowBlur = 16;
-        ctx.fillStyle = towardPaper(color, 0.3);
-        roundedRect(ctx, x + 1, y, Math.max(w - 3, 7), pillH, pillH / 2);
-        ctx.fill();
+        ctx.shadowBlur = 18;
+        gelPill(ctx, x + 1, y, Math.max(w - 3, 7), pillH, color, true);
         ctx.restore();
         if (note.lyric) {
           const bmp = this.getLyricBitmap(note.lyric, true);
@@ -808,7 +802,7 @@ export class PianoRoll {
       if (!notes || !notes.length) return;
       const dimmed = this.dimmedParts.has(partId);
       const color = this.partColor(partId);
-      const path = new Path2D();
+      const pills: [number, number, number][] = [];
       const lyricNotes: { note: NoteEvent; x: number; w: number; y: number }[] = [];
       for (const note of notes) {
         const midi = note.midi + this.transpose;
@@ -816,12 +810,11 @@ export class PianoRoll {
         const w = note.durationBeats * this.pixelsPerBeat;
         if (x + w < -10 || x > widthCss + 10) continue;
         const y = this.rowY(midi) - rowHeight + BAR_PAD_PX;
-        addRoundRectSubpath(path, x + 1, y, Math.max(w - 3, 7), pillH, Math.min(pillH / 2, Math.max(w - 3, 7) / 2));
+        pills.push([x + 1, y, Math.max(w - 3, 7)]);
         if (!dimmed && note.lyric) lyricNotes.push({ note, x, w, y });
       }
       ctx.globalAlpha = dimmed ? DIMMED_ALPHA : 1;
-      ctx.fillStyle = color;
-      ctx.fill(path);
+      for (const [px, py, pw] of pills) gelPill(ctx, px, py, pw, pillH, color);
       this.paintSlurThreads(ctx, partId, localBeatToX, widthCss, rowHeight, color, dimmed);
       ctx.globalAlpha = 1;
 
@@ -976,15 +969,6 @@ function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: num
   ctx.arcTo(x, y + h, x, y, rr);
   ctx.arcTo(x, y, x + w, y, rr);
   ctx.closePath();
-}
-
-function addRoundRectSubpath(path: Path2D, x: number, y: number, w: number, h: number, r: number) {
-  path.moveTo(x + r, y);
-  path.arcTo(x + w, y, x + w, y + h, r);
-  path.arcTo(x + w, y + h, x, y + h, r);
-  path.arcTo(x, y + h, x, y, r);
-  path.arcTo(x, y, x + w, y, r);
-  path.closePath();
 }
 
 /**

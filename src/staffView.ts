@@ -1,6 +1,6 @@
 import type { MeasureInfo, NoteEvent, PartInfo, Score } from './score';
 import type { PartMixState } from './audioEngine';
-import { FONT_DISPLAY, FONT_MONO, FONT_MUSIC, FONT_TEXT, INK1, PAPER, paper, stageFill } from './theme';
+import { FONT_DISPLAY, FONT_MONO, FONT_MUSIC, FONT_TEXT, INK1, PAPER, paper, stageFill, playheadBeam } from './theme';
 
 export const BASE_PIXELS_PER_BEAT = 70;
 export const STAFF_RULER_HEIGHT_PX = 28; // matches PianoRoll's ruler height, for a consistent look when toggling views
@@ -701,12 +701,7 @@ export class StaffView {
 
     // Playhead, positioned from playheadBeat (the actual sounding position), not displayBeat.
     if (playheadPx >= G - 16 && playheadPx <= width + 16) {
-      const glow = ctx.createLinearGradient(playheadPx - 16, 0, playheadPx + 16, 0);
-      glow.addColorStop(0, paper(0));
-      glow.addColorStop(0.5, paper(0.13));
-      glow.addColorStop(1, paper(0));
-      ctx.fillStyle = glow;
-      ctx.fillRect(playheadPx - 16, 0, 32, height);
+      playheadBeam(ctx, playheadPx, 0, height);
       ctx.fillStyle = PAPER;
       ctx.fillRect(playheadPx - 1, 0, 2, height);
       ctx.beginPath();

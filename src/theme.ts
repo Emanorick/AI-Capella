@@ -40,6 +40,69 @@ export function towardPaper(hex: string, k: number): string {
   return `rgb(${mix((v >> 16) & 255, 239)},${mix((v >> 8) & 255, 231)},${mix(v & 255, 218)})`;
 }
 
+/** Mixes a hex colour toward deep ink by `k` (0..1) -- the shaded underside of a gel note. */
+export function towardInk(hex: string, k: number): string {
+  if (!hex.startsWith('#')) return hex;
+  const v = parseInt(hex.slice(1), 16);
+  const mix = (c: number, p: number) => Math.round(c + (p - c) * k);
+  return `rgb(${mix((v >> 16) & 255, 20)},${mix((v >> 8) & 255, 12)},${mix(v & 255, 30)})`;
+}
+
+// Gel notes ("Licht"): lit from above, a glossy highlight along the top, a fine rim -- strength as
+// agreed for the app (between "subtle" and "balanced" in the design draft).
+const GEL_GLOSS = 0.75;
+const gelShades = new Map<string, { top: string; bottom: string }>();
+
+/** A note bead as gel. `lit` brightens it (the note sounding at the playhead). */
+export function gelPill(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color: string, lit = false) {
+  let shades = gelShades.get(color);
+  if (!shades) {
+    shades = { top: towardPaper(color, 0.28 * GEL_GLOSS), bottom: towardInk(color, 0.26 * GEL_GLOSS) };
+    gelShades.set(color, shades);
+  }
+  const r = Math.min(h / 2, w / 2);
+  const body = ctx.createLinearGradient(0, y, 0, y + h);
+  body.addColorStop(0, lit ? towardPaper(color, 0.5) : shades.top);
+  body.addColorStop(0.55, lit ? towardPaper(color, 0.3) : color);
+  body.addColorStop(1, lit ? color : shades.bottom);
+  ctx.fillStyle = body;
+  roundRectPath(ctx, x, y, w, h, r);
+  ctx.fill();
+  if (h < 9) return;
+  const inset = Math.min(r * 0.6, 5);
+  const shine = ctx.createLinearGradient(0, y + 1.5, 0, y + h * 0.5);
+  shine.addColorStop(0, `rgba(255,255,255,${0.5 * GEL_GLOSS})`);
+  shine.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = shine;
+  roundRectPath(ctx, x + inset, y + 1.5, Math.max(0, w - inset * 2), h * 0.46, r * 0.8);
+  ctx.fill();
+  ctx.strokeStyle = `rgba(255,255,255,${0.16 * GEL_GLOSS})`;
+  ctx.lineWidth = 1;
+  roundRectPath(ctx, x + 0.5, y + 0.5, w - 1, h - 1, Math.max(0, r - 0.5));
+  ctx.stroke();
+}
+
+function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+/** The playhead as a warm beam of light: a soft band behind the line. */
+export function playheadBeam(ctx: CanvasRenderingContext2D, x: number, top: number, height: number) {
+  const beam = ctx.createLinearGradient(x - 36, 0, x + 36, 0);
+  beam.addColorStop(0, 'rgba(255,228,196,0)');
+  beam.addColorStop(0.5, 'rgba(255,228,196,0.12)');
+  beam.addColorStop(1, 'rgba(255,228,196,0)');
+  ctx.fillStyle = beam;
+  ctx.fillRect(x - 36, top, 72, height);
+}
+
 export const FONT_TEXT = '"Atkinson Hyperlegible Next Variable", "Atkinson Hyperlegible Next", system-ui, sans-serif';
 export const FONT_MONO = '"Atkinson Hyperlegible Mono Variable", "Atkinson Hyperlegible Mono", ui-monospace, monospace';
 export const FONT_DISPLAY = '"Bodoni Moda Variable", "Bodoni Moda", Didot, Georgia, serif';
