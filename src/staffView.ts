@@ -1,6 +1,6 @@
 import type { MeasureInfo, NoteEvent, PartInfo, Score } from './score';
 import type { PartMixState } from './audioEngine';
-import { FONT_DISPLAY, FONT_MONO, FONT_MUSIC, FONT_TEXT, INK0, INK1, PAPER, paper } from './theme';
+import { FONT_DISPLAY, FONT_MONO, FONT_MUSIC, FONT_TEXT, INK1, PAPER, paper, stageFill } from './theme';
 
 export const BASE_PIXELS_PER_BEAT = 70;
 export const STAFF_RULER_HEIGHT_PX = 28; // matches PianoRoll's ruler height, for a consistent look when toggling views
@@ -673,7 +673,7 @@ export class StaffView {
     if (width <= 0 || height <= 0) return;
     const G = this.gutterPx;
 
-    ctx.fillStyle = INK0;
+    ctx.fillStyle = stageFill(ctx, height);
     ctx.fillRect(0, 0, width, height);
 
     const startBeat = displayBeat - (this.playheadX() - G) / this.pixelsPerBeat;

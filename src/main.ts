@@ -21,6 +21,7 @@ import { icon } from './icons';
 import { countLabel, keyName, lang, setLang, t } from './i18n';
 import { canvasFontsReady } from './theme';
 import { initScan, openScanSheet, scanAvailable, scanStatusLine } from './scan';
+import { WaveBackdrop } from './backdrop';
 import { closeOverlay, confirmDialog, isNarrow, openMenu, openPopover, openSheet, promptDialog, toast } from './ui';
 import * as sync from './sync';
 import type { PlaybackState } from './sync';
@@ -63,6 +64,7 @@ const PREVIEW_NOTE_LABEL_MS = 1200;
 const SEARCH_THRESHOLD = 8; // the search field only appears once the library is long enough to need it
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
+const backdrop = new WaveBackdrop();
 app.innerHTML = `
   <section id="landing" class="view" aria-label="AI-Capella">
     <canvas class="ribbons" id="landing-ribbons" aria-hidden="true"></canvas>
@@ -2454,6 +2456,7 @@ function stopAudioTick() {
 function renderLoop() {
   if (!audioEngine || !pianoRoll || !currentScore || !audioEngine.isPlaying()) {
     rafId = null; // stopped (e.g. by audioTick's own boundary check) since this frame was requested
+    backdrop.setPlaying(false);
     return;
   }
   const beat = audioEngine.getCurrentBeat();
@@ -2463,10 +2466,12 @@ function renderLoop() {
 }
 function startRenderLoop() {
   pianoRoll?.resumeAutoFit();
+  backdrop.setPlaying(true);
   startAudioTick();
   if (rafId == null) rafId = requestAnimationFrame(renderLoop);
 }
 function stopRenderLoop() {
+  backdrop.setPlaying(false);
   stopAudioTick();
   if (rafId != null) {
     cancelAnimationFrame(rafId);

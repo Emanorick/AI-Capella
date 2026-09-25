@@ -1,6 +1,6 @@
 import type { NoteEvent, Score, SlurArc } from './score';
 import { getBeatMarkers } from './score';
-import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper } from './theme';
+import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, stageFill } from './theme';
 
 export const BASE_PIXELS_PER_BEAT = 70;
 // The only place a click/drag sets the playback start point or defines a loop region -- clicks in
@@ -499,7 +499,7 @@ export class PianoRoll {
     // red line sits right at anchorX) exactly when the view hasn't been panned away from it.
     const beatToX = (beat: number) => anchorX + (beat - displayBeat) * this.pixelsPerBeat;
 
-    ctx.fillStyle = INK0;
+    ctx.fillStyle = stageFill(ctx, height);
     ctx.fillRect(0, 0, width, height);
 
     // Ruler: the only clickable strip for setting the playback start point or a loop region (see

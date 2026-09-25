@@ -1,6 +1,6 @@
 import type { Score } from './score';
 import type { LoopRegion } from './pianoRoll';
-import { INK1, PAPER, paper, withAlpha } from './theme';
+import { PAPER, paper, withAlpha } from './theme';
 
 const PAD_X = 16;
 
@@ -111,8 +111,8 @@ export class OverviewStrip {
     const ctx = this.canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    ctx.fillStyle = INK1;
-    ctx.fillRect(0, 0, this.cssWidth, this.cssHeight);
+    // Transparent: the strip sits on the glass of its container (see style.css).
+    ctx.clearRect(0, 0, this.cssWidth, this.cssHeight);
     ctx.fillStyle = paper(0.09);
     ctx.fillRect(0, 0, this.cssWidth, 1);
     const top = this.laneTop();

@@ -6,6 +6,21 @@ export const INK2 = '#1B1929';
 export const INK3 = '#252235';
 export const PAPER = '#EFE7DA';
 
+/**
+ * The stage the score sits on: velvet, a touch lighter at the top like fabric catching light,
+ * instead of flat ink. Cached per height (a gradient object per frame would be wasted work).
+ */
+let stageCache: { ctx: CanvasRenderingContext2D; h: number; fill: CanvasGradient } | null = null;
+export function stageFill(ctx: CanvasRenderingContext2D, height: number): CanvasGradient {
+  if (stageCache && stageCache.ctx === ctx && stageCache.h === height) return stageCache.fill;
+  const fill = ctx.createLinearGradient(0, 0, 0, height);
+  fill.addColorStop(0, '#17121f');
+  fill.addColorStop(0.55, '#110e19');
+  fill.addColorStop(1, '#0e0c16');
+  stageCache = { ctx, h: height, fill };
+  return fill;
+}
+
 /** Paper at the given opacity -- hairlines, grid, secondary text on the dark ground. */
 export function paper(alpha: number): string {
   return `rgba(239,231,218,${alpha})`;
