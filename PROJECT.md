@@ -329,7 +329,7 @@ The app works without a connection once it has been opened online on that device
   repertoire shows "Offline: showing the songs saved on this device" in that case. Changes made
   offline (renames etc.) are sent when the connection returns. Ensemble mode needs a connection.
 
-### Design ("Dusk", with Samt & Glas)
+### Design ("Dusk"; today in its paper form, "Papier & Feder" -- see below)
 The visual system, from the September 2026 redesign, extended by the "Samt & Glas" materials
 layer (strength between "subtle" and "balanced" of its design draft):
 - **Three materials.** *Velvet* is the ground (the title screen keeps its plain ground with only
