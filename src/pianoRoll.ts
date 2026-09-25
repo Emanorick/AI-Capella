@@ -1075,6 +1075,10 @@ export class PianoRoll {
     const slurs = this.slursByPart.get(partId);
     const notes = this.notesByPart.get(partId);
     if (!slurs?.length || !notes?.length) return;
+    if (LANTERN) {
+      this.paintSlurSpindles(ctx, slurs, notes, localBeatToX, widthCss, rowHeight, color, dimmed);
+      return;
+    }
     const capR = this.pillHeight(rowHeight) / 2;
     const path = new Path2D();
     const dots = new Path2D();
@@ -1101,14 +1105,6 @@ export class PianoRoll {
     const dim = dimmed ? DIMMED_ALPHA : 1;
     const light = towardPaper(color, 0.6);
     ctx.lineCap = 'round';
-    if (LANTERN) {
-      // Printed on the roll: a fine line in a tint of the voice, no glow.
-      ctx.strokeStyle = towardPaper(color, 0.35);
-      ctx.globalAlpha = 0.6 * dim;
-      ctx.lineWidth = 1.2;
-      ctx.stroke(path);
-      return;
-    }
     ctx.strokeStyle = color;
     ctx.globalAlpha = 0.3 * dim;
     ctx.lineWidth = Math.max(5, capR);
@@ -1119,6 +1115,59 @@ export class PianoRoll {
     ctx.stroke(path);
     ctx.fillStyle = light;
     ctx.fill(dots);
+  }
+
+  /**
+   * Lantern style: slurs printed on the roll, from edge to edge -- leaving the first note along its
+   * edge that faces the next one (the bottom when the line goes down, the top when it goes up),
+   * swinging over in an S and running into the facing edge of the next. Drawn like an engraved
+   * slur: thin at the ends, swelling in the middle. Where the line leaves from a bottom edge it
+   * starts after that note's syllable, so the two don't cross.
+   */
+  private paintSlurSpindles(ctx: CanvasRenderingContext2D, slurs: SlurArc[], notes: NoteEvent[], localBeatToX: (beat: number) => number, widthCss: number, rowHeight: number, color: string, dimmed: boolean) {
+    const pillH = this.pillHeight(rowHeight);
+    const capR = pillH / 2;
+    const gap = 1.5;
+    const reachMax = Math.max(40, rowHeight * 3);
+    const fontPx = lyricFontPx(rowHeight);
+    const lyricColor = LYRIC_STYLE === 'score' ? towardPaper(color, 0.62) : paper(0.8); // as printed (same cached bitmap)
+    const shape = new Path2D();
+    const hole = (n: NoteEvent) => {
+      const x = localBeatToX(n.startBeat) + 1;
+      const top = this.rowY(n.midi + this.transpose) - rowHeight + BAR_PAD_PX;
+      return { x, w: Math.max(n.durationBeats * this.pixelsPerBeat - 3, 7), top, bottom: top + pillH };
+    };
+    for (const slur of slurs) {
+      if (localBeatToX(slur.endBeat) < -60 || localBeatToX(slur.startBeat) > widthCss + 60) continue;
+      const chain = slurChain(notes, slur);
+      for (let i = 0; i + 1 < chain.length; i++) {
+        const a = hole(chain[i]);
+        const b = hole(chain[i + 1]);
+        const step = chain[i + 1].midi - chain[i].midi; // > 0: up
+        let x0 = clamp(a.x + a.w - Math.min(a.w * 0.45, reachMax), a.x + capR, a.x + a.w - capR * 0.5);
+        let x3 = clamp(b.x + Math.min(b.w * 0.45, reachMax), b.x + capR * 0.5, b.x + b.w - capR);
+        if (step < 0 && chain[i].lyric && !dimmed) {
+          // Leaving from the bottom edge: start after the syllable printed there.
+          const syllableEnd = a.x + 1 + this.getLyricBitmap(chain[i].lyric!, lyricColor, fontPx, 550).cssWidth + 4;
+          x0 = Math.max(x0, Math.min(syllableEnd, a.x + a.w - capR * 0.5));
+        }
+        if (step > 0 && chain[i + 1].lyric) x3 = Math.min(x3, b.x + capR * 1.2); // arriving above its syllable
+        if (x3 - x0 < 6) {
+          x0 = Math.min(x0, a.x + a.w - 3);
+          x3 = Math.max(x3, x0 + 6);
+        }
+        const y0 = step > 0 || step === 0 ? a.top - gap : a.bottom + gap;
+        const y3 = step < 0 || step === 0 ? b.top - gap : b.bottom + gap;
+        const pull = (x3 - x0) * 0.55;
+        const lift = step === 0 ? Math.min(rowHeight * 0.45, (x3 - x0) * 0.3) : 0;
+        spindle(shape, [x0, y0], [x0 + pull, y0 - lift], [x3 - pull, y3 - lift], [x3, y3]);
+      }
+    }
+    ctx.save();
+    ctx.globalAlpha = 0.85 * (dimmed ? DIMMED_ALPHA : 1);
+    ctx.fillStyle = towardPaper(color, 0.18);
+    ctx.fill(shape);
+    ctx.restore();
   }
 
   /**
@@ -1220,6 +1269,39 @@ function slurChain(notes: NoteEvent[], slur: SlurArc): NoteEvent[] {
     chain.push(n);
   }
   return chain;
+}
+
+type Point = [number, number];
+
+/**
+ * Adds a cubic Bezier from p0 to p3 to `path` as a filled stroke that swells from hairline ends to
+ * its widest in the middle (an engraved slur's shape).
+ */
+function spindle(path: Path2D, p0: Point, p1: Point, p2: Point, p3: Point) {
+  const length = Math.hypot(p3[0] - p0[0], p3[1] - p0[1]);
+  const mid = Math.min(1.3, 0.55 + length / 90); // half-width at the middle
+  const end = 0.3;
+  const n = Math.round(clamp(length / 4, 12, 48));
+  const left: Point[] = [];
+  const right: Point[] = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const u = 1 - t;
+    const x = u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t * t * t * p3[0];
+    const y = u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t * t * t * p3[1];
+    let dx = 3 * u * u * (p1[0] - p0[0]) + 6 * u * t * (p2[0] - p1[0]) + 3 * t * t * (p3[0] - p2[0]);
+    let dy = 3 * u * u * (p1[1] - p0[1]) + 6 * u * t * (p2[1] - p1[1]) + 3 * t * t * (p3[1] - p2[1]);
+    const d = Math.hypot(dx, dy) || 1;
+    dx /= d;
+    dy /= d;
+    const w = end + (mid - end) * Math.pow(4 * t * u, 0.85);
+    left.push([x - dy * w, y + dx * w]);
+    right.push([x + dy * w, y - dx * w]);
+  }
+  path.moveTo(left[0][0], left[0][1]);
+  for (const [x, y] of left) path.lineTo(x, y);
+  for (let i = right.length - 1; i >= 0; i--) path.lineTo(right[i][0], right[i][1]);
+  path.closePath();
 }
 
 /**

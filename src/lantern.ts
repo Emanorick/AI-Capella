@@ -8,13 +8,13 @@
 //            notes must stay clear), and white-hot right at the reading line, where the notes
 //            sound. It also composes the light in front of the paper (below), part of which is
 //            added back into the holes, so those near the lamp glow brighter than their colour.
-//   over():  that light in front of the paper -- the lamp's glow through the paper itself, and a
-//            halo of each hole's light on the paper around it (strongest near the lamp, in the
-//            voice's colour for a note that is sounding).
+//   over():  that light in front of the paper -- the lamp's faint glow through the paper itself,
+//            and a halo of each hole's light on the paper around it (in the voice's colour for a
+//            note that is sounding). Both stay in a narrow strip along the reading line.
 //
-// The lamp's shape: one light aimed obliquely at the paper, so its spot is egg-shaped -- the hot
-// end on the reading line, falling off quickly over the music already played and reaching far
-// ahead over the music to come.
+// Behind the paper the lamp's spot is egg-shaped, as from a light aimed obliquely: the hot end on
+// the reading line, falling off quickly over the music already played and reaching far ahead over
+// the music to come.
 
 export type Flare = { x: number; y: number; w: number; h: number; color: string };
 
@@ -39,23 +39,24 @@ const THROUGH_STOPS: [number, string][] = [
 const HOT_BEHIND_PX = 22;
 const HOT_AHEAD_PX = 34;
 const HOT_WHITE = 'rgba(255,249,240,';
-// How much of the holes' light spills onto the paper, by distance from the lamp.
-const HALO_STOPS: [number, string][] = [
-  [0, 'rgba(0,0,0,1)'],
-  [0.18, 'rgba(0,0,0,0.75)'],
-  [0.42, 'rgba(0,0,0,0.26)'],
-  [0.8, 'rgba(0,0,0,0.04)'],
-  [1, 'rgba(0,0,0,0)'],
-];
-// The lamp seen through the paper itself.
-const PAPER_GLOW_STOPS: [number, string][] = [
-  [0, 'rgba(255,212,160,0.3)'],
-  [0.1, 'rgba(255,206,154,0.22)'],
-  [0.25, 'rgba(255,200,150,0.11)'],
-  [0.45, 'rgba(255,198,150,0.04)'],
-  [0.7, 'rgba(255,198,150,0.01)'],
-  [0.9, 'rgba(255,198,150,0)'],
-];
+// In front of the paper the light stays close to the reading line: a tall, narrow strip along it
+// (half-widths below, as a fraction of the roll's width, with limits in px), fading fast to the
+// sides and a little toward the top and bottom.
+const STRIP_HEIGHT = 1.2; // vertical reach of the strip, as a multiple of the roll's height
+// How much of the holes' light spills onto the paper around them.
+const HALO_REACH = [0.16, 110, 240] as const;
+const HALO_STOPS = bell('0,0,0', 1);
+// The lamp seen through the paper itself: faint, as light from behind is.
+const PAPER_GLOW_REACH = [0.08, 64, 130] as const;
+const PAPER_GLOW_STOPS = bell('255,208,156', 0.11);
+
+/** Gradient stops for a bell-shaped fall-off (no visible edge), from `peak` opacity down to none. */
+function bell(rgb: string, peak: number): [number, string][] {
+  return [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 1].map((t) => {
+    const a = t === 1 ? 0 : peak * Math.exp(-((t / 0.4) ** 2));
+    return [t, `rgba(${rgb},${a.toFixed(4)})`];
+  });
+}
 // How much of the holes' light reaches the paper around them, from the sharpest to the widest blur.
 const HALO_WEIGHTS = [0.3, 0.32, 0.3];
 // A sounding note's halo, in the voice's colour.
@@ -70,6 +71,20 @@ function cone(width: number, height: number, x: number): Cone {
   // on the reading line are still well inside the spot.
   const reachY = Math.sqrt(r * r - d * d);
   return { x, y: height / 2, d, r, sy: Math.max(1, height / reachY) };
+}
+
+/** Fills the whole area with a gradient along the strip around the reading line at x (ctx in CSS pixels). */
+function fillStrip(ctx: CanvasRenderingContext2D, x: number, reach: readonly [number, number, number], stops: [number, string][], width: number, height: number) {
+  const rx = Math.min(reach[2], Math.max(reach[1], width * reach[0]));
+  const sy = (height * STRIP_HEIGHT) / rx;
+  ctx.save();
+  ctx.translate(x, height / 2);
+  ctx.scale(1, sy);
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+  for (const [t, color] of stops) g.addColorStop(t, color);
+  ctx.fillStyle = g;
+  ctx.fillRect(-x - 1, (-height / 2 - 1) / sy, width + 2, (height + 2) / sy);
+  ctx.restore();
 }
 
 /** Fills the whole area with a gradient that follows the lamp's spot (ctx in CSS pixels). */
@@ -172,7 +187,7 @@ export class Lantern {
     ws.globalCompositeOperation = 'copy';
     resample(ws, wide, WIDE_SCALE, WIDEST_SCALE, width, height);
 
-    // Together, kept to the lamp's reach, plus the lamp's glow through the paper...
+    // Together, kept to the strip along the reading line, plus the lamp's glow through the paper...
     const glow = (this.glow = layer(this.glow, width, height, HALO_SCALE));
     const g = context(glow);
     g.clearRect(0, 0, glow.width, glow.height);
@@ -186,9 +201,9 @@ export class Lantern {
     g.globalAlpha = 1;
     g.scale(HALO_SCALE, HALO_SCALE);
     g.globalCompositeOperation = 'destination-in';
-    fillCone(g, spot, HALO_STOPS, width, height);
+    fillStrip(g, lampX, HALO_REACH, HALO_STOPS, width, height);
     g.globalCompositeOperation = 'lighter';
-    fillCone(g, spot, PAPER_GLOW_STOPS, width, height);
+    fillStrip(g, lampX, PAPER_GLOW_REACH, PAPER_GLOW_STOPS, width, height);
 
     // ...which also brightens the holes themselves (added here, on the small layer: adding it to
     // the full screen costs a lot more on some devices -- see over()).

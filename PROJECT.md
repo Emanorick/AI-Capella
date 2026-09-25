@@ -352,10 +352,12 @@ layer (strength between "subtle" and "balanced" of its design draft):
   note, cut into the content buffer (a turned-down voice's holes are only marked, not cut). A lamp
   sits behind the paper at the reading line (`lantern.ts`): through the holes each voice's
   colour, full in the lamp's spot and dimmer with distance (never unreadable), white-hot right at
-  the reading line where the notes sound; in front of the paper the lamp's warm glow shining
-  through it and a halo of the holes' light. The spot is egg-shaped, as from a lamp aimed
-  obliquely: it falls off quickly over the music already played and reaches far over the music to
-  come. After a jump of the playhead (a click on the ruler, a loop going round) the lamp glides
+  the reading line where the notes sound; in front of the paper, in a narrow strip along the
+  reading line, the lamp's faint warm glow shining through it and a halo of the holes' light.
+  Behind the paper the spot is egg-shaped, as from a lamp aimed obliquely: it falls off quickly
+  over the music already played and reaches far over the music to come. Slurs are printed on the
+  paper like engraved ones (thin ends, swelling in the middle), from the edge of one hole to the
+  facing edge of the next (`paintSlurSpindles`). After a jump of the playhead (a click on the ruler, a loop going round) the lamp glides
   over instead of jumping (`LAMP_GLIDE_S`). The light is composed at ¼–½ resolution each frame;
   the glow is laid over the paper (source-over) rather than added, because a full-screen
   'lighter' pass cost many frames on a software-rendered canvas (measured in headless Chromium,
