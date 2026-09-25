@@ -18,6 +18,11 @@ export interface NoteEvent {
   startBeat: number; // in quarter-note beats from the start of the piece
   durationBeats: number;
   lyric?: string;
+  // From the lyric's <syllabic>/<extend>: the word continues on this voice's next syllable
+  // (drawn as a hyphen between them), and the syllable is held across the following notes (a
+  // melisma, drawn as an extender line) -- as printed in choral scores.
+  lyricJoin?: boolean;
+  lyricExtend?: boolean;
   measureNumber: number;
   // Original notated pitch spelling (e.g. F# vs Gb), when known -- MusicXML imports carry this
   // straight from the source file's <pitch>; `midi` alone can't distinguish enharmonic spellings.

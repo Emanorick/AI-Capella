@@ -177,7 +177,9 @@ export function parseMusicXML(xmlText: string): Score {
                 const alter = parseFloat(pitchEl.querySelector('alter')?.textContent || '0');
                 const octave = parseInt(pitchEl.querySelector('octave')?.textContent || '4', 10);
                 const midi = pitchToMidi(step, alter, octave);
-                const lyric = child.querySelector(':scope > lyric > text')?.textContent?.trim();
+                const lyricEl = child.querySelector(':scope > lyric');
+                const lyric = lyricEl?.querySelector(':scope > text')?.textContent?.trim();
+                const syllabic = lyricEl?.querySelector(':scope > syllabic')?.textContent?.trim();
 
                 // Tools vary in which element they emit for a tie: <tie> is the sound-level
                 // element, <notations><tied> is the notation/visual-level one. Real-world files
@@ -216,6 +218,8 @@ export function parseMusicXML(xmlText: string): Score {
                     startBeat,
                     durationBeats,
                     lyric: lyric || undefined,
+                    lyricJoin: lyric && (syllabic === 'begin' || syllabic === 'middle') ? true : undefined,
+                    lyricExtend: lyric && lyricEl?.querySelector(':scope > extend') ? true : undefined,
                     measureNumber,
                     step,
                     alter,

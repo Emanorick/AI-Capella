@@ -68,9 +68,12 @@ connected device — so nobody is left with music playing to an empty player.
 - Canvas-based, not DOM/SVG — this matters at the note counts and frame rates involved (see
   §4.3).
 - Horizontal axis = time (in quarter-note beats), vertical axis = pitch (one row per
-  semitone). Each note is a rounded colored bar, one lyric syllable drawn beneath it, sized so
-  the bar plus its lyric both fit fully inside the note's own row even for tightly-spaced
-  chords.
+  semitone). Each note is a rounded colored bar with its lyric syllable always in a lane beneath
+  it (never inside the bar -- mixing both was confusing), sized so the bar plus its lyric both fit
+  fully inside the note's own row even for tightly-spaced chords. The text grows with the row
+  (10.5-15 px) and is set like a choral score: a light tint of the voice colour, hyphens between
+  the syllables of a word and an extender line under a held syllable (from MusicXML's
+  `<syllabic>`/`<extend>`, `NoteEvent.lyricJoin/lyricExtend`); the syllable being sung lights up.
 - **Follows the music** on phones and in the sing-along view (`setAutoFit`): the rows zoom to the
   pitch range sung by the visible voices around the playhead (plus two beats ahead), never fewer
   than 11 rows or taller than 56 px, and glide (420 ms) to a new range only when the music leaves

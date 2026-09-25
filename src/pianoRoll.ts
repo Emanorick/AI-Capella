@@ -20,9 +20,22 @@ const ROW_PADDING_SEMITONES = 2;
 // sitting clearly below its note.
 const MIN_ROW_HEIGHT_PX = 32;
 const BAR_PAD_PX = 3; // gap from the top of the row to the note pill
-// Space kept below the pill for a syllable that doesn't fit inside its note (short notes) -- most
-// lyrics sit inside the pill itself, the way vocal-synth editors print them.
-const LYRIC_AREA_PX = 12;
+// Lyrics always sit in a lane under their note (never inside it), sized with the row: 10.5 px
+// text on the smallest rows up to 15 px when follow-the-music zooms in on a phone.
+const LYRIC_MIN_PX = 10.5;
+const LYRIC_MAX_PX = 15;
+// 'score': the syllable in a light tint of its voice colour, hyphens between the syllables of a
+// word and an extender line under a held syllable, as printed in choral scores. 'plain': neutral
+// syllables only.
+const LYRIC_STYLE: 'score' | 'plain' = 'score';
+
+function lyricFontPx(rowHeight: number): number {
+  return clamp(rowHeight * 0.27, LYRIC_MIN_PX, LYRIC_MAX_PX);
+}
+
+function lyricLanePx(rowHeight: number): number {
+  return Math.round(lyricFontPx(rowHeight) + 1.5);
+}
 const DIMMED_ALPHA = 0.3;
 const PAST_SHADE = 'rgba(13,12,22,0.38)'; // laid over everything left of the playhead: played notes step back
 const MAX_DPR = 2; // native Retina density; only caps 3x phones, doesn't soften a normal laptop screen
@@ -264,6 +277,7 @@ export class PianoRoll {
     if (Math.abs(row - this.rowHeightPx) < 0.01) return;
     this.rowHeightPx = row;
     this.contentBufferDirty = true;
+    this.lyricBitmaps.clear(); // the lyric size follows the row height
   }
 
   /** The whole piece's range: rows stretch to fill the height, else MIN_ROW_HEIGHT_PX and scroll. */
@@ -657,16 +671,17 @@ export class PianoRoll {
         ctx.shadowBlur = 18;
         gelPill(ctx, x + 1, y, Math.max(w - 3, 7), pillH, color, true);
         ctx.restore();
+        // The syllable being sung lights up in its lane (drawn over the buffer's quieter copy).
         if (note.lyric) {
-          const bmp = this.getLyricBitmap(note.lyric, true);
-          if (bmp.cssWidth + 10 <= w - 3) ctx.drawImage(bmp.canvas, x + 7, y + (pillH - bmp.cssHeight) / 2, bmp.cssWidth, bmp.cssHeight);
+          const bmp = this.getLyricBitmap(note.lyric, PAPER, lyricFontPx(rowHeight), 700);
+          ctx.drawImage(bmp.canvas, x + 2, y + pillH + scale, bmp.cssWidth * scale, bmp.cssHeight * scale);
         }
       }
     }
   }
 
   private pillHeight(rowHeight: number): number {
-    return Math.max(6, rowHeight - BAR_PAD_PX * 2 - LYRIC_AREA_PX);
+    return Math.max(6, rowHeight - BAR_PAD_PX * 2 - lyricLanePx(rowHeight));
   }
 
   private ensureContentBuffer(currentBeat: number, contentWidth: number, rowHeight: number) {
@@ -803,39 +818,57 @@ export class PianoRoll {
       const dimmed = this.dimmedParts.has(partId);
       const color = this.partColor(partId);
       const pills: [number, number, number][] = [];
-      const lyricNotes: { note: NoteEvent; x: number; w: number; y: number }[] = [];
-      for (const note of notes) {
+      const lyricNotes: { note: NoteEvent; x: number; y: number; index: number }[] = [];
+      for (let index = 0; index < notes.length; index++) {
+        const note = notes[index];
         const midi = note.midi + this.transpose;
         const x = localBeatToX(note.startBeat);
         const w = note.durationBeats * this.pixelsPerBeat;
         if (x + w < -10 || x > widthCss + 10) continue;
         const y = this.rowY(midi) - rowHeight + BAR_PAD_PX;
         pills.push([x + 1, y, Math.max(w - 3, 7)]);
-        if (!dimmed && note.lyric) lyricNotes.push({ note, x, w, y });
+        if (!dimmed && note.lyric) lyricNotes.push({ note, x, y, index });
       }
       ctx.globalAlpha = dimmed ? DIMMED_ALPHA : 1;
       for (const [px, py, pw] of pills) gelPill(ctx, px, py, pw, pillH, color);
       this.paintSlurThreads(ctx, partId, localBeatToX, widthCss, rowHeight, color, dimmed);
       ctx.globalAlpha = 1;
 
-      // Syllables from cached bitmaps (re-shaping text per note per rebuild adds up fast): inside
-      // the pill when it fits, otherwise in the small lane under it -- skipped there if another
-      // voice already printed a syllable at that spot (unison voices would print over each other).
-      for (const { note, x, w, y } of lyricNotes) {
-        const inside = this.getLyricBitmap(note.lyric!, true);
-        if (inside.cssWidth + 10 <= w - 3) {
-          ctx.drawImage(inside.canvas, x + 7, y + (pillH - inside.cssHeight) / 2, inside.cssWidth, inside.cssHeight);
-          continue;
-        }
-        const below = this.getLyricBitmap(note.lyric!, false);
+      // Syllables from cached bitmaps (re-shaping text per note per rebuild adds up fast), always in
+      // the lane under their note -- skipped there if another voice already printed a syllable at
+      // that spot (unison voices would print over each other).
+      const fontPx = lyricFontPx(rowHeight);
+      const score = LYRIC_STYLE === 'score';
+      const textColor = score ? towardPaper(color, 0.62) : paper(0.8);
+      for (let i = 0; i < lyricNotes.length; i++) {
+        const { note, x, y, index } = lyricNotes[i];
+        const bmp = this.getLyricBitmap(note.lyric!, textColor, fontPx, 550);
         const row = Math.round(y);
         const used = lyricLane.get(row) ?? [];
-        const x1 = x + 1;
-        const x2 = x1 + below.cssWidth;
+        const x1 = x + 2;
+        const x2 = x1 + bmp.cssWidth;
         if (used.some(([a, b]) => x1 < b + 3 && a < x2 + 3)) continue;
         used.push([x1, x2]);
         lyricLane.set(row, used);
-        ctx.drawImage(below.canvas, x1, y + pillH + 1, below.cssWidth, below.cssHeight);
+        const top = y + pillH + 1;
+        ctx.drawImage(bmp.canvas, x1, top, bmp.cssWidth, bmp.cssHeight);
+        if (!score) continue;
+        const mid = top + bmp.cssHeight * 0.58;
+        ctx.fillStyle = textColor;
+        if (note.lyricJoin && lyricNotes[i + 1]) {
+          // Hyphen, centred in the space before the word's next syllable.
+          const gapStart = x2 + 3;
+          const gapEnd = lyricNotes[i + 1].x - 1;
+          const dash = Math.min(fontPx * 0.55, gapEnd - gapStart - 2);
+          if (dash >= 3) ctx.fillRect(Math.round((gapStart + gapEnd - dash) / 2), Math.round(mid), dash, Math.max(1, fontPx * 0.09));
+        } else if (note.lyricExtend) {
+          // Extender: a line under the held syllable to the end of its last note.
+          let last = note;
+          for (let j = index + 1; j < notes.length && !notes[j].lyric; j++) last = notes[j];
+          const end = localBeatToX(last.startBeat + last.durationBeats) - 4;
+          const base = top + bmp.cssHeight - 2;
+          if (end > x2 + 6) ctx.fillRect(x2 + 3, Math.round(base), end - x2 - 3, 1);
+        }
       }
     };
     for (const part of this.score.parts) if (!this.hiddenParts.has(part.id) && this.dimmedParts.has(part.id)) drawPart(part.id);
@@ -931,17 +964,17 @@ export class PianoRoll {
     ctx.fillRect(x0 + KEYBOARD_WIDTH_PX, yTop, 10, yBottom - yTop);
   }
 
-  /** A syllable rendered once and cached: `inside` = dark bold text for inside a pill, otherwise light text for under it. */
-  private getLyricBitmap(text: string, inside: boolean): { canvas: HTMLCanvasElement; cssWidth: number; cssHeight: number } {
-    const key = (inside ? 'i:' : 'o:') + text;
+  /** A syllable rendered once and cached, in the given colour, size and weight. */
+  private getLyricBitmap(text: string, color: string, fontPx: number, weight: number): { canvas: HTMLCanvasElement; cssWidth: number; cssHeight: number } {
+    const key = `${color}|${fontPx.toFixed(1)}|${weight}|${text}`;
     const cached = this.lyricBitmaps.get(key);
     if (cached) return cached;
 
-    const font = inside ? `650 11.5px ${FONT_TEXT}` : `500 10.5px ${FONT_TEXT}`;
+    const font = `${weight} ${fontPx.toFixed(1)}px ${FONT_TEXT}`;
     const measurer = (this.lyricMeasureCtx ??= document.createElement('canvas').getContext('2d')!);
     measurer.font = font;
     const cssWidth = Math.ceil(measurer.measureText(text).width) + 2;
-    const cssHeight = inside ? 14 : 12;
+    const cssHeight = Math.ceil(fontPx * 1.2);
 
     const bmp = document.createElement('canvas');
     bmp.width = Math.max(1, Math.round(cssWidth * this.dpr));
@@ -949,9 +982,9 @@ export class PianoRoll {
     const bctx = bmp.getContext('2d')!;
     bctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     bctx.font = font;
-    bctx.fillStyle = inside ? 'rgba(13,12,22,0.9)' : paper(0.8);
+    bctx.fillStyle = color;
     bctx.textBaseline = 'alphabetic';
-    bctx.fillText(text, 1, cssHeight - (inside ? 3.5 : 2.5));
+    bctx.fillText(text, 1, cssHeight - fontPx * 0.24);
 
     const entry = { canvas: bmp, cssWidth, cssHeight };
     this.lyricBitmaps.set(key, entry);
