@@ -1,4 +1,5 @@
 import { VOICE_SPECTRUM } from './palette';
+import { PAPER_DESIGN } from './design';
 
 // The velvet ground behind the whole app: layered waves in close shades of the ink colour, drifting
 // slowly, with a faint rim of voice colour along each crest -- felt more than seen. Drawn at half
@@ -24,6 +25,9 @@ export class WaveBackdrop {
     this.canvas = document.createElement('canvas');
     this.canvas.id = 'bg-waves';
     this.canvas.setAttribute('aria-hidden', 'true');
+    // The paper design lies still: no waves at all.
+    if (PAPER_DESIGN) this.shown = false;
+    this.canvas.hidden = !this.shown;
     document.body.prepend(this.canvas);
     this.ctx = this.canvas.getContext('2d')!;
     window.addEventListener('resize', () => this.draw());
@@ -36,7 +40,7 @@ export class WaveBackdrop {
 
   /** Hides the waves (the title screen keeps its plain ground) and stops drawing them meanwhile. */
   setShown(shown: boolean) {
-    if (shown === this.shown) return;
+    if (PAPER_DESIGN || shown === this.shown) return;
     this.shown = shown;
     this.canvas.hidden = !shown;
     if (shown) this.draw();

@@ -2757,3 +2757,148 @@ body:has(#app.mode-landing)::after {
     background: var(--ink-2);
   }
 }
+
+/* =========================================================================================
+   Papier & Feder -- the paper design (design.ts; a device switches to it with ?design=papier).
+   Night paper is the ground everywhere (the same paper as the punched roll), floating things are
+   vellum, buttons are blind-embossed into the paper, a voice is a punched hole lit in its colour.
+   Light stays with the voices: the lamp behind the paper at the reading line.
+   ========================================================================================= */
+
+:root[data-design='papier'] {
+  --ink-0: #15111a;
+  --ink-1: #1b1621;
+  --ink-2: #221c29;
+  --ink-3: #2b2433;
+  --ink-4: #362e40;
+  --hair: rgba(239, 231, 218, 0.1);
+  --hair-2: rgba(239, 231, 218, 0.18);
+  /* Paper fibres: noise stretched along the grain. */
+  --fibre: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='300' height='150'><filter id='f'><feTurbulence type='fractalNoise' baseFrequency='.03 .75' numOctaves='2' seed='4' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 .95  0 0 0 0 .9  0 0 0 .065 -.015'/></filter><rect width='100%' height='100%' filter='url(%23f)'/></svg>");
+  --sheet-bg: var(--fibre), linear-gradient(180deg, #241e2b, #201a27);
+  /* "Glass" becomes paper: opaque sheets for the bars, vellum (tracing paper) where things float. */
+  --glass-bg: var(--fibre), linear-gradient(180deg, rgb(255 244 228 / 0.025), rgb(255 244 228 / 0)), rgb(33 27 40 / 0.96);
+  --glass-bg-strong: var(--fibre), rgb(40 33 47 / 0.84);
+  --glass-filter: blur(10px) saturate(0.75);
+  --glass-filter-strong: blur(12px) saturate(0.7);
+  --glass-edge: rgb(255 244 228 / 0.09);
+  --glass-hi: inset 0 1px 0 rgb(255 244 228 / 0.07);
+  --velvet-card: var(--sheet-bg);
+  /* Blind embossing: pressed up out of the paper (raised) or into it (pressed). */
+  --emboss-raised: -1px -1px 0 rgb(255 244 228 / 0.1), 1px 2px 4px rgb(0 0 0 / 0.55), inset 1px 1px 0 rgb(255 244 228 / 0.13), inset -2px -3px 7px rgb(0 0 0 / 0.35);
+  --emboss-pressed: inset 1px 2px 4px rgb(0 0 0 / 0.55), inset -1px -1px 0 rgb(255 244 228 / 0.07);
+}
+
+:root[data-design='papier'],
+:root[data-design='papier'] body {
+  background: #1b1621;
+}
+
+:root[data-design='papier'] #bg-waves {
+  display: none;
+}
+
+/* The fibres lie over the whole ground, the title screen included. */
+:root[data-design='papier'] body::after,
+:root[data-design='papier'] body:has(#app.mode-landing)::after {
+  display: block;
+  background: var(--fibre);
+}
+
+:root[data-design='papier'] #pin-gate {
+  background: var(--fibre), #1b1621;
+}
+
+:root[data-design='papier'] .pin-card {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: var(--glass-filter-strong);
+  backdrop-filter: var(--glass-filter-strong);
+}
+
+/* The score's stage is the paper itself (the sheet view's canvas stays clear over it). */
+:root[data-design='papier'] .stage {
+  background: var(--fibre), #1b1621;
+}
+
+/* Repertoire: sheets lying in a stack. */
+:root[data-design='papier'] .song-card {
+  background: var(--sheet-bg);
+  border-color: rgb(255 244 228 / 0.07);
+  box-shadow:
+    inset 0 1px 0 rgb(255 244 228 / 0.07),
+    0 1px 0 rgb(0 0 0 / 0.4),
+    5px 6px 0 -2px #19141f,
+    0 24px 40px -28px rgb(0 0 0 / 0.95);
+}
+
+/* The play button: embossed into the paper, the symbol printed in ink. */
+:root[data-design='papier'] .play-btn,
+:root[data-design='papier'] .play-btn:hover {
+  color: var(--paper);
+  background: var(--fibre), #2c2535;
+  box-shadow: var(--emboss-raised);
+}
+
+:root[data-design='papier'] .play-btn:active {
+  box-shadow: var(--emboss-pressed);
+}
+
+:root[data-design='papier'] .play-btn .ic {
+  filter: drop-shadow(1px 1px 0 rgb(0 0 0 / 0.5));
+}
+
+/* Switches that are on are pressed into the paper instead of glowing. */
+:root[data-design='papier'] .t-btn.toggle[aria-pressed='true'],
+:root[data-design='papier'] .zoom .follow-btn[aria-pressed='true'],
+:root[data-design='papier'] .seg button[aria-pressed='true'] {
+  background: rgb(0 0 0 / 0.2);
+  border-color: transparent;
+  box-shadow: var(--emboss-pressed);
+}
+
+:root[data-design='papier'] .t-btn.toggle[aria-pressed='true'] .ic,
+:root[data-design='papier'] .info-metro.on .ic,
+:root[data-design='papier'] .zoom .follow-btn[aria-pressed='true'] .ic {
+  filter: none;
+}
+
+/* A voice: a punched tab, its hole lit in the voice's colour -- covered when switched off. */
+:root[data-design='papier'] .chip {
+  border-radius: 8px;
+  background: var(--sheet-bg);
+  border-color: rgb(255 244 228 / 0.07);
+  box-shadow: inset 0 1px 0 rgb(255 244 228 / 0.07), 0 1px 2px rgb(0 0 0 / 0.5);
+}
+
+:root[data-design='papier'] .chip i {
+  width: 20px;
+  height: 9px;
+  border-radius: 5px;
+  background: radial-gradient(60% 90% at 50% 50%, #fffaf2 0%, var(--c) 72%);
+  box-shadow: 0 0 9px color-mix(in oklab, var(--c) 65%, transparent), inset 0 0 0 1px rgb(6 4 10 / 0.35);
+}
+
+:root[data-design='papier'] .chip.is-solo {
+  border-color: color-mix(in oklab, var(--c) 55%, transparent);
+  background: var(--fibre), color-mix(in oklab, var(--c) 14%, #221c29);
+}
+
+:root[data-design='papier'] .chip.is-dimmed i,
+:root[data-design='papier'] .chip.is-muted i {
+  opacity: 1;
+  background: #07050b;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.8), inset 0 0 0 1px rgb(255 244 228 / 0.07);
+}
+
+:root[data-design='papier'] .chip.is-dimmed i {
+  background: radial-gradient(60% 90% at 50% 50%, color-mix(in oklab, var(--c) 45%, #07050b) 0%, #07050b 80%);
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  :root[data-design='papier'] .song-card.is-tilted {
+    box-shadow:
+      inset 0 1px 0 rgb(255 244 228 / 0.08),
+      5px 6px 0 -2px #19141f,
+      0 34px 50px -30px rgb(0 0 0 / 0.95);
+  }
+}

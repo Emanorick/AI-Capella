@@ -134,6 +134,21 @@ export function playheadBeam(ctx: CanvasRenderingContext2D, x: number, top: numb
   ctx.fillRect(x - 36, top, 72, height);
 }
 
+/**
+ * Paper design: the lamp behind the paper seen along a reading line at x -- a faint warm strip with
+ * a bell-shaped fall-off to the sides (the same light as the punched roll's, see lantern.ts).
+ */
+export function readingStrip(ctx: CanvasRenderingContext2D, x: number, top: number, height: number) {
+  const reach = 90;
+  const g = ctx.createLinearGradient(x - reach, 0, x + reach, 0);
+  for (let i = 0; i <= 10; i++) {
+    const t = i / 10;
+    g.addColorStop(t, `rgba(255,208,156,${(0.1 * Math.exp(-(((t - 0.5) / 0.2) ** 2))).toFixed(4)})`);
+  }
+  ctx.fillStyle = g;
+  ctx.fillRect(x - reach, top, reach * 2, height);
+}
+
 export const FONT_TEXT = '"Atkinson Hyperlegible Next Variable", "Atkinson Hyperlegible Next", system-ui, sans-serif';
 export const FONT_MONO = '"Atkinson Hyperlegible Mono Variable", "Atkinson Hyperlegible Mono", ui-monospace, monospace';
 export const FONT_DISPLAY = '"Bodoni Moda Variable", "Bodoni Moda", Didot, Georgia, serif';

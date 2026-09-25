@@ -2,6 +2,7 @@ import type { NoteEvent, Score, SlurArc } from './score';
 import { getBeatMarkers } from './score';
 import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, withAlpha, stageFill, gelPill, playheadBeam, paperGrain } from './theme';
 import { Lantern, type Flare } from './lantern';
+import { deviceChoice, PAPER_DESIGN } from './design';
 
 export const BASE_PIXELS_PER_BEAT = 70;
 // The only place a click/drag sets the playback start point or defines a loop region -- clicks in
@@ -31,12 +32,10 @@ const LYRIC_MAX_PX = 15;
 const LYRIC_STYLE: 'score' | 'plain' = 'score';
 // 'lantern': the roll as paper with round holes, a lamp behind it shining through them (see
 // lantern.ts) -- the piano roll's origin, the perforated player-piano roll. 'gel': glossy beads on
-// the stage. DEFAULT_NOTE_STYLE is what everyone sees; a device can try the other one by opening
-// the app with ?roll=lantern or ?roll=gel, and keeps it until asked for the default again.
+// the stage. The paper design (design.ts) comes with the lantern; a device can also pick either with
+// ?roll=lantern or ?roll=gel.
 type NoteStyle = 'lantern' | 'gel';
-const DEFAULT_NOTE_STYLE: NoteStyle = 'gel';
-const NOTE_STYLE_KEY = 'ai-capella-roll';
-const NOTE_STYLE = noteStyle();
+const NOTE_STYLE: NoteStyle = deviceChoice('roll', 'ai-capella-roll', ['lantern', 'gel'] as const, PAPER_DESIGN ? 'lantern' : 'gel');
 const LANTERN = NOTE_STYLE === 'lantern';
 const LANTERN_PAPER = '#1b1621';
 const LANTERN_VOID = '#08060c'; // behind the paper, where no light reaches
@@ -46,19 +45,6 @@ const GLASS_SCALE = 0.75;
 // glides over from where it was instead of jumping.
 const LAMP_JUMP_BEATS = 2;
 const LAMP_GLIDE_S = 0.14;
-
-function noteStyle(): NoteStyle {
-  const valid = (v: string | null): v is NoteStyle => v === 'lantern' || v === 'gel';
-  try {
-    const asked = new URLSearchParams(location.search).get('roll');
-    if (asked === DEFAULT_NOTE_STYLE) localStorage.removeItem(NOTE_STYLE_KEY);
-    else if (valid(asked)) localStorage.setItem(NOTE_STYLE_KEY, asked);
-    const stored = localStorage.getItem(NOTE_STYLE_KEY);
-    return valid(stored) ? stored : DEFAULT_NOTE_STYLE;
-  } catch {
-    return DEFAULT_NOTE_STYLE;
-  }
-}
 
 function lyricFontPx(rowHeight: number): number {
   return clamp(rowHeight * 0.27, LYRIC_MIN_PX, LYRIC_MAX_PX);
