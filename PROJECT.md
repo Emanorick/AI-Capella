@@ -74,12 +74,17 @@ connected device — so nobody is left with music playing to an empty player.
   (10.5-15 px) and is set like a choral score: a light tint of the voice colour, hyphens between
   the syllables of a word and an extender line under a held syllable (from MusicXML's
   `<syllabic>`/`<extend>`, `NoteEvent.lyricJoin/lyricExtend`); the syllable being sung lights up.
-- **Follows the music** on phones and in the sing-along view (`setAutoFit`): the rows zoom to the
-  pitch range sung by the visible voices around the playhead (plus two beats ahead), never fewer
+- **Follows the music** (`setAutoFit`) -- always on phones; on a laptop switchable with the
+  height button in the zoom control or the **F** key (remembered per device, on by default): the
+  rows zoom to the pitch range sung around the playhead by the voices in focus (every visible
+  voice, or only the soloed ones while any are soloed -- soloing a voice zooms onto it), never fewer
   than 11 rows or taller than 56 px, and glide (420 ms) to a new range only when the music leaves
   the current one or it has become much wider than needed. The content buffer is repainted once at
   the new row height and scaled during the glide, so a zoom change doesn't cost a repaint per
-  frame. Scrolling by hand takes over until the next Play.
+  frame. Scrolling by hand takes over until the next Play. **Alt + wheel** (or Alt + trackpad
+  pinch) sets the height by hand around the pointer (`zoomRows`, 32-64 px rows), switching
+  follow-the-music off but starting from its current framing. Notes are never taller than 22 px;
+  extra row height becomes space between the lines.
 - A fixed **ruler strip** along the top (28px) is the *only* place in the score a click or drag
   can set where playback starts, or define a loop region (the whole-piece strip below the score
   is the other). Everywhere else, clicking is inert for

@@ -137,6 +137,8 @@ app.innerHTML = `
       <canvas id="roll"></canvas>
       <canvas id="staff" hidden></canvas>
       <div class="zoom" role="group" aria-label="Zoom">
+        <button type="button" class="icon-btn follow-btn" data-action="follow" aria-pressed="true" aria-label="${t('followMusic')}" title="${t('followMusicHint')}">${icon('fitHeight')}</button>
+        <span class="zoom-sep" aria-hidden="true"></span>
         <button type="button" class="icon-btn" data-action="zoom-out" aria-label="${t('zoomOut')}">${icon('minus')}</button>
         <span id="zoom-value">100%</span>
         <button type="button" class="icon-btn" data-action="zoom-in" aria-label="${t('zoomIn')}">${icon('plus')}</button>
@@ -380,11 +382,26 @@ function setFullView(full: boolean) {
   renderModeControls();
 }
 
-// Follow the music (piano roll rows zoom to what's being sung): on phones, and in the sing-along view.
+// Follow the music (piano roll rows zoom to what's being sung): always on phones; on a laptop
+// switchable in the zoom control (key F), remembered per device, on by default. Alt + wheel sets
+// the height by hand, which switches it off.
 const narrowQuery = window.matchMedia('(max-width: 899px)');
+const FOLLOW_KEY = 'ai-capella-follow';
+let followPref = localStorage.getItem(FOLLOW_KEY) !== '0';
+document.querySelectorAll<HTMLElement>('[data-action="follow"]').forEach((b) => b.setAttribute('aria-pressed', String(followPref)));
+function followActive(): boolean {
+  return narrowQuery.matches || followPref;
+}
 function applyAutoFit() {
-  pianoRoll?.setAutoFit(narrowQuery.matches || app.classList.contains('sing-along'));
+  pianoRoll?.setAutoFit(followActive());
+  document.querySelectorAll<HTMLElement>('[data-action="follow"]').forEach((b) => b.setAttribute('aria-pressed', String(followPref)));
   requestAnimationFrame(resizeCanvases);
+}
+function setFollow(on: boolean) {
+  followPref = on;
+  if (on) localStorage.removeItem(FOLLOW_KEY);
+  else localStorage.setItem(FOLLOW_KEY, '0');
+  applyAutoFit();
 }
 narrowQuery.addEventListener('change', applyAutoFit);
 
@@ -955,7 +972,7 @@ async function loadSongLocally(song: SongEntry) {
   setViewMode('player');
   pianoRoll = new PianoRoll(canvas, score, partColor);
   pianoRoll.setLoopRegion(null);
-  pianoRoll.setAutoFit(narrowQuery.matches || app.classList.contains('sing-along'));
+  pianoRoll.setAutoFit(followActive());
   staffView = new StaffView(staffCanvas, score, partColor);
   overview = new OverviewStrip(overviewCanvas, score, partColor);
   // MIDI imports have no real notated spelling -- only a heuristic chromatic fallback (see
@@ -2057,6 +2074,9 @@ document.addEventListener('click', (e) => {
     case 'transpose-up':
       applyTranspose(1);
       break;
+    case 'follow':
+      setFollow(!followPref);
+      break;
     case 'zoom-in':
       applyZoom(ZOOM_STEP);
       break;
@@ -2131,6 +2151,9 @@ window.addEventListener('keydown', (e) => {
     if (currentScore) pushState({ loopEnabled: !loopEnabled });
   } else if (e.key === 'm' || e.key === 'M') {
     if (audioEngine) pushState({ metronomeOn: !metronomeOn });
+  } else if ((e.key === 'f' || e.key === 'F') && !narrowQuery.matches) {
+    setFollow(!followPref);
+    toast(followPref ? t('followOn') : t('followOff'));
   }
 });
 
@@ -2228,7 +2251,19 @@ canvas.addEventListener(
   (e) => {
     if (!pianoRoll) return;
     e.preventDefault();
-    if (e.ctrlKey) {
+    if (e.altKey) {
+      // Alt + wheel (or Alt + trackpad pinch): the rows' height, by hand, around the pointer.
+      // Takes over from follow-the-music, keeping its current framing as the starting point.
+      if (followActive() && !narrowQuery.matches) {
+        pianoRoll.freezeAutoFit();
+        followPref = false;
+        localStorage.setItem(FOLLOW_KEY, '0');
+        document.querySelectorAll<HTMLElement>('[data-action="follow"]').forEach((b) => b.setAttribute('aria-pressed', 'false'));
+      }
+      const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      pianoRoll.zoomRows(Math.exp(-delta * (e.ctrlKey ? 0.01 : 0.0015)), e.clientY - canvas.getBoundingClientRect().top);
+      scheduleRender();
+    } else if (e.ctrlKey) {
       // Trackpad pinch arrives as ctrl+wheel.
       applyZoom(Math.exp(-e.deltaY * 0.01));
     } else if (e.shiftKey) {

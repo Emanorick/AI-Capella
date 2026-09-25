@@ -60,6 +60,11 @@ const FIT_MAX_ROW_PX = 56;
 const FIT_PAD_SEMITONES = 1;
 const FIT_LOOKAHEAD_BEATS = 2;
 const FIT_GLIDE_MS = 420;
+// Hand-set row height (Alt + wheel / pinch on a laptop), when follow-the-music is off.
+const MANUAL_MAX_ROW_PX = 64;
+// Notes never get taller than this -- beyond it, a larger row height becomes space between the
+// lines instead (short notes would otherwise swell into round blobs).
+const PILL_MAX_PX = 22;
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
@@ -114,6 +119,7 @@ export class PianoRoll {
   private fitView: { top: number; row: number } | null = null; // current display: pitch at the top edge, row height
   private fitGlide: { from: { top: number; row: number }; to: { top: number; row: number }; t0: number } | null = null;
   private maxNoteBeats = 0;
+  private manualRow: number | null = null;
 
   // Scrolling-content buffer: gridlines/notes/slurs pre-rendered into a wide offscreen strip.
   // During playback only the scroll offset changes each frame -- nothing about notes' positions
@@ -249,7 +255,35 @@ export class PianoRoll {
     this.fitView = null;
     this.fitGlide = null;
     this.viewScale = 1;
-    if (!on) this.applyStaticLayout();
+    if (!on) {
+      this.manualRow = null; // back to the whole range
+      this.applyStaticLayout();
+    }
+  }
+
+  /** Switches follow-the-music off but keeps its current framing, as the start of a hand-set zoom. */
+  freezeAutoFit() {
+    if (!this.autoFit) return;
+    const view = this.fitView;
+    this.setAutoFit(false);
+    if (!view) return;
+    this.manualRow = view.row;
+    this.setBufferRow(view.row);
+    this.scrollY = clamp((this.maxMidi - view.top) * view.row, 0, this.maxScrollY());
+  }
+
+  /**
+   * Zooms the rows' height by `factor` around a canvas-local y (the pitch under the pointer stays
+   * put). Only while follow-the-music is off -- the caller switches it off first.
+   */
+  zoomRows(factor: number, anchorY: number) {
+    if (this.autoFit) return;
+    const areaY = clamp(anchorY - RULER_HEIGHT_PX, 0, this.contentAreaHeight());
+    const pitchAtAnchor = this.maxMidi - (this.scrollY + areaY) / this.rowHeightPx;
+    const row = clamp(this.rowHeightPx * factor, MIN_ROW_HEIGHT_PX, MANUAL_MAX_ROW_PX);
+    this.manualRow = row;
+    this.setBufferRow(row);
+    this.scrollY = clamp((this.maxMidi - pitchAtAnchor) * row - areaY, 0, this.maxScrollY());
   }
 
   /** Picks follow-the-music back up after the user scrolled by hand. */
@@ -283,16 +317,20 @@ export class PianoRoll {
   /** The whole piece's range: rows stretch to fill the height, else MIN_ROW_HEIGHT_PX and scroll. */
   private applyStaticLayout() {
     const totalRows = Math.max(1, this.maxMidi - this.minMidi);
-    this.setBufferRow(Math.max(MIN_ROW_HEIGHT_PX, this.contentAreaHeight() / totalRows));
+    this.setBufferRow(this.manualRow ?? Math.max(MIN_ROW_HEIGHT_PX, this.contentAreaHeight() / totalRows));
     this.scrollY = clamp(this.scrollY, 0, this.maxScrollY());
   }
 
-  /** Lowest and highest pitch (transposed) sung by a visible voice between two beats, or null. */
+  /**
+   * Lowest and highest pitch (transposed) sung between two beats by the voices in focus: every
+   * visible voice, or -- while some are soloed -- just the soloed ones (the others play on quietly,
+   * dimmed, and stay in view only as far as they fit).
+   */
   private rangeBetween(from: number, to: number): { lo: number; hi: number } | null {
     let lo = Infinity;
     let hi = -Infinity;
     for (const part of this.score.parts) {
-      if (this.hiddenParts.has(part.id)) continue;
+      if (this.hiddenParts.has(part.id) || this.dimmedParts.has(part.id)) continue;
       const notes = this.notesByPart.get(part.id);
       if (!notes) continue;
       let a = 0;
@@ -408,7 +446,7 @@ export class PianoRoll {
       return;
     }
     const totalRows = Math.max(1, this.maxMidi - this.minMidi);
-    this.rowHeightPx = Math.max(MIN_ROW_HEIGHT_PX, this.contentAreaHeight() / totalRows);
+    this.rowHeightPx = this.manualRow ?? Math.max(MIN_ROW_HEIGHT_PX, this.contentAreaHeight() / totalRows);
 
     if (!this.scrollYInitialized) {
       // Center the view on first layout rather than starting pinned to the top of the range.
@@ -605,7 +643,11 @@ export class PianoRoll {
       ctx.fillStyle = PAST_SHADE;
       ctx.fillRect(0, 0, Math.min(width, playheadXPos), contentAreaHeight);
     }
-    this.drawSoundingNotes(ctx, playheadBeat, beatToX, rowHeight, contentAreaHeight, scale);
+    // Lit notes go on exactly the pixel grid the buffer was blitted to (its x is snapped to whole
+    // device pixels), so the lit copy covers the buffer's one without a sub-pixel double edge.
+    const blitX = this.snapToDevicePx(anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat);
+    const bufferBeatToX = (beat: number) => blitX + (beat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
+    this.drawSoundingNotes(ctx, playheadBeat, bufferBeatToX, rowHeight, contentAreaHeight, scale);
 
     // Preview note label: set by a click on a note (see hitTestNote); shows its pitch name at the
     // start of that note. Drawn fresh each frame since it's transient UI state, not score content.
@@ -673,7 +715,8 @@ export class PianoRoll {
         ctx.restore();
         // The syllable being sung lights up in its lane (drawn over the buffer's quieter copy).
         if (note.lyric) {
-          const bmp = this.getLyricBitmap(note.lyric, PAPER, lyricFontPx(rowHeight), 700);
+          // Same size and weight as the buffer's copy underneath, so it covers it exactly.
+          const bmp = this.getLyricBitmap(note.lyric, PAPER, lyricFontPx(rowHeight), 550);
           ctx.drawImage(bmp.canvas, x + 2, y + pillH + scale, bmp.cssWidth * scale, bmp.cssHeight * scale);
         }
       }
@@ -681,7 +724,7 @@ export class PianoRoll {
   }
 
   private pillHeight(rowHeight: number): number {
-    return Math.max(6, rowHeight - BAR_PAD_PX * 2 - lyricLanePx(rowHeight));
+    return Math.max(6, Math.min(PILL_MAX_PX, rowHeight - BAR_PAD_PX * 2 - lyricLanePx(rowHeight)));
   }
 
   private ensureContentBuffer(currentBeat: number, contentWidth: number, rowHeight: number) {

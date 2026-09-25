@@ -22,6 +22,7 @@ const PATHS = {
   user: `<g ${S} stroke-width="1.8"><circle cx="12" cy="8" r="3.7"/><path d="M4.8 20c.9-3.7 3.6-5.7 7.2-5.7s6.3 2 7.2 5.7"/></g>`,
   users: `<g ${S} stroke-width="1.8"><circle cx="9" cy="8.5" r="3.3"/><path d="M2.8 19.5c.8-3.3 3.1-5 6.2-5s5.4 1.7 6.2 5"/><circle cx="16.8" cy="7.2" r="2.7"/><path d="M16.3 12.6c2.9 0 4.8 1.6 5.4 4.7"/></g>`,
   chevronRight: `<path d="M9.5 5.5L16 12l-6.5 6.5" ${S} stroke-width="2"/>`,
+  fitHeight: `<g ${S} stroke-width="1.8"><path d="M12 3.5v6M9.3 6.2L12 3.5l2.7 2.7M12 20.5v-6M9.3 17.8L12 20.5l2.7-2.7"/><path d="M4.5 12h15"/></g>`,
   chevronLeft: `<path d="M14.5 5.5L8 12l6.5 6.5" ${S} stroke-width="2"/>`,
   camera: `<g ${S} stroke-width="1.8"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2.3l1.5-2.2h5.4L16.2 7h2.3A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><circle cx="12" cy="12.8" r="3.4"/></g>`,
   image: `<g ${S} stroke-width="1.8"><rect x="3.8" y="4.8" width="16.4" height="14.4" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4.5 17.5l4.6-4.4 3.2 3 3.4-3.6 4 4.3"/></g>`,

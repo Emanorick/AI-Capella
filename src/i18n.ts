@@ -201,6 +201,10 @@ const en = {
   sectionHoldHint: "hold to remove",
   soundPiano: "Sound: grand piano",
   soundVoice: "Sound: voice (oo)",
+  followMusic: "Height follows the music",
+  followMusicHint: "Height follows the music (F) · Alt + mouse wheel: set the height by hand",
+  followOn: "Height follows the music",
+  followOff: "Height stays as set",
 };
 
 const de: Record<keyof typeof en, string> = {
@@ -401,6 +405,10 @@ const de: Record<keyof typeof en, string> = {
   sectionHoldHint: "halten zum Entfernen",
   soundPiano: "Klang: Flügel",
   soundVoice: "Klang: Stimme (uh)",
+  followMusic: "Höhe folgt der Musik",
+  followMusicHint: "Höhe folgt der Musik (F) · Alt + Mausrad: Höhe von Hand",
+  followOn: "Höhe folgt der Musik",
+  followOff: "Höhe bleibt wie eingestellt",
 };
 
 export type MessageKey = keyof typeof en;
