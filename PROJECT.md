@@ -345,23 +345,26 @@ layer (strength between "subtle" and "balanced" of its design draft):
   in the voice colour on sounding notes, a warm beam for the playhead, the pearl play button,
   and a soft glow on switches that are on. Repertoire cards tilt toward a mouse with a spot of
   light following it. With reduced transparency everything glass becomes solid.
-- **"Papier & Feder" (built, not yet the default).** `design.ts` picks the look per device: the
-  default (what the choir sees) is still Samt & Glas; a device opened with `?design=papier` keeps
-  the paper design until opened with `?design=samt` (`deviceChoice`, also used for `?roll=` and
-  `?logo=`). In it, night paper (`#1b1621` with fibres, the punched roll's paper) is the ground
-  everywhere and the waves are gone; the ink tokens shift to the paper's tones; bars are paper
-  sheets, overlays vellum (tracing paper, blurred); the play button and pressed switches are
-  blind-embossed; a voice chip is a punched hole lit in the voice's colour (covered when off). The
-  sheet view draws on a clear canvas over the stage's paper, with the lamp's strip at the playhead
-  (`theme.ts readingStrip`). Lines drawn by hand use `pen.ts`: a broad nib (thick across the nib,
-  hairline along it) or a pointed pen (swelling on downstrokes). Covers are the song's voice lines
-  written with the broad nib; the app mark too. The title animation (`artwork.ts drawPenRibbons`)
-  writes the voice lines left to right with a pen while they already sway, then lets them swing
-  out fully, glow and carry their beads as before -- draft 1 (`?logo=1`, default): broad nib, all
-  voices together; draft 2 (`?logo=2`): pointed pen, the voices one after another from the highest
-  down, like the starting tones before the chord.
+- **"Papier & Feder" -- the current look (default since September 2026).** `design.ts` picks the
+  look per device (`deviceChoice`, also used for `?roll=` and `?logo=`): the paper design for
+  everyone; `?design=samt` switches a device back to Samt & Glas (the previous look, kept in the
+  code), `?design=papier` returns it. Night paper (`#1b1621` with fibres, the punched roll's paper)
+  is the ground everywhere and the waves are gone; the ink tokens shift to the paper's tones; bars
+  are paper sheets, overlays vellum (tracing paper, blurred); the play button and pressed switches
+  are blind-embossed; a voice chip is a punched hole lit in the voice's colour (covered when off).
+  The sheet view draws on a clear canvas over the stage's paper, with the lamp's strip at the
+  playhead (`theme.ts readingStrip`). Lines drawn by hand use `pen.ts`: a broad nib (thick across
+  the nib, hairline along it) or a pointed pen (swelling on downstrokes). Covers are the song's
+  voice lines written with the broad nib. The title animation (`artwork.ts drawPenRibbons`) writes
+  the voice lines left to right with a pointed pen, one voice after another from the highest down
+  (like the starting tones before the chord), while they already sway; once all have arrived they
+  swing out fully, glow and carry their beads. (Draft 1, a broad nib writing all voices together,
+  is still there as `?logo=1`.) The app mark, app icons and favicon are the four voice lines
+  written with the pointed pen on night paper (icons generated from the same geometry as
+  `drawMark`; the service worker's cache name was bumped so installed apps pick them up).
 - **Piano roll as a lit paper roll ("lantern").** `NOTE_STYLE` in `pianoRoll.ts`: part of the
-  paper design; any device can also pick it with `?roll=lantern` / `?roll=gel`. The roll is dark paper (with fibres, `theme.ts paperGrain`) with a round hole per
+  paper design (Samt & Glas uses the gel notes); any device can also pick it with `?roll=lantern`
+  / `?roll=gel`. The roll is dark paper (with fibres, `theme.ts paperGrain`) with a round hole per
   note, cut into the content buffer (a turned-down voice's holes are only marked, not cut). A lamp
   sits behind the paper at the reading line (`lantern.ts`): through the holes each voice's
   colour, full in the lamp's spot and dimmer with distance (never unreadable), white-hot right at

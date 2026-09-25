@@ -1,6 +1,6 @@
-// Which look this device shows. The default is what the whole choir sees; a device can try another
-// by opening the app with ?design=papier (or ?logo=2, ?roll=lantern), and keeps it until opened with
-// the default again (?design=samt).
+// Which look this device shows. The default is what the whole choir sees; a device can switch to
+// another by opening the app with ?design=samt (or ?logo=1, ?roll=gel), and keeps it until opened
+// with the default again (?design=papier).
 //
 // 'samt': velvet ground with slow waves, glass panels, gel notes ("Samt & Glas").
 // 'papier': night paper everywhere, vellum overlays, embossed buttons, the punched roll lit from
@@ -24,11 +24,11 @@ export function deviceChoice<T extends string>(param: string, key: string, value
 }
 
 export type Design = 'samt' | 'papier';
-export const DESIGN: Design = deviceChoice('design', 'ai-capella-design', ['samt', 'papier'] as const, 'samt');
+export const DESIGN: Design = deviceChoice('design', 'ai-capella-design', ['samt', 'papier'] as const, 'papier');
 export const PAPER_DESIGN = DESIGN === 'papier';
 
-/** The two drafts of the pen-written title animation (see artwork.ts animatePen). */
+/** The two drafts of the pen-written title animation (see artwork.ts drawPenRibbons); '2' was chosen. */
 export type LogoDraft = '1' | '2';
-export const LOGO_DRAFT: LogoDraft = deviceChoice('logo', 'ai-capella-logo', ['1', '2'] as const, '1');
+export const LOGO_DRAFT: LogoDraft = deviceChoice('logo', 'ai-capella-logo', ['1', '2'] as const, '2');
 
 document.documentElement.dataset.design = DESIGN;

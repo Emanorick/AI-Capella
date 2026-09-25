@@ -307,7 +307,11 @@ function setViewMode(mode: 'landing' | 'library' | 'player') {
     stopLandingRibbons();
     stopLandingRibbons = null;
   }
-  if (mode === 'library') requestAnimationFrame(drawAllCovers);
+  if (mode === 'library') {
+    requestAnimationFrame(drawAllCovers);
+    // The header's mark had no size while the title screen was showing.
+    requestAnimationFrame(drawMarks);
+  }
   if (mode === 'player') {
     // The canvases were hidden (display:none) while in library mode, so their layout size wasn't
     // knowable until now.

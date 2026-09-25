@@ -6,7 +6,7 @@
 // - Everything else from this site (hashed build files, fonts, icons, the sample song, the piano
 //   samples): stored copy first, network otherwise -- build files never change under the same name.
 // - Other hosts (Firebase) are left alone.
-const CACHE = 'ai-capella-v1';
+const CACHE = 'ai-capella-v2'; // v2: the paper design's icons
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

@@ -179,17 +179,17 @@ export function drawMark(ctx: CanvasRenderingContext2D, size: number, withTile: 
   const x0 = size * (withTile ? 0.19 : 0.06);
   const x1 = size * (withTile ? 0.81 : 0.94);
   if (PAPER_DESIGN) {
-    // Written with a broad nib, as in the title animation.
+    // Written with a pointed pen, as in the title animation (and the app icon, public/icon-*.png).
     for (let i = 0; i < 4; i++) {
       const k = i - 1.5;
       const pts: Pt[] = [];
       for (let s = 0; s <= 48; s++) {
         const u = s / 48;
         const env = Math.sin(Math.PI * u);
-        pts.push([x0 + (x1 - x0) * u, size * 0.5 + k * size * (withTile ? 0.085 : 0.11) * env + Math.sin(u * Math.PI * 2 + i * 0.9) * size * 0.03 * env]);
+        pts.push([x0 + (x1 - x0) * u, size * 0.5 + k * size * (withTile ? 0.105 : 0.12) * env + Math.sin(u * Math.PI * 2 + i * 0.9) * size * 0.03 * env]);
       }
       const stroke = new Path2D();
-      broadNib(stroke, pts, { w: Math.max(1.6, size * (withTile ? 0.075 : 0.1)), angle: 35, floor: 0.25, taper: 0.1 });
+      pointedPen(stroke, pts, { w: Math.max(2, size * (withTile ? 0.052 : 0.07)), hair: Math.max(0.9, size * 0.018), taper: 0.12 });
       ctx.fillStyle = colorForPart(i, 4);
       ctx.fill(stroke, 'nonzero');
     }
