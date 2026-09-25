@@ -345,6 +345,22 @@ layer (strength between "subtle" and "balanced" of its design draft):
   in the voice colour on sounding notes, a warm beam for the playhead, the pearl play button,
   and a soft glow on switches that are on. Repertoire cards tilt toward a mouse with a spot of
   light following it. With reduced transparency everything glass becomes solid.
+- **Piano roll as a lit paper roll ("lantern"; built, not yet the default).** `NOTE_STYLE` in
+  `pianoRoll.ts`: the default (`DEFAULT_NOTE_STYLE`, what the choir sees) is still the gel notes;
+  a device opened with `?roll=lantern` keeps the lantern look until opened with the default again
+  (`?roll=gel`). The roll is dark paper (with fibres, `theme.ts paperGrain`) with a round hole per
+  note, cut into the content buffer (a turned-down voice's holes are only marked, not cut). A lamp
+  sits behind the paper at the reading line (`lantern.ts`): through the holes each voice's
+  colour, full in the lamp's spot and dimmer with distance (never unreadable), white-hot right at
+  the reading line where the notes sound; in front of the paper the lamp's warm glow shining
+  through it and a halo of the holes' light. The spot is egg-shaped, as from a lamp aimed
+  obliquely: it falls off quickly over the music already played and reaches far over the music to
+  come. After a jump of the playhead (a click on the ruler, a loop going round) the lamp glides
+  over instead of jumping (`LAMP_GLIDE_S`). The light is composed at ¼–½ resolution each frame;
+  the glow is laid over the paper (source-over) rather than added, because a full-screen
+  'lighter' pass cost many frames on a software-rendered canvas (measured in headless Chromium,
+  which has no GPU: gel 0–2, lantern 2–18 frames over 33 ms out of ~230 while playing, varying a
+  lot between runs).
 - **Only the voices have colour.** Chrome is ink (`#0D0C16` → `#302C44`) and paper (`#EFE7DA`);
   voice colours come from an eight-step warm-to-cool spectrum (`palette.ts`), spread across the
   whole spectrum for however many voices a song has, so the highest voice is always warmest and

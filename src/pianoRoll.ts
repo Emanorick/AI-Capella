@@ -1,6 +1,7 @@
 import type { NoteEvent, Score, SlurArc } from './score';
 import { getBeatMarkers } from './score';
-import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, stageFill, gelPill, playheadBeam, punchedHole, rollPaper, paperGrain } from './theme';
+import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, withAlpha, stageFill, gelPill, playheadBeam, paperGrain } from './theme';
+import { Lantern, type Flare } from './lantern';
 
 export const BASE_PIXELS_PER_BEAT = 70;
 // The only place a click/drag sets the playback start point or defines a loop region -- clicks in
@@ -28,8 +29,36 @@ const LYRIC_MAX_PX = 15;
 // word and an extender line under a held syllable, as printed in choral scores. 'plain': neutral
 // syllables only.
 const LYRIC_STYLE: 'score' | 'plain' = 'score';
-// 'punched': notes as holes in the roll with the voice's light shining through; 'gel': glossy beads.
-const NOTE_STYLE: 'punched' | 'gel' = 'gel';
+// 'lantern': the roll as paper with round holes, a lamp behind it shining through them (see
+// lantern.ts) -- the piano roll's origin, the perforated player-piano roll. 'gel': glossy beads on
+// the stage. DEFAULT_NOTE_STYLE is what everyone sees; a device can try the other one by opening
+// the app with ?roll=lantern or ?roll=gel, and keeps it until asked for the default again.
+type NoteStyle = 'lantern' | 'gel';
+const DEFAULT_NOTE_STYLE: NoteStyle = 'gel';
+const NOTE_STYLE_KEY = 'ai-capella-roll';
+const NOTE_STYLE = noteStyle();
+const LANTERN = NOTE_STYLE === 'lantern';
+const LANTERN_PAPER = '#1b1621';
+const LANTERN_VOID = '#08060c'; // behind the paper, where no light reaches
+// The voices' colour filters behind the holes are soft anyway -- painted at reduced resolution.
+const GLASS_SCALE = 0.75;
+// The lamp sits at the playhead; after a jump (a click on the ruler, a loop going round) it
+// glides over from where it was instead of jumping.
+const LAMP_JUMP_BEATS = 2;
+const LAMP_GLIDE_S = 0.14;
+
+function noteStyle(): NoteStyle {
+  const valid = (v: string | null): v is NoteStyle => v === 'lantern' || v === 'gel';
+  try {
+    const asked = new URLSearchParams(location.search).get('roll');
+    if (asked === DEFAULT_NOTE_STYLE) localStorage.removeItem(NOTE_STYLE_KEY);
+    else if (valid(asked)) localStorage.setItem(NOTE_STYLE_KEY, asked);
+    const stored = localStorage.getItem(NOTE_STYLE_KEY);
+    return valid(stored) ? stored : DEFAULT_NOTE_STYLE;
+  } catch {
+    return DEFAULT_NOTE_STYLE;
+  }
+}
 
 function lyricFontPx(rowHeight: number): number {
   return clamp(rowHeight * 0.27, LYRIC_MIN_PX, LYRIC_MAX_PX);
@@ -39,7 +68,10 @@ function lyricLanePx(rowHeight: number): number {
   return Math.round(lyricFontPx(rowHeight) + 1.5);
 }
 const DIMMED_ALPHA = 0.3;
+
+type Sounding = Flare & { note: NoteEvent };
 const PAST_SHADE = 'rgba(13,12,22,0.38)'; // laid over everything left of the playhead: played notes step back
+const PAST_FADE_PX = 72; // lantern: the shade fades in over this width left of the playhead
 const MAX_DPR = 2; // native Retina density; only caps 3x phones, doesn't soften a normal laptop screen
 const BUFFER_SPAN_MULTIPLIER = 3; // scrolling-content buffer covers this many viewport-widths of beats
 const MAX_BUFFER_DEVICE_PX = 8192; // defensive cap on the content buffer's width in device px (see ensureContentBuffer)
@@ -131,6 +163,12 @@ export class PianoRoll {
   private contentBufferOriginBeat = 0;
   private contentBufferBeatsSpan = 0;
   private contentBufferDirty = true;
+  // Lantern style: the voices' colour filters, one per hole, on transparent (same span as the
+  // content buffer, at GLASS_SCALE), and the lamp behind the paper.
+  private glassBuffer: HTMLCanvasElement | null = null;
+  private lantern = LANTERN ? new Lantern() : null;
+  private lampLag = 0; // beats the lamp still trails the playhead by, after a jump
+  private lampLast: { beat: number; t: number } | null = null;
 
   // Ruler measure-number labels, pre-rendered alongside the content buffer (same origin/span, same
   // rebuild trigger) instead of being fillText'd fresh every frame -- text shaping/rasterizing on
@@ -295,9 +333,22 @@ export class PianoRoll {
     this.fitView = null;
   }
 
-  /** True while a zoom glide is in progress (the caller keeps rendering until it ends). */
+  /** True while a zoom glide or the lamp's glide is in progress (the caller keeps rendering until it ends). */
   isAnimating(): boolean {
-    return this.fitGlide !== null;
+    return this.fitGlide !== null || this.lampLag !== 0;
+  }
+
+  /** Lantern: where the lamp is (in beats) -- see LAMP_GLIDE_S. */
+  private lampBeat(playheadBeat: number, visibleBeats: number): number {
+    const now = performance.now();
+    if (this.lampLast) {
+      this.lampLag *= Math.exp(-Math.min(0.25, (now - this.lampLast.t) / 1000) / LAMP_GLIDE_S);
+      const jump = playheadBeat - this.lampLast.beat;
+      if (Math.abs(jump) > LAMP_JUMP_BEATS) this.lampLag = clamp(this.lampLag - jump, -visibleBeats * 0.6, visibleBeats * 0.6);
+      if (Math.abs(this.lampLag) * this.pixelsPerBeat < 0.5) this.lampLag = 0;
+    }
+    this.lampLast = { beat: playheadBeat, t: now };
+    return playheadBeat + this.lampLag;
   }
 
   /** Ends a glide where it is and freezes the fitted zoom, so hand scrolling works from there. */
@@ -553,8 +604,10 @@ export class PianoRoll {
     // red line sits right at anchorX) exactly when the view hasn't been panned away from it.
     const beatToX = (beat: number) => anchorX + (beat - displayBeat) * this.pixelsPerBeat;
 
-    if (NOTE_STYLE === 'punched') rollPaper(ctx, width, height);
-    else {
+    if (LANTERN) {
+      ctx.fillStyle = LANTERN_VOID;
+      ctx.fillRect(0, 0, width, height);
+    } else {
       ctx.fillStyle = stageFill(ctx, height);
       ctx.fillRect(0, 0, width, height);
     }
@@ -601,7 +654,8 @@ export class PianoRoll {
     // Thin vertical markers below are drawn as fillRect, not stroke(): a 1-2px straight line is
     // exactly representable as a filled rectangle, and stroked paths go through a much heavier
     // rasterization path in most renderers.
-    if (this.loopRegion) {
+    const drawLoopRegion = () => {
+      if (!this.loopRegion) return;
       const x1 = beatToX(this.loopRegion.start);
       const x2 = beatToX(this.loopRegion.end);
       ctx.fillStyle = paper(0.035);
@@ -609,7 +663,9 @@ export class PianoRoll {
       ctx.fillStyle = paper(0.3);
       ctx.fillRect(Math.round(x1), 0, 1, contentAreaHeight);
       ctx.fillRect(Math.round(x2), 0, 1, contentAreaHeight);
-    }
+    };
+    // Under the notes -- except with the lantern's opaque paper, where it goes on top (below).
+    if (!LANTERN) drawLoopRegion();
 
     // Scrolling content (rows, gridlines, notes, lyrics, slurs): pre-rendered, blitted each frame.
     // Self-correcting: a dropped frame or a tab returning from the background can let the beat
@@ -623,8 +679,14 @@ export class PianoRoll {
         this.ensureContentBuffer(displayBeat, width, rowHeight);
       }
     }
+    // Lit notes go on exactly the pixel grid the buffer is blitted to (its x is snapped to whole
+    // device pixels), so the lit copy covers the buffer's one without a sub-pixel double edge.
+    const blitX = this.snapToDevicePx(anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat);
+    const bufferBeatToX = (beat: number) => blitX + (beat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
+    const sounding = this.soundingNotes(playheadBeat, bufferBeatToX, rowHeight, contentAreaHeight, scale);
+    let lit = false;
     if (this.contentBuffer) {
-      const destX = this.snapToDevicePx(anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat);
+      const destX = blitX;
       // During a follow-the-music glide the buffer is scaled vertically (scale != 1); at rest it
       // is a pixel-aligned 1:1 copy, as before.
       const scrollYSnapped = scale === 1 ? this.snapToDevicePx(this.scrollY) : this.scrollY;
@@ -636,23 +698,43 @@ export class PianoRoll {
       const destTop = (srcTop - scrollYSnapped) * scale;
       const srcHeightCss = Math.min(contentAreaHeight / scale, contentH - srcTop);
       if (srcWidthCss > 0 && srcHeightCss > 0) {
+        if (this.lantern && this.glassBuffer) {
+          // Behind the paper: each hole's colour filter, lit by the lamp...
+          const glass = this.glassBuffer;
+          const lampX = beatToX(this.lampBeat(playheadBeat, width / this.pixelsPerBeat));
+          this.lantern.under(ctx, width, contentAreaHeight, lampX, (lctx) =>
+            lctx.drawImage(glass, srcStartCss * GLASS_SCALE, srcTop * GLASS_SCALE, srcWidthCss * GLASS_SCALE, srcHeightCss * GLASS_SCALE, destX + srcStartCss, destTop, srcWidthCss, srcHeightCss * scale),
+          sounding);
+          lit = true;
+        }
+        // ...and the paper with its holes on top.
         ctx.drawImage(this.contentBuffer, srcStartCss * this.dpr, srcTop * this.dpr, srcWidthCss * this.dpr, srcHeightCss * this.dpr, destX + srcStartCss, destTop, srcWidthCss, srcHeightCss * scale);
+        if (LANTERN) {
+          // Paper also where the roll's content doesn't reach (above/below its pitch range).
+          const covered = destTop + srcHeightCss * scale;
+          ctx.fillStyle = LANTERN_PAPER;
+          if (destTop > 0) ctx.fillRect(0, 0, width, destTop);
+          if (covered < contentAreaHeight) ctx.fillRect(0, covered, width, contentAreaHeight - covered);
+        }
       }
     }
+    if (LANTERN) drawLoopRegion();
 
     const playheadXPos = this.snapToDevicePx(beatToX(playheadBeat));
-    // Played music steps back; the notes sounding right now light up. Both are per-frame overlays
-    // on top of the buffer (they depend on the playhead), and cheap: one rect, plus one glowing
-    // pill per voice that is actually singing at this instant.
+    // Played music steps back (one rect over it -- with the lantern a soft edge instead, which
+    // leaves the lamp's glow whole); the notes sounding right now light up.
     if (playheadXPos > 0) {
-      ctx.fillStyle = PAST_SHADE;
+      if (LANTERN) {
+        const fade = ctx.createLinearGradient(playheadXPos - PAST_FADE_PX, 0, playheadXPos, 0);
+        fade.addColorStop(0, PAST_SHADE);
+        fade.addColorStop(1, 'rgba(13,12,22,0)');
+        ctx.fillStyle = fade;
+      } else ctx.fillStyle = PAST_SHADE;
       ctx.fillRect(0, 0, Math.min(width, playheadXPos), contentAreaHeight);
     }
-    // Lit notes go on exactly the pixel grid the buffer was blitted to (its x is snapped to whole
-    // device pixels), so the lit copy covers the buffer's one without a sub-pixel double edge.
-    const blitX = this.snapToDevicePx(anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat);
-    const bufferBeatToX = (beat: number) => blitX + (beat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
-    this.drawSoundingNotes(ctx, playheadBeat, bufferBeatToX, rowHeight, contentAreaHeight, scale);
+    // In front of the paper: the lamp's glow and the light spilling from its holes.
+    if (lit) this.lantern!.over(ctx);
+    this.drawSoundingNotes(ctx, sounding, rowHeight, scale);
 
     // Preview note label: set by a click on a note (see hitTestNote); shows its pitch name at the
     // start of that note. Drawn fresh each frame since it's transient UI state, not score content.
@@ -678,9 +760,12 @@ export class PianoRoll {
     // displayBeat -- panning the view away from it (e.g. browsing while paused) is allowed, and
     // this keeps tracking where the piece is/will resume from. Drawn last, full height.
     if (playheadXPos >= -36 && playheadXPos <= width + 36) {
-      playheadBeam(ctx, playheadXPos, 0, height);
+      // The lantern's reading line is lit by the lamp behind it -- the line itself only a fine mark.
+      if (!LANTERN) playheadBeam(ctx, playheadXPos, 0, height);
+      ctx.fillStyle = LANTERN ? paper(0.72) : PAPER;
+      if (LANTERN) ctx.fillRect(playheadXPos - 0.5, 0, 1, height);
+      else ctx.fillRect(playheadXPos - 1, 0, 2, height);
       ctx.fillStyle = PAPER;
-      ctx.fillRect(playheadXPos - 1, 0, 2, height);
       ctx.beginPath();
       ctx.moveTo(playheadXPos - 6, 0);
       ctx.lineTo(playheadXPos + 6, 0);
@@ -690,9 +775,10 @@ export class PianoRoll {
     }
   }
 
-  /** Redraws, lit and glowing, the pill of every note sounding at the playhead (in content-area coordinates). */
-  private drawSoundingNotes(ctx: CanvasRenderingContext2D, beat: number, beatToX: (b: number) => number, rowHeight: number, areaHeight: number, scale: number) {
+  /** The notes sounding at the playhead: their pills (in content-area coordinates), colour and note. */
+  private soundingNotes(beat: number, beatToX: (b: number) => number, rowHeight: number, areaHeight: number, scale: number): Sounding[] {
     const pillH = this.pillHeight(rowHeight) * scale;
+    const out: Sounding[] = [];
     for (const part of this.score.parts) {
       if (this.hiddenParts.has(part.id) || this.dimmedParts.has(part.id)) continue;
       const notes = this.notesByPart.get(part.id);
@@ -712,19 +798,28 @@ export class PianoRoll {
         const w = note.durationBeats * this.pixelsPerBeat;
         const y = (this.rowY(note.midi + this.transpose) - rowHeight - this.scrollY + BAR_PAD_PX) * scale;
         if (y + pillH < 0 || y > areaHeight) continue;
+        out.push({ x: x + 1, y, w: Math.max(w - 3, 7), h: pillH, color, note });
+      }
+    }
+    return out;
+  }
+
+  /** Lights up the notes sounding at the playhead (the lantern lights their holes itself) and the syllables being sung. */
+  private drawSoundingNotes(ctx: CanvasRenderingContext2D, sounding: Sounding[], rowHeight: number, scale: number) {
+    for (const s of sounding) {
+      if (!LANTERN) {
         // Lit gel, glowing in the voice's colour.
         ctx.save();
-        ctx.shadowColor = color;
+        ctx.shadowColor = s.color;
         ctx.shadowBlur = 18;
-        if (NOTE_STYLE === 'punched') punchedHole(ctx, x + 1, y, Math.max(w - 3, 7), pillH, color, true);
-        else gelPill(ctx, x + 1, y, Math.max(w - 3, 7), pillH, color, true);
+        gelPill(ctx, s.x, s.y, s.w, s.h, s.color, true);
         ctx.restore();
-        // The syllable being sung lights up in its lane (drawn over the buffer's quieter copy).
-        if (note.lyric) {
-          // Same size and weight as the buffer's copy underneath, so it covers it exactly.
-          const bmp = this.getLyricBitmap(note.lyric, PAPER, lyricFontPx(rowHeight), 550);
-          ctx.drawImage(bmp.canvas, x + 2, y + pillH + scale, bmp.cssWidth * scale, bmp.cssHeight * scale);
-        }
+      }
+      // The syllable being sung lights up in its lane (drawn over the buffer's quieter copy).
+      if (s.note.lyric) {
+        // Same size and weight as the buffer's copy underneath, so it covers it exactly.
+        const bmp = this.getLyricBitmap(s.note.lyric, PAPER, lyricFontPx(rowHeight), 550);
+        ctx.drawImage(bmp.canvas, s.x + 1, s.y + s.h + scale, bmp.cssWidth * scale, bmp.cssHeight * scale);
       }
     }
   }
@@ -766,6 +861,17 @@ export class PianoRoll {
     bctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.paintContent(bctx, originBeat, bufCssWidth, contentH, rowHeight);
     this.contentBuffer = buf;
+    if (LANTERN) {
+      const glass = this.glassBuffer ?? document.createElement('canvas');
+      glass.width = Math.max(1, Math.round(bufCssWidth * GLASS_SCALE));
+      glass.height = Math.max(1, Math.round(contentH * GLASS_SCALE));
+      const gctx = glass.getContext('2d');
+      if (gctx) {
+        gctx.setTransform(GLASS_SCALE, 0, 0, GLASS_SCALE, 0, 0);
+        this.paintGlass(gctx, originBeat, bufCssWidth, rowHeight);
+      }
+      this.glassBuffer = glass;
+    }
 
     const rulerBuf = this.rulerBuffer ?? document.createElement('canvas');
     rulerBuf.width = buf.width;
@@ -825,7 +931,11 @@ export class PianoRoll {
   private paintContent(ctx: CanvasRenderingContext2D, originBeat: number, widthCss: number, heightCss: number, rowHeight: number) {
     const localBeatToX = (beat: number) => (beat - originBeat) * this.pixelsPerBeat;
     ctx.clearRect(0, 0, widthCss, heightCss);
-    if (NOTE_STYLE === 'punched') paperGrain(ctx, widthCss, heightCss);
+    if (LANTERN) {
+      ctx.fillStyle = LANTERN_PAPER;
+      ctx.fillRect(0, 0, widthCss, heightCss);
+      paperGrain(ctx, widthCss, heightCss);
+    }
 
     // Rows shaded like piano keys: black-key rows a touch darker, and a hairline under every C, so
     // intervals and octaves can be read at a glance without a persistent keyboard.
@@ -833,7 +943,7 @@ export class PianoRoll {
       const pc = ((midi % 12) + 12) % 12;
       const y = this.rowY(midi) - rowHeight;
       if (BLACK_KEY_PITCH_CLASSES.has(pc)) {
-        ctx.fillStyle = NOTE_STYLE === 'punched' ? 'rgba(0,0,0,0.13)' : 'rgba(0,0,0,0.26)';
+        ctx.fillStyle = LANTERN ? 'rgba(0,0,0,0.13)' : 'rgba(0,0,0,0.26)';
         ctx.fillRect(0, y, widthCss, rowHeight);
       }
       if (pc === 0) {
@@ -879,13 +989,15 @@ export class PianoRoll {
         pills.push([x + 1, y, Math.max(w - 3, 7)]);
         if (!dimmed && note.lyric) lyricNotes.push({ note, x, y, index });
       }
-      // Punched: slurs are print on the paper, under the holes; gel: threads over the beads.
-      if (NOTE_STYLE === 'punched') this.paintSlurThreads(ctx, partId, localBeatToX, widthCss, rowHeight, color, dimmed);
-      ctx.globalAlpha = dimmed ? DIMMED_ALPHA : 1;
-      for (const [px, py, pw] of pills) {
-        if (NOTE_STYLE === 'punched') punchedHole(ctx, px, py, pw, pillH, color);
-        else gelPill(ctx, px, py, pw, pillH, color);
+      // Lantern: slurs are print on the paper, under the holes, which are then cut out of it (a
+      // turned-down voice's are only marked); gel: beads with threads over them.
+      if (LANTERN) {
+        this.paintSlurThreads(ctx, partId, localBeatToX, widthCss, rowHeight, color, dimmed);
+        if (dimmed) markHoles(ctx, pills, pillH, color);
+        else cutHoles(ctx, pills, pillH);
       }
+      ctx.globalAlpha = dimmed ? DIMMED_ALPHA : 1;
+      if (!LANTERN) for (const [px, py, pw] of pills) gelPill(ctx, px, py, pw, pillH, color);
       if (NOTE_STYLE === 'gel') this.paintSlurThreads(ctx, partId, localBeatToX, widthCss, rowHeight, color, dimmed);
       ctx.globalAlpha = 1;
 
@@ -931,6 +1043,28 @@ export class PianoRoll {
 
   }
 
+  /** Lantern style: each hole's colour filter, in the voice's colour (a turned-down voice has no holes -- see markHoles). */
+  private paintGlass(ctx: CanvasRenderingContext2D, originBeat: number, widthCss: number, rowHeight: number) {
+    ctx.clearRect(0, 0, widthCss, this.contentHeightPx());
+    const pillH = this.pillHeight(rowHeight);
+    for (const part of this.score.parts) {
+      if (this.hiddenParts.has(part.id) || this.dimmedParts.has(part.id)) continue;
+      const notes = this.notesByPart.get(part.id);
+      if (!notes) continue;
+      ctx.fillStyle = this.partColor(part.id);
+      ctx.beginPath();
+      for (const note of notes) {
+        const x = (note.startBeat - originBeat) * this.pixelsPerBeat;
+        const w = note.durationBeats * this.pixelsPerBeat;
+        if (x + w < -10 || x > widthCss + 10) continue;
+        const y = this.rowY(note.midi + this.transpose) - rowHeight + BAR_PAD_PX;
+        const pw = Math.max(w - 3, 7);
+        ctx.roundRect(x - 0.5, y - 1.5, pw + 3, pillH + 3, (pillH + 3) / 2);
+      }
+      ctx.fill();
+    }
+  }
+
   /**
    * Slurs as threads in the logo's style: a glowing line in a light tint of the voice's colour,
    * running from inside the tail of each slurred note into the head of the next, a small dot where
@@ -967,7 +1101,7 @@ export class PianoRoll {
     const dim = dimmed ? DIMMED_ALPHA : 1;
     const light = towardPaper(color, 0.6);
     ctx.lineCap = 'round';
-    if (NOTE_STYLE === 'punched') {
+    if (LANTERN) {
       // Printed on the roll: a fine line in a tint of the voice, no glow.
       ctx.strokeStyle = towardPaper(color, 0.35);
       ctx.globalAlpha = 0.6 * dim;
@@ -1086,4 +1220,39 @@ function slurChain(notes: NoteEvent[], slur: SlurArc): NoteEvent[] {
     chain.push(n);
   }
   return chain;
+}
+
+/**
+ * Lantern style: cuts round holes out of the paper in the content buffer (transparent there, so
+ * the lamp behind shows through), with a faint dark line along each cut edge.
+ */
+function cutHoles(ctx: CanvasRenderingContext2D, pills: [number, number, number][], h: number) {
+  if (!pills.length) return;
+  const holes = new Path2D();
+  for (const [x, y, w] of pills) holes.roundRect(x, y, w, h, Math.min(h / 2, w / 2));
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fillStyle = '#000'; // any opaque colour: it's the coverage that cuts
+  ctx.fill(holes);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.strokeStyle = 'rgba(6,4,10,0.35)';
+  ctx.lineWidth = 1;
+  ctx.stroke(holes);
+  ctx.restore();
+}
+
+/** Lantern style, a turned-down voice: its holes only marked on the paper, not cut -- no light. */
+function markHoles(ctx: CanvasRenderingContext2D, pills: [number, number, number][], h: number, color: string) {
+  if (!pills.length) return;
+  const marks = new Path2D();
+  for (const [x, y, w] of pills) marks.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, Math.min(h / 2, w / 2));
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = withAlpha(color, 0.12);
+  ctx.fill(marks);
+  ctx.strokeStyle = withAlpha(color, 0.3);
+  ctx.lineWidth = 1;
+  ctx.stroke(marks);
+  ctx.restore();
 }
