@@ -2508,6 +2508,10 @@ body::after {
   z-index: 1;
 }
 
+body:has(#app.mode-landing)::after {
+  display: none;
+}
+
 /* Glass: bars, panels, floating controls. Real blur where something sharp passes behind (the
    repertoire header over scrolling cards, the title screen's buttons over the ribbons, overlays);
    the player's permanent panels only have the soft waves behind them, so they are tinted glass

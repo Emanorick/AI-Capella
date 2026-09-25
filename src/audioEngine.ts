@@ -33,11 +33,183 @@ export function startTonesLeadSec(count: number, bpm: number): number {
   return count * t.spacing + (count > 1 ? t.chord : 0) + t.gap;
 }
 
-/** An audible "voice": whichever oscillators make up one note or click, sharing one gain node
- *  that controls its envelope/volume. clearSchedule() fades/stops a whole voice at once. */
+/** An audible "voice": whichever sources (oscillators, sample players) make up one note or click,
+ *  sharing one gain node that controls its envelope/volume. clearSchedule() fades/stops a whole
+ *  voice at once. */
 interface Voice {
-  oscillators: OscillatorNode[];
+  sources: AudioScheduledSourceNode[];
   gain: GainNode;
+}
+
+/** The playback sound, chosen per device: the sampled grand piano, or a sustained sung "oo". */
+export type Sound = 'piano' | 'voice';
+
+// (The note functions below are exported for the sound check in the development notes; the app
+// itself only uses them through AudioEngine.)
+
+// ---- Sampled grand piano -------------------------------------------------------------------
+// Salamander Grand Piano V3 (Alexander Holm, CC BY 3.0 -- see public/samples/piano/ATTRIBUTION.txt):
+// one recording every third semitone from A1 to C7, so no note is pitch-shifted by more than one
+// and a half semitones. Loaded once per page and shared by every AudioEngine (an AudioBuffer isn't
+// tied to the context that decoded it). Until they're in -- or if they can't be loaded -- the
+// synthesized piano below plays instead.
+const SAMPLE_ROOTS = Array.from({ length: 22 }, (_, i) => 33 + i * 3);
+const SAMPLE_LEVEL = 1.8; // matched in loudness to the other sounds (measured over a six-voice passage)
+const SAMPLE_RELEASE_SEC = 0.09; // time constant of the damper after note-off
+let sampleBuffers: Map<number, AudioBuffer> | null = null;
+let sampleLoad: Promise<void> | null = null;
+
+export function loadPianoSamples(ctx: BaseAudioContext): Promise<void> {
+  sampleLoad ??= (async () => {
+    const base = `${import.meta.env.BASE_URL}samples/piano/`;
+    const entries = await Promise.all(
+      SAMPLE_ROOTS.map(async (midi) => {
+        const res = await fetch(`${base}p${midi}.mp3`);
+        if (!res.ok) throw new Error(`p${midi}.mp3: ${res.status}`);
+        return [midi, await ctx.decodeAudioData(await res.arrayBuffer())] as const;
+      }),
+    );
+    sampleBuffers = new Map(entries);
+  })().catch((err) => {
+    sampleLoad = null; // try again with the next song
+    console.warn('Piano samples unavailable, using the synthesized piano:', err);
+  });
+  return sampleLoad;
+}
+
+export function nearestSample(midi: number): { root: number; buffer: AudioBuffer } | null {
+  if (!sampleBuffers) return null;
+  const clamped = Math.min(SAMPLE_ROOTS[SAMPLE_ROOTS.length - 1], Math.max(SAMPLE_ROOTS[0], midi));
+  const root = SAMPLE_ROOTS[Math.round((clamped - SAMPLE_ROOTS[0]) / 3)];
+  const buffer = sampleBuffers.get(root);
+  return buffer ? { root, buffer } : null;
+}
+
+/** One note of the sampled piano: the nearest recording, re-pitched, with a damper at note-off. */
+export function playSampledNote(ctx: AudioContext, destination: AudioNode, startTime: number, duration: number, midi: number, sample: { root: number; buffer: AudioBuffer }): Voice {
+  const source = ctx.createBufferSource();
+  source.buffer = sample.buffer;
+  source.playbackRate.value = Math.pow(2, (midi - sample.root) / 12);
+  const gain = ctx.createGain();
+  const noteOff = startTime + duration;
+  gain.gain.setValueAtTime(SAMPLE_LEVEL, startTime);
+  gain.gain.setValueAtTime(SAMPLE_LEVEL, noteOff);
+  gain.gain.setTargetAtTime(0, noteOff, SAMPLE_RELEASE_SEC);
+  source.connect(gain).connect(destination);
+  source.start(startTime);
+  source.stop(Math.min(noteOff + SAMPLE_RELEASE_SEC * 7, startTime + sample.buffer.duration / source.playbackRate.value));
+  source.addEventListener('ended', () => {
+    try {
+      source.disconnect();
+      gain.disconnect();
+    } catch {
+      // already disconnected
+    }
+  });
+  return { sources: [source], gain };
+}
+
+// ---- Sustained voice ("oo") ------------------------------------------------------------------
+// For practising long notes, where a piano tone dies away: two slightly detuned buzzy sources (a
+// small chorus) through the vowel formants of the starting-tone "du", without its consonant, with
+// a singer's vibrato fading in on longer notes. Low voices get slightly darker formants.
+const VOICE_LEVEL = 0.1; // a sustained tone sounds louder than a decaying one at the same peak -- matched by ear-level RMS
+
+export function playVoiceNote(ctx: AudioContext, destination: AudioNode, startTime: number, duration: number, midi: number): Voice {
+  const freq = midiToFreq(midi);
+  const noteOff = startTime + duration;
+  const darker = midi < 55 ? 0.9 : 1;
+  const sources: OscillatorNode[] = [];
+  const nodes: AudioNode[] = [];
+  const mix = ctx.createGain();
+  for (const detune of [-4, 4]) {
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.value = freq;
+    osc.detune.value = detune;
+    osc.connect(mix);
+    sources.push(osc);
+  }
+  if (duration > 0.55) {
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 5.2;
+    const depth = ctx.createGain();
+    depth.gain.setValueAtTime(0, startTime);
+    depth.gain.setValueAtTime(0, startTime + 0.3);
+    depth.gain.linearRampToValueAtTime(freq * 0.0045, startTime + Math.min(duration, 0.9));
+    lfo.connect(depth);
+    for (const osc of sources) depth.connect(osc.frequency);
+    sources.push(lfo);
+    nodes.push(depth);
+  }
+  const out = ctx.createGain();
+  for (const f of DU_FORMANTS) {
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = f.freq * darker;
+    bp.Q.value = f.freq / f.bw;
+    const g = ctx.createGain();
+    g.gain.value = f.gain * 3;
+    mix.connect(bp).connect(g).connect(out);
+    nodes.push(bp, g);
+  }
+  const body = ctx.createBiquadFilter();
+  body.type = 'lowpass';
+  body.frequency.value = Math.max(700, freq * 1.5);
+  const bodyGain = ctx.createGain();
+  bodyGain.gain.value = 0.6;
+  mix.connect(body).connect(bodyGain).connect(out);
+  nodes.push(mix, body, bodyGain);
+
+  const amp = ctx.createGain();
+  const onFormant = Math.exp(-(Math.log2(freq / DU_FORMANTS[0].freq) ** 2) / (2 * 0.35 ** 2));
+  const peak = VOICE_LEVEL * (1 - 0.3 * onFormant);
+  amp.gain.setValueAtTime(0, startTime);
+  amp.gain.linearRampToValueAtTime(peak, startTime + Math.min(0.06, duration * 0.4));
+  amp.gain.setValueAtTime(peak, Math.max(startTime + Math.min(0.06, duration * 0.4), noteOff - 0.02));
+  amp.gain.setTargetAtTime(0, noteOff, 0.05);
+  out.connect(amp).connect(destination);
+  nodes.push(out, amp);
+  for (const src of sources) {
+    src.start(startTime);
+    src.stop(noteOff + 0.35);
+  }
+  sources[0].addEventListener('ended', () => {
+    for (const n of [...sources, ...nodes]) {
+      try {
+        n.disconnect();
+      } catch {
+        // already disconnected
+      }
+    }
+  });
+  return { sources, gain: amp };
+}
+
+// ---- Room --------------------------------------------------------------------------------------
+// A small, warm room for everything but the metronome: a generated impulse response (decaying
+// noise that loses its highs as it decays, after a short pre-delay), so no file is needed.
+const REVERB_SEND = 0.2;
+
+export function makeRoomImpulse(ctx: BaseAudioContext): AudioBuffer {
+  const seconds = 1.6;
+  const rate = ctx.sampleRate;
+  const length = Math.floor(rate * seconds);
+  const impulse = ctx.createBuffer(2, length, rate);
+  let seed = 7;
+  const random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
+  for (let ch = 0; ch < 2; ch++) {
+    const data = impulse.getChannelData(ch);
+    let low = 0;
+    for (let i = 0; i < length; i++) {
+      const t = i / rate;
+      if (t < 0.012) continue;
+      const damping = 0.35 + 0.6 * (t / seconds);
+      low += (random() - low) * (1 - damping);
+      data[i] = low * Math.exp(-t * 4.2);
+    }
+  }
+  return impulse;
 }
 
 function midiToFreq(midi: number): number {
@@ -56,7 +228,7 @@ const PIANO_HARMONICS: { ratio: number; gain: number; type: OscillatorType }[] =
 ];
 
 /** Synthesizes a single plucked-piano-ish note; returns the voice so callers can track/stop it. */
-function playPianoNote(
+export function playPianoNote(
   ctx: AudioContext,
   destination: AudioNode,
   startTime: number,
@@ -89,7 +261,7 @@ function playPianoNote(
 
   const ampGain = ctx.createGain();
   const attack = 0.004;
-  const peak = 0.36;
+  const peak = 0.31;
   const noteOffTime = startTime + duration;
 
   // A hammer-struck string doesn't decay in one smooth curve -- there's a quick initial drop as
@@ -141,7 +313,7 @@ function playPianoNote(
     }
   });
 
-  return { oscillators, gain: ampGain };
+  return { sources: oscillators, gain: ampGain };
 }
 
 // Vowel "u" formants (Hz, relative level, bandwidth Hz) -- a dark, rounded "oo" that sits well
@@ -219,7 +391,7 @@ export function playDuNote(ctx: AudioContext, destination: AudioNode, startTime:
       }
     }
   });
-  return { oscillators: [source, lfo], gain: amp };
+  return { sources: [source, lfo], gain: amp };
 }
 
 function playClick(ctx: AudioContext, destination: AudioNode, startTime: number, accent: boolean): Voice {
@@ -245,7 +417,7 @@ function playClick(ctx: AudioContext, destination: AudioNode, startTime: number,
       // already disconnected
     }
   });
-  return { oscillators: [osc], gain };
+  return { sources: [osc], gain };
 }
 
 export type PartMixState = 'normal' | 'muted' | 'solo';
@@ -256,6 +428,7 @@ export class AudioEngine {
   private compressor: DynamicsCompressorNode;
   private metronomeGain: GainNode;
   private partGains = new Map<string, GainNode>();
+  private sound: Sound;
   private scheduledVoices: Voice[] = [];
   private playStartCtxTime = 0;
   private playStartBeat = 0;
@@ -269,8 +442,10 @@ export class AudioEngine {
   private beatMarkers: ReturnType<typeof getBeatMarkers>;
   private scheduledUpToBeat = 0; // notes/clicks with a beat before this have already been scheduled for the current play() session
 
-  constructor(score: Score) {
+  constructor(score: Score, sound: Sound = 'piano') {
     this.score = score;
+    this.sound = sound;
+    if (sound === 'piano') void loadPianoSamples(this.ctx);
     this.beatMarkers = getBeatMarkers(score);
     this.masterGain = this.ctx.createGain();
     this.masterGain.gain.value = 0.9;
@@ -283,17 +458,37 @@ export class AudioEngine {
     this.compressor.attack.value = 0.003;
     this.compressor.release.value = 0.15;
     this.masterGain.connect(this.compressor);
-    this.compressor.connect(this.ctx.destination);
+    // A limiter last in line: many voices on one chord (or a unison) must never clip -- the old
+    // synthesized sound did, measured at peaks of 1.15 with six voices.
+    const limiter = this.ctx.createDynamicsCompressor();
+    limiter.threshold.value = -3;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.001;
+    limiter.release.value = 0.1;
+    this.compressor.connect(limiter).connect(this.ctx.destination);
+
+    // The room: a reverb send from the master bus straight into the compressor. The metronome
+    // bypasses it (a click in a room just smears the beat).
+    const send = this.ctx.createGain();
+    send.gain.value = REVERB_SEND;
+    const room = this.ctx.createConvolver();
+    room.buffer = makeRoomImpulse(this.ctx);
+    this.masterGain.connect(send).connect(room).connect(this.compressor);
 
     this.metronomeGain = this.ctx.createGain();
-    this.metronomeGain.connect(this.masterGain);
+    this.metronomeGain.connect(this.compressor);
 
-    for (const part of score.parts) {
+    // Voices stand across the stereo field like a choir seen from the front: the score's first
+    // (usually highest) voice on the left, the last on the right.
+    score.parts.forEach((part, i) => {
       const g = this.ctx.createGain();
-      g.connect(this.masterGain);
+      const pan = this.ctx.createStereoPanner();
+      pan.pan.value = score.parts.length > 1 ? -0.45 + (0.9 * i) / (score.parts.length - 1) : 0;
+      g.connect(pan).connect(this.masterGain);
       this.partGains.set(part.id, g);
       this.mixState.set(part.id, 'normal');
-    }
+    });
     this.applyMix();
   }
 
@@ -305,7 +500,23 @@ export class AudioEngine {
   /** Plays a single short tone at the given (already-transposed) pitch, for click-to-audition. */
   previewNote(midi: number) {
     if (this.ctx.state === 'suspended') this.ctx.resume();
-    playPianoNote(this.ctx, this.masterGain, this.ctx.currentTime, 0.5, midi);
+    this.playNote(this.masterGain, this.ctx.currentTime, 0.5, midi);
+  }
+
+  /** Switches the playback sound; if playing, the rest of the piece is rescheduled with it. */
+  setSound(sound: Sound) {
+    if (sound === this.sound) return;
+    this.sound = sound;
+    if (sound === 'piano') void loadPianoSamples(this.ctx);
+    if (this.playing && !this.isCountingIn()) this.play(this.getCurrentBeat(), 60 / this.secPerBeat, this.lastTranspose);
+  }
+
+  /** One note in the current sound (the synthesized piano stands in until the samples are loaded). */
+  private playNote(destination: AudioNode, start: number, duration: number, midi: number): Voice {
+    if (this.sound === 'voice') return playVoiceNote(this.ctx, destination, start, duration, midi);
+    const sample = nearestSample(midi);
+    if (sample) return playSampledNote(this.ctx, destination, start, duration, midi, sample);
+    return playPianoNote(this.ctx, destination, start, duration, midi);
   }
 
   setMetronomeEnabled(enabled: boolean) {
@@ -374,7 +585,7 @@ export class AudioEngine {
       } catch {
         // already disconnected/errored -- fall through and still try to stop the oscillators
       }
-      for (const osc of voice.oscillators) {
+      for (const osc of voice.sources) {
         try {
           osc.stop(now + FADE_SEC);
         } catch {
@@ -529,7 +740,7 @@ export class AudioEngine {
       const gainNode = this.partGains.get(note.partId);
       if (!gainNode) continue;
       try {
-        this.scheduledVoices.push(playPianoNote(this.ctx, gainNode, start, dur, note.midi + this.lastTranspose));
+        this.scheduledVoices.push(this.playNote(gainNode, start, dur, note.midi + this.lastTranspose));
       } catch (err) {
         console.error('Skipping a note that could not be scheduled:', note, err);
       }

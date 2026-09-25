@@ -3,8 +3,8 @@
 //
 // - Page loads: network first, falling back to the stored page when offline. Every successful
 //   load also stores the build's scripts, styles and fonts, and drops those of older builds.
-// - Everything else from this site (hashed build files, fonts, icons, the sample song): stored
-//   copy first, network otherwise -- build files never change under the same name.
+// - Everything else from this site (hashed build files, fonts, icons, the sample song, the piano
+//   samples): stored copy first, network otherwise -- build files never change under the same name.
 // - Other hosts (Firebase) are left alone.
 const CACHE = 'ai-capella-v1';
 
@@ -47,6 +47,9 @@ async function storeBuild(html) {
       if (/latin|bravura/.test(fontUrl)) assets.add(fontUrl);
     }
   }
+  // The grand piano's samples (see src/audioEngine.ts), so it plays offline even if nobody played
+  // on this device while online.
+  for (let midi = 33; midi <= 96; midi += 3) assets.add(new URL(`samples/piano/p${midi}.mp3`, scope).href);
   await Promise.all([...assets].map((u) => cache.match(u).then((hit) => hit || cache.add(u).catch(() => {}))));
   // Prune scripts/styles from older builds (fonts are kept; their names rarely change).
   for (const req of await cache.keys()) {

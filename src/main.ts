@@ -7,13 +7,13 @@ import '@fontsource-variable/atkinson-hyperlegible-mono/wght.css';
 import './style.css';
 import { parseMusicXML } from './musicxml';
 import { parseMIDI } from './midi';
-import { AudioEngine, startTonesLeadSec, type PartMixState } from './audioEngine';
+import { AudioEngine, startTonesLeadSec, type PartMixState, type Sound } from './audioEngine';
 import { PianoRoll, RULER_HEIGHT_PX, type LoopRegion } from './pianoRoll';
 import { StaffView } from './staffView';
 import { OverviewStrip } from './overview';
 import { colorForPart } from './palette';
 import { measureAtBeat, type Score } from './score';
-import { deleteImportedSong, readScoreFile, saveImportedSong, saveSongConfig, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong, type VoiceClef } from './library';
+import { deleteImportedSong, readScoreFile, saveImportedSong, saveSongConfig, saveSongSections, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong, type VoiceClef } from './library';
 import { ensureSignedIn, isFirebaseConfigured } from './firebase';
 import { ensureAccess } from './pinGate';
 import { animateRibbons, coverDataFromScore, drawCover, drawMark, prepareCanvas, type CoverData } from './artwork';
@@ -203,6 +203,7 @@ const chipsEl = document.querySelector<HTMLDivElement>('#voice-chips')!;
 const zoomValueEl = document.querySelector<HTMLSpanElement>('#zoom-value')!;
 const sectionMarksEl = document.querySelector<HTMLDivElement>('#section-marks')!;
 const sectionAddBtn = document.querySelector<HTMLButtonElement>('#section-add-btn')!;
+attachSectionMenu(sectionMarksEl);
 const modeBadge = document.querySelector<HTMLButtonElement>('#mode-badge')!;
 const canvas = document.querySelector<HTMLCanvasElement>('#roll')!;
 const staffCanvas = document.querySelector<HTMLCanvasElement>('#staff')!;
@@ -291,6 +292,8 @@ function setViewMode(mode: 'landing' | 'library' | 'player') {
   app.classList.toggle('mode-landing', mode === 'landing');
   app.classList.toggle('mode-library', mode === 'library');
   app.classList.toggle('mode-player', mode === 'player');
+  // The title screen keeps its plain ground: only the voice ribbons move there.
+  backdrop.setShown(mode !== 'landing');
   closeOverlay();
   if (mode === 'landing' && !stopLandingRibbons) {
     stopLandingRibbons = animateRibbons(document.querySelector<HTMLCanvasElement>('#landing-ribbons')!, (w, h) =>
@@ -439,6 +442,21 @@ function chooseMode(mode: 'solo' | 'ensemble') {
 }
 document.querySelector<HTMLButtonElement>('#mode-solo-btn')!.addEventListener('click', () => chooseMode('solo'));
 document.querySelector<HTMLButtonElement>('#mode-ensemble-btn')!.addEventListener('click', () => chooseMode('ensemble'));
+
+// Playback sound, chosen per device (not synced -- each singer may prefer another).
+const SOUND_KEY = 'ai-capella-sound';
+let playbackSound: Sound = localStorage.getItem(SOUND_KEY) === 'voice' ? 'voice' : 'piano';
+function soundItems() {
+  const choose = (sound: Sound) => () => {
+    playbackSound = sound;
+    localStorage.setItem(SOUND_KEY, sound);
+    audioEngine?.setSound(sound);
+  };
+  return [
+    { label: t('soundPiano'), icon: 'quarter' as const, checked: playbackSound === 'piano', onSelect: choose('piano') },
+    { label: t('soundVoice'), icon: 'users' as const, checked: playbackSound === 'voice', onSelect: choose('voice') },
+  ];
+}
 
 function languageItems() {
   return [
@@ -929,7 +947,7 @@ async function loadSongLocally(song: SongEntry) {
   lastAppliedMetronomeOn = false;
 
   audioEngine?.dispose();
-  audioEngine = new AudioEngine(score);
+  audioEngine = new AudioEngine(score, playbackSound);
   audioEngine.setDuckedVolume(duckVolume);
   const partColor = (partId: string) => colorForPart(score.parts.findIndex((p) => p.id === partId), score.parts.length);
   currentPartColor = partColor;
@@ -1613,11 +1631,12 @@ function sectionsBlock(): HTMLElement | null {
   head.innerHTML = `<span class="label">${t('sections')}</span>`;
   const note = document.createElement('span');
   note.className = 'ctl-note';
-  if (!currentScore?.rehearsalMarks.length && currentSong?.imported) note.textContent = t('addSectionsOnLaptop');
+  if (sectionsEditable()) note.textContent = t('addSectionsOnLaptop');
   head.appendChild(note);
   const row = document.createElement('div');
   row.className = 'mark-row';
   sections.forEach((s, i) => row.appendChild(sectionButton(s.label, i)));
+  attachSectionMenu(row);
   block.append(head, row);
   return block;
 }
@@ -1848,9 +1867,99 @@ function sectionButton(label: string, index: number): HTMLButtonElement {
   b.dataset.action = 'section-jump';
   b.dataset.index = String(index);
   b.textContent = label;
-  b.title = t('jumpToSection', { label });
+  b.title = sectionsEditable() ? `${t('jumpToSection', { label })} · ${t(isNarrow() ? 'sectionHoldHint' : 'sectionRightClickHint')}` : t('jumpToSection', { label });
   b.setAttribute('aria-label', t('jumpToSection', { label }));
   return b;
+}
+
+/** Hand-set marks can be removed; marks printed in the source file can't. */
+function sectionsEditable(): boolean {
+  return !!currentSong?.imported && !currentScore?.rehearsalMarks.length;
+}
+
+/**
+ * After adding or removing a hand-set mark: letters follow the order in the piece again (A, B, C
+ * -- no gaps or doubles after removing one), the views update, and the marks are saved for the
+ * song right away.
+ */
+function sectionsChanged() {
+  manualSections.sort((a, b) => a.beat - b.beat);
+  manualSections.forEach((s, i) => (s.label = i < 26 ? String.fromCharCode(65 + i) : `#${i + 1}`));
+  renderSections();
+  renderNow();
+  const song = currentSong;
+  if (!song?.imported) return;
+  const saved = manualSections.map((s) => ({ ...s }));
+  song.savedConfig = { ...song.savedConfig, sections: saved };
+  saveSongSections(song.id, saved).catch((err) => toast(t('saveDefaultsFailed', { msg: errorText(err) }), 'error'));
+}
+
+function removeSection(index: number) {
+  const removed = manualSections.splice(index, 1)[0];
+  if (!removed) return;
+  sectionsChanged();
+  toast(t('sectionRemoved', { label: removed.label }));
+}
+
+async function removeAllSections() {
+  const ok = await confirmDialog({ title: t('removeAllSectionsTitle'), body: t('removeAllSectionsBody'), confirmLabel: t('removeAllSections'), danger: true });
+  if (!ok) return;
+  manualSections = [];
+  sectionsChanged();
+}
+
+/** Right-click or hold on a section letter: jump there, or remove it. */
+function openSectionMenu(anchor: HTMLElement) {
+  const index = Number(anchor.dataset.index);
+  const section = effectiveSections()[index];
+  if (!section) return;
+  const items: Parameters<typeof openMenu>[1] = [{ label: t('jumpToSection', { label: section.label }), icon: 'flag', onSelect: () => seekToBeat(section.beat, { recenterView: true }) }];
+  if (sectionsEditable()) {
+    items.push({ label: t('removeSection', { label: section.label }), icon: 'trash', danger: true, onSelect: () => removeSection(index) });
+    if (manualSections.length > 1) items.push({ label: t('removeAllSections'), icon: 'trash', danger: true, onSelect: () => void removeAllSections() });
+  }
+  openMenu(anchor, items, t('sections'));
+}
+
+/** Section letters in `container` open the section menu on right-click or a long press. */
+function attachSectionMenu(container: HTMLElement) {
+  let timer: number | null = null;
+  let held = false;
+  const markAt = (e: Event) => (e.target as HTMLElement).closest<HTMLElement>('.rmark[data-index]');
+  const cancel = () => {
+    if (timer != null) clearTimeout(timer);
+    timer = null;
+  };
+  container.addEventListener('contextmenu', (e) => {
+    const mark = markAt(e);
+    if (!mark) return;
+    e.preventDefault();
+    cancel();
+    openSectionMenu(mark);
+  });
+  container.addEventListener('pointerdown', (e) => {
+    const mark = markAt(e);
+    if (!mark || e.pointerType === 'mouse') return;
+    held = false;
+    cancel();
+    timer = window.setTimeout(() => {
+      timer = null;
+      held = true;
+      openSectionMenu(mark);
+    }, 520);
+  });
+  for (const type of ['pointerup', 'pointercancel', 'pointerleave'] as const) container.addEventListener(type, cancel);
+  // The click that ends a long press mustn't also jump.
+  container.addEventListener(
+    'click',
+    (e) => {
+      if (!held) return;
+      held = false;
+      e.stopPropagation();
+      e.preventDefault();
+    },
+    true,
+  );
 }
 
 /** Places the section letters over the whole-piece strip, and sets whether + (add) is offered. */
@@ -1879,8 +1988,9 @@ function openPlayerMenu(anchor: HTMLElement) {
     if (removed) items.push({ label: t('restoreVoices', { n: removed }), icon: 'users', onSelect: () => void setRemovedParts([]) });
     // Saving defaults is a laptop task, like adding sections.
     if (!isNarrow()) items.push({ label: t('saveDefaults'), icon: 'save', onSelect: saveDefaults });
+    if (sectionsEditable() && manualSections.length) items.push({ label: t('removeAllSections'), icon: 'flag', onSelect: () => void removeAllSections() });
   }
-  items.push(...languageItems());
+  items.push(...soundItems(), ...languageItems());
   openMenu(anchor, items, t('menu'));
 }
 
@@ -1994,11 +2104,8 @@ document.addEventListener('click', (e) => {
     }
     case 'section-add':
       if (currentSong?.imported && audioEngine) {
-        const label = manualSections.length < 26 ? String.fromCharCode(65 + manualSections.length) : `#${manualSections.length + 1}`;
-        manualSections.push({ label, beat: engineBeat() });
-        manualSections.sort((a, b) => a.beat - b.beat);
-        renderSections();
-        renderNow();
+        manualSections.push({ label: '', beat: engineBeat() });
+        sectionsChanged();
       }
       break;
   }

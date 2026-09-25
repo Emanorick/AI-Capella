@@ -226,11 +226,15 @@ Section letters (A, B, C, …) show as boxed rehearsal marks — in the score's 
 whole-piece strip (laptop) and in the phone's Tempo & key sheet — and jump straight to their
 section. They come from the MusicXML file's own `<rehearsal>` marks (`Score.rehearsalMarks`,
 §4.2) when it has any; otherwise the laptop-only flag button at the end of the whole-piece strip
-marks the playhead position as the next letter. Hand-added letters stay local until **Save tempo,
-key and sections as default** (player ⋯ menu, laptop only, library songs only) writes the current
-transpose, tempo and hand-added letters to the song's Firestore document, applied the next time
-the song is freshly selected (`saveSongConfig` in `library.ts`). A file with its own rehearsal
-marks never offers hand-added ones.
+marks the playhead position as the next letter. Hand-added letters are bookmarks: they're saved to
+the song right away (`saveSongSections`, only `savedConfig.sections`), and after every change the
+letters follow their order in the piece again (A, B, C — no gap or double after removing one).
+**Removing**: right-click a letter on the whole-piece strip (laptop) or hold it in the phone's
+Tempo & key sheet → jump there / remove this section / remove all; the player ⋯ menu also has
+**Remove all sections** (with a confirmation). Letters printed in the file itself can't be removed.
+**Save tempo, key and sections as default** (player ⋯ menu, laptop only, library songs only) still
+snapshots transpose and tempo together with the letters (`saveSongConfig`). A file with its own
+rehearsal marks never offers hand-added ones.
 
 ### Import & shared library
 - Drop files anywhere on the repertoire page, or use **Add arrangement**, to import `.musicxml`, `.xml`, `.mxl` (MuseScore's
@@ -622,10 +626,23 @@ event but do change the canvas's actual laid-out box.
 
 ### 4.4 Audio (`audioEngine.ts`)
 
-No audio files, no MIDI — every note is synthesized live with the Web Audio API:
-- Each note is two detuned oscillators (a triangle fundamental plus a quiet sine an octave-ish
-  up) through a lowpass filter that sweeps down as the note decays, giving a simple
-  plucked-piano-ish timbre, with an attack/decay/release envelope on a per-note gain node.
+Two playback sounds, chosen per device in the player ⋯ menu (`ai-capella-sound`, not synced):
+- **Grand piano** (default): recorded samples of the **Salamander Grand Piano V3** (Alexander Holm,
+  Yamaha C5, CC BY 3.0 — credited in `public/samples/piano/ATTRIBUTION.txt`), velocity layer 8 of
+  16, one note every third semitone from A1 to C7 (22 files, 1.7 MB: leading silence removed,
+  shortened to 5–8 s with a fade, mono, 96 kbit/s MP3, named by MIDI number). Each note plays the
+  nearest recording re-pitched by at most 1.5 semitones, with a damper at note-off. Loaded once per
+  page and shared by every engine; the service worker stores them for offline use. Until they're
+  loaded (or if they can't be), the earlier synthesized piano plays — triangle + sines with a
+  sweeping lowpass and an attack/decay/release envelope.
+- **Voice (oo)**: a sustained sung tone for long notes, where a piano dies away — two slightly
+  detuned sawtooth sources through the "u" vowel formants of the starting-tone "du" (darker for low
+  voices), vibrato fading in on longer notes.
+- **Mix**: voices stand across the stereo field like a choir seen from the front (first voice left,
+  last right); a small generated room (convolution with a noise impulse that darkens as it decays,
+  1.6 s) on everything but the metronome; bus compressor, then a limiter — measured over a six-voice
+  passage, the old synthesized sound peaked at 1.15 (clipping), now every sound stays below 0.95 at
+  matched loudness.
 - Playback works by **scheduling every note's oscillators up front** at the moment `play()` is
   called, using the Web Audio clock (`AudioContext.currentTime` plus each note's beat offset
   converted via the current BPM) — not by ticking through notes one at a time in JS. This is

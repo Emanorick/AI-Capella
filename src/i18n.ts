@@ -97,7 +97,7 @@ const en = {
   sections: 'Sections',
   jumpToSection: 'Jump to section {label}',
   addSection: 'Mark a section at the playhead',
-  addSectionsOnLaptop: 'Add sections on a laptop',
+  addSectionsOnLaptop: 'Add sections on a laptop · hold a letter to remove it',
   saveDefaults: 'Save tempo, key and sections as default',
   savedDefaults: 'Saved as this song’s default.',
   saveDefaultsFailed: "Couldn't save the defaults: {msg}",
@@ -192,6 +192,15 @@ const en = {
   fullView: "Full view",
   singAlongView: "Sing-along view",
   voiceOnOff: "{name}: hear on/off · hold for all voices",
+  removeSection: "Remove section {label}",
+  removeAllSections: "Remove all sections",
+  removeAllSectionsTitle: "Remove all sections?",
+  removeAllSectionsBody: "The section letters you set for this piece are removed for everyone.",
+  sectionRemoved: "Section {label} removed",
+  sectionRightClickHint: "right-click to remove",
+  sectionHoldHint: "hold to remove",
+  soundPiano: "Sound: grand piano",
+  soundVoice: "Sound: voice (oo)",
 };
 
 const de: Record<keyof typeof en, string> = {
@@ -288,7 +297,7 @@ const de: Record<keyof typeof en, string> = {
   sections: 'Abschnitte',
   jumpToSection: 'Zu Abschnitt {label} springen',
   addSection: 'Abschnitt an der Abspielposition setzen',
-  addSectionsOnLaptop: 'Abschnitte am Laptop setzen',
+  addSectionsOnLaptop: 'Abschnitte am Laptop setzen · Buchstaben halten zum Entfernen',
   saveDefaults: 'Tempo, Tonart und Abschnitte als Standard speichern',
   savedDefaults: 'Als Standard für dieses Stück gespeichert.',
   saveDefaultsFailed: 'Der Standard konnte nicht gespeichert werden: {msg}',
@@ -383,6 +392,15 @@ const de: Record<keyof typeof en, string> = {
   fullView: "Volle Ansicht",
   singAlongView: "Mitsing-Ansicht",
   voiceOnOff: "{name}: hören an/aus · halten für alle Stimmen",
+  removeSection: "Abschnitt {label} entfernen",
+  removeAllSections: "Alle Abschnitte entfernen",
+  removeAllSectionsTitle: "Alle Abschnitte entfernen?",
+  removeAllSectionsBody: "Die für dieses Stück gesetzten Abschnittsbuchstaben werden für alle entfernt.",
+  sectionRemoved: "Abschnitt {label} entfernt",
+  sectionRightClickHint: "Rechtsklick zum Entfernen",
+  sectionHoldHint: "halten zum Entfernen",
+  soundPiano: "Klang: Flügel",
+  soundVoice: "Klang: Stimme (uh)",
 };
 
 export type MessageKey = keyof typeof en;

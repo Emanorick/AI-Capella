@@ -1,0 +1,8 @@
+Piano samples: Salamander Grand Piano V3 by Alexander Holm (Yamaha C5 grand piano),
+licensed under Creative Commons Attribution 3.0 (https://creativecommons.org/licenses/by/3.0/).
+Source: https://archive.org/details/SalamanderGrandPianoV3 (via the @audio-samples/piano-mp3-velocity8
+package, velocity layer 8 of 16).
+
+Changes made for AI-Capella: 22 notes from A1 to C7 (every third semitone), leading silence
+removed, shortened to 5-8 seconds with a fade-out, mixed down to mono, re-encoded as 96 kbit/s MP3.
+Files are named by MIDI note number (p60.mp3 = C4).

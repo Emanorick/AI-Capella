@@ -16,6 +16,7 @@ export class WaveBackdrop {
   private last = 0;
   private raf: number | null = null;
   private playing = false;
+  private shown = true;
   private readonly reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   private readonly narrow = window.matchMedia('(max-width: 899px)');
 
@@ -33,6 +34,15 @@ export class WaveBackdrop {
     this.update();
   }
 
+  /** Hides the waves (the title screen keeps its plain ground) and stops drawing them meanwhile. */
+  setShown(shown: boolean) {
+    if (shown === this.shown) return;
+    this.shown = shown;
+    this.canvas.hidden = !shown;
+    if (shown) this.draw();
+    this.update();
+  }
+
   /** Playback started or stopped (see the class comment for what that changes). */
   setPlaying(playing: boolean) {
     if (playing === this.playing) return;
@@ -46,7 +56,7 @@ export class WaveBackdrop {
   }
 
   private update() {
-    const moving = !document.hidden && !this.reduceMotion.matches && this.speed() > 0;
+    const moving = this.shown && !document.hidden && !this.reduceMotion.matches && this.speed() > 0;
     if (moving && this.raf == null) {
       this.last = performance.now();
       this.raf = requestAnimationFrame((now) => this.frame(now));

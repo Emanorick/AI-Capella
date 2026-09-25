@@ -170,6 +170,15 @@ export async function saveSongConfig(id: string, config: { transpose: number; bp
   await updateDoc(doc(db, SONGS_COLLECTION, id), { savedConfig: config });
 }
 
+/**
+ * Saves just the hand-set section marks (the A/B/C bookmarks), right when one is added or removed
+ * -- they're bookmarks, not a setting to snapshot. Leaves the rest of savedConfig as it is.
+ */
+export async function saveSongSections(id: string, sections: { label: string; beat: number }[]): Promise<void> {
+  if (!db) throw new Error('Firebase is not configured');
+  await updateDoc(doc(db, SONGS_COLLECTION, id), { 'savedConfig.sections': sections });
+}
+
 async function sha256Hex(text: string): Promise<string> {
   const bytes = new TextEncoder().encode(text);
   const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
