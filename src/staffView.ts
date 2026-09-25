@@ -28,6 +28,12 @@ const NOTE_X_OFFSET_PX = 8;
 // reads at one height instead of bouncing with the melody. Accepted trade-off: an extreme low note
 // can sit below this line, putting its lyric near its own notehead.
 const LYRIC_BASELINE_OFFSET_PX = 24;
+// The staves grow to fill the view's height (up to these factors), and whatever height is left
+// spreads out between them -- instead of leaving the bottom of a tall phone screen empty. The
+// time axis grows only by the square root of that factor, so a phone still shows a few beats.
+const MAX_FILL_SCALE_NARROW = 1.4;
+const MAX_FILL_SCALE = 1.3;
+const FILL_BOTTOM_PX = 12;
 
 // Engraving glyphs from the SMuFL font (Bravura, bundled as a subset -- see assets/fonts). SMuFL
 // fonts are drawn at 4 staff spaces per em, with each glyph's origin at its musical reference point
@@ -446,6 +452,11 @@ export class StaffView {
   private transpose = 0;
   private gutterPx = 80;
   private sections: { label: string; beat: number }[] = [];
+  // Fill-the-height factor (see MAX_FILL_SCALE) and the extra room between staves it leaves.
+  // render() draws in "logical" units -- cssWidth/cssHeight/pixelsPerBeat swapped for the
+  // scaled-down values -- under a ctx.scale(fill), so the drawing code itself is unchanged.
+  private fill = 1;
+  private extraGap = 0;
 
   constructor(canvas: HTMLCanvasElement, score: Score, partColor: (partId: string) => string) {
     this.canvas = canvas;
@@ -493,7 +504,44 @@ export class StaffView {
     this.canvas.width = Math.max(1, Math.round(rect.width * this.dpr));
     this.canvas.height = Math.max(1, Math.round(rect.height * this.dpr));
     this.ctx2d.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.updateFill();
     this.scrollByPixels(0);
+  }
+
+  /** Recomputes how far the staves grow to fill the height (see MAX_FILL_SCALE). */
+  private updateFill() {
+    const count = this.layouts.filter((l) => !this.hiddenParts.has(l.partId)).length;
+    if (!count || this.cssHeight <= 0) {
+      this.fill = 1;
+      this.extraGap = 0;
+      return;
+    }
+    const natural = STAFF_RULER_HEIGHT_PX + FIRST_STAFF_TOP_PX + count * (STAFF_HEIGHT_PX + MIN_STAFF_GAP_PX) + FILL_BOTTOM_PX;
+    const maxFill = this.cssWidth < MOBILE_BREAKPOINT_PX ? MAX_FILL_SCALE_NARROW : MAX_FILL_SCALE;
+    this.fill = clamp(this.cssHeight / natural, 1, maxFill);
+    this.extraGap = Math.max(0, (this.cssHeight / this.fill - natural) / count);
+  }
+
+  /** Height of the ruler strip on screen (it grows with the staves). */
+  rulerHeight(): number {
+    return STAFF_RULER_HEIGHT_PX * this.fill;
+  }
+
+  /** Runs `draw` in logical units: the drawing code sees the scaled-down size and zoom. */
+  private inLogicalUnits<T>(draw: () => T): T {
+    const k = this.fill;
+    if (k === 1) return draw();
+    const saved = { w: this.cssWidth, h: this.cssHeight, ppb: this.pixelsPerBeat };
+    this.cssWidth = saved.w / k;
+    this.cssHeight = saved.h / k;
+    this.pixelsPerBeat = saved.ppb / Math.sqrt(k);
+    try {
+      return draw();
+    } finally {
+      this.cssWidth = saved.w;
+      this.cssHeight = saved.h;
+      this.pixelsPerBeat = saved.ppb;
+    }
   }
 
   setZoom(factor: number) {
@@ -542,11 +590,13 @@ export class StaffView {
       if (state === 'muted') this.hiddenParts.add(partId);
       else if (anySolo && state !== 'solo') this.dimmedParts.add(partId);
     }
+    this.updateFill();
     this.scrollByPixels(0);
   }
 
+  /** On-screen pixels per beat (the fill factor included), for converting drags into beats. */
   getPixelsPerBeat() {
-    return this.pixelsPerBeat;
+    return this.pixelsPerBeat * Math.sqrt(this.fill);
   }
 
   /** Visible staves with their current stacking positions (muted voices close up). */
@@ -557,20 +607,20 @@ export class StaffView {
       if (this.hiddenParts.has(layout.partId)) continue;
       layout.topY = y;
       out.push(layout);
-      y += STAFF_HEIGHT_PX + MIN_STAFF_GAP_PX;
+      y += STAFF_HEIGHT_PX + MIN_STAFF_GAP_PX + this.extraGap;
     }
     return out;
   }
 
   private contentHeightPx(): number {
     const count = this.layouts.filter((l) => !this.hiddenParts.has(l.partId)).length;
-    return FIRST_STAFF_TOP_PX + count * (STAFF_HEIGHT_PX + MIN_STAFF_GAP_PX);
+    return FIRST_STAFF_TOP_PX + count * (STAFF_HEIGHT_PX + MIN_STAFF_GAP_PX + this.extraGap);
   }
 
   /** Vertical pan, css px -- only does anything once the stacked staves overflow the viewport. */
   scrollByPixels(deltaPx: number) {
-    const maxScroll = Math.max(0, this.contentHeightPx() - (this.cssHeight - STAFF_RULER_HEIGHT_PX));
-    this.scrollY = clamp(this.scrollY + deltaPx, 0, maxScroll);
+    const maxScroll = Math.max(0, this.contentHeightPx() - (this.cssHeight / this.fill - STAFF_RULER_HEIGHT_PX));
+    this.scrollY = clamp(this.scrollY + deltaPx / this.fill, 0, maxScroll);
   }
 
   private playheadX(): number {
@@ -598,10 +648,25 @@ export class StaffView {
 
   /** Inverse of beatToX -- canvas-local x to beat, for the ruler's click-to-seek. */
   xToBeat(x: number, displayBeat: number): number {
-    return displayBeat + (x - this.playheadX()) / this.pixelsPerBeat;
+    return this.inLogicalUnits(() => displayBeat + (x / this.fill - this.playheadX()) / this.pixelsPerBeat);
   }
 
   render(displayBeat: number, playheadBeat: number) {
+    const ctx = this.ctx2d;
+    if (this.fill === 1) {
+      this.renderLogical(displayBeat, playheadBeat);
+      return;
+    }
+    ctx.save();
+    ctx.scale(this.fill, this.fill);
+    try {
+      this.inLogicalUnits(() => this.renderLogical(displayBeat, playheadBeat));
+    } finally {
+      ctx.restore();
+    }
+  }
+
+  private renderLogical(displayBeat: number, playheadBeat: number) {
     const ctx = this.ctx2d;
     const width = this.cssWidth;
     const height = this.cssHeight;

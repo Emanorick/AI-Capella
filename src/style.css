@@ -2020,6 +2020,67 @@ button.stepper-value:hover {
   background: var(--ink-3);
 }
 
+/* ---- Sing-along view ---------------------------------------------------------------
+   Someone else leads: this device shows the music and the voices, nothing to operate. The badge
+   carries who leads and the bar; on a phone the voices become a dock at the bottom. */
+
+.badge .follow-pos {
+  font: 600 13.5px/1 var(--f-mono);
+  white-space: nowrap;
+}
+
+#app.sing-along .badge {
+  border-color: rgba(255, 214, 150, 0.35);
+  color: #ffe4b8;
+}
+
+#app.sing-along .overview,
+#app.sing-along .transport,
+#app.sing-along .info-row,
+#app.sing-along .zoom {
+  display: none !important;
+}
+
+@media (min-width: 900px) {
+  #app.sing-along #player {
+    grid-template-rows: 60px minmax(0, 1fr);
+    grid-template-areas:
+      'top top'
+      'side stage';
+  }
+}
+
+@media (max-width: 899px) {
+  #app.sing-along #player {
+    grid-template-rows: calc(54px + var(--safe-t)) minmax(0, 1fr) auto;
+    grid-template-areas: 'top' 'stage' 'chips';
+  }
+  #app.sing-along .chips {
+    justify-content: safe center;
+    gap: 8px;
+    padding: 10px 64px calc(12px + var(--safe-b)) 12px;
+    border-top: 1px solid var(--hair);
+    background: var(--ink-1);
+  }
+  #app.sing-along .chips .chip {
+    height: 46px;
+    padding: 0 16px 0 14px;
+    font-size: 15.5px;
+  }
+  #app.sing-along .chips-mixer {
+    align-self: start;
+    padding: 13px 12px 0 8px;
+    background: none;
+  }
+}
+
+@media (max-width: 899px) and (max-height: 520px) and (orientation: landscape) {
+  #app.sing-along #player {
+    grid-template-rows: calc(46px + var(--safe-t)) minmax(0, 1fr);
+    grid-template-areas: 'top' 'stage';
+  }
+}
+
 /* ---- Scan sheet music ----------------------------------------------------------------- */
 
 .btn.ghost {

@@ -187,6 +187,11 @@ const en = {
   scanCheckHint: "Recognition is never perfect: listen through once and compare with the sheet music.",
   scanAddToRepertoire: "Add to repertoire",
   scanDownload: "Download MusicXML",
+  led: "Led",
+  singAlongOn: "Someone is leading the rehearsal: sing-along view. The full view is in the menu behind the badge at the top.",
+  fullView: "Full view",
+  singAlongView: "Sing-along view",
+  voiceOnOff: "{name}: hear on/off · hold for all voices",
 };
 
 const de: Record<keyof typeof en, string> = {
@@ -373,6 +378,11 @@ const de: Record<keyof typeof en, string> = {
   scanCheckHint: "Die Erkennung ist nie perfekt: einmal durchhören und mit den Noten vergleichen.",
   scanAddToRepertoire: "Ins Repertoire übernehmen",
   scanDownload: "MusicXML herunterladen",
+  led: "Geleitet",
+  singAlongOn: "Die Probe wird geleitet: Mitsing-Ansicht. Die volle Ansicht findest du im Menü hinter dem Abzeichen oben.",
+  fullView: "Volle Ansicht",
+  singAlongView: "Mitsing-Ansicht",
+  voiceOnOff: "{name}: hören an/aus · halten für alle Stimmen",
 };
 
 export type MessageKey = keyof typeof en;

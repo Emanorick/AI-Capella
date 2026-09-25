@@ -38,6 +38,15 @@ const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 
 const KEYBOARD_WIDTH_PX = 44;
 const KEYBOARD_GAP_PX = 8; // space between the keyboard and the first beat
 const BLACK_KEY_PITCH_CLASSES = new Set([1, 3, 6, 8, 10]); // C#, D#, F#, G#, A#
+// "Follow the music" (setAutoFit): the rows zoom to the pitch range being sung around the playhead,
+// gliding to each new range. Never fewer rows than FIT_MIN_ROWS (so one sustained note doesn't
+// blow up to fill the screen) and never taller than FIT_MAX_ROW_PX; a new range is only chosen when
+// the music leaves the current one or it has become much wider than needed.
+const FIT_MIN_ROWS = 11;
+const FIT_MAX_ROW_PX = 56;
+const FIT_PAD_SEMITONES = 1;
+const FIT_LOOKAHEAD_BEATS = 2;
+const FIT_GLIDE_MS = 420;
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
@@ -83,6 +92,15 @@ export class PianoRoll {
   private rowHeightPx = MIN_ROW_HEIGHT_PX;
   private scrollY = 0; // content-space px scrolled down from the top of the pitch range
   private scrollYInitialized = false;
+  // Follow-the-music state (see FIT_* above). The content buffer is painted at the fitted row
+  // height; while gliding between two ranges it is blitted scaled by viewScale (1 at rest), so a
+  // zoom change costs one buffer repaint, not one per frame.
+  private autoFit = false;
+  private autoFitSuspended = false;
+  private viewScale = 1;
+  private fitView: { top: number; row: number } | null = null; // current display: pitch at the top edge, row height
+  private fitGlide: { from: { top: number; row: number }; to: { top: number; row: number }; t0: number } | null = null;
+  private maxNoteBeats = 0;
 
   // Scrolling-content buffer: gridlines/notes/slurs pre-rendered into a wide offscreen strip.
   // During playback only the scroll offset changes each frame -- nothing about notes' positions
@@ -118,6 +136,7 @@ export class PianoRoll {
       else this.notesByPart.set(note.partId, [note]);
     }
     for (const list of this.notesByPart.values()) list.sort((a, b) => a.startBeat - b.startBeat);
+    this.maxNoteBeats = score.notes.reduce((max, n) => Math.max(max, n.durationBeats), 0);
     this.slursByPart = new Map();
     for (const slur of score.slurs) {
       const list = this.slursByPart.get(slur.partId);
@@ -201,7 +220,138 @@ export class PianoRoll {
 
   /** Pans the pitch axis by a delta in css px; positive scrolls down toward lower pitches. */
   scrollByPixels(dy: number) {
+    // Scrolling by hand takes over from follow-the-music until resumeAutoFit() (the next Play).
+    if (this.autoFit && !this.autoFitSuspended) this.settleAutoFit();
     this.scrollY = clamp(this.scrollY + dy, 0, this.maxScrollY());
+  }
+
+  /**
+   * Follow the music: rows zoom to the range being sung around the playhead instead of always
+   * showing the whole piece's range. Used on phones and in the sing-along view.
+   */
+  setAutoFit(on: boolean) {
+    if (on === this.autoFit) return;
+    this.autoFit = on;
+    this.autoFitSuspended = false;
+    this.fitView = null;
+    this.fitGlide = null;
+    this.viewScale = 1;
+    if (!on) this.applyStaticLayout();
+  }
+
+  /** Picks follow-the-music back up after the user scrolled by hand. */
+  resumeAutoFit() {
+    if (!this.autoFitSuspended) return;
+    this.autoFitSuspended = false;
+    this.fitView = null;
+  }
+
+  /** True while a zoom glide is in progress (the caller keeps rendering until it ends). */
+  isAnimating(): boolean {
+    return this.fitGlide !== null;
+  }
+
+  /** Ends a glide where it is and freezes the fitted zoom, so hand scrolling works from there. */
+  private settleAutoFit() {
+    this.autoFitSuspended = true;
+    this.fitGlide = null;
+    if (this.fitView) this.setBufferRow(this.fitView.row);
+    this.viewScale = 1;
+    this.scrollY = clamp(this.scrollY, 0, this.maxScrollY());
+  }
+
+  private setBufferRow(row: number) {
+    if (Math.abs(row - this.rowHeightPx) < 0.01) return;
+    this.rowHeightPx = row;
+    this.contentBufferDirty = true;
+  }
+
+  /** The whole piece's range: rows stretch to fill the height, else MIN_ROW_HEIGHT_PX and scroll. */
+  private applyStaticLayout() {
+    const totalRows = Math.max(1, this.maxMidi - this.minMidi);
+    this.setBufferRow(Math.max(MIN_ROW_HEIGHT_PX, this.contentAreaHeight() / totalRows));
+    this.scrollY = clamp(this.scrollY, 0, this.maxScrollY());
+  }
+
+  /** Lowest and highest pitch (transposed) sung by a visible voice between two beats, or null. */
+  private rangeBetween(from: number, to: number): { lo: number; hi: number } | null {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const part of this.score.parts) {
+      if (this.hiddenParts.has(part.id)) continue;
+      const notes = this.notesByPart.get(part.id);
+      if (!notes) continue;
+      let a = 0;
+      let b = notes.length;
+      const earliest = from - this.maxNoteBeats;
+      while (a < b) {
+        const mid = (a + b) >> 1;
+        if (notes[mid].startBeat < earliest) a = mid + 1;
+        else b = mid;
+      }
+      for (let i = a; i < notes.length && notes[i].startBeat < to; i++) {
+        const n = notes[i];
+        if (n.startBeat + n.durationBeats <= from) continue;
+        lo = Math.min(lo, n.midi);
+        hi = Math.max(hi, n.midi);
+      }
+    }
+    return lo <= hi ? { lo: lo + this.transpose, hi: hi + this.transpose } : null;
+  }
+
+  /** The view (top pitch, row height) that frames a pitch range, centred, within the content. */
+  private frameFor(lo: number, hi: number): { top: number; row: number } {
+    const area = this.contentAreaHeight();
+    const rows = Math.max(FIT_MIN_ROWS, hi - lo + 1 + 2 * FIT_PAD_SEMITONES);
+    const row = clamp(area / rows, MIN_ROW_HEIGHT_PX, FIT_MAX_ROW_PX);
+    const visibleRows = area / row;
+    // Pitch coordinate p: row m spans p in [m, m + 1]; the content's top edge is p = maxMidi.
+    let top = (lo + hi + 1) / 2 + visibleRows / 2;
+    top = clamp(top, Math.min(this.maxMidi, this.minMidi + visibleRows), this.maxMidi);
+    return { top, row };
+  }
+
+  /** Advances follow-the-music for this frame: chooses a new range when needed, glides to it. */
+  private updateAutoFit(displayBeat: number) {
+    if (!this.autoFit || this.autoFitSuspended || this.cssHeight <= 0) return;
+    const area = this.contentAreaHeight();
+    const anchorX = this.playheadX(this.cssWidth);
+    const from = displayBeat - anchorX / this.pixelsPerBeat;
+    const to = displayBeat + (this.cssWidth - anchorX) / this.pixelsPerBeat + FIT_LOOKAHEAD_BEATS;
+    const range = this.rangeBetween(from, to);
+    const now = performance.now();
+    if (range) {
+      const target = this.frameFor(range.lo, range.hi);
+      const current = this.fitGlide?.to ?? this.fitView;
+      const shown = current ? { hi: current.top, lo: current.top - area / current.row } : null;
+      const fits = shown && range.lo >= shown.lo + 0.3 && range.hi + 1 <= shown.hi - 0.3;
+      const tooWide = current && target.row > current.row * 1.35;
+      if (!current || !fits || tooWide) {
+        if (!this.fitView) {
+          this.fitView = target;
+        } else {
+          this.fitGlide = { from: { ...this.fitView }, to: target, t0: now };
+        }
+        // Paint the buffer at the destination's row height once; the glide scales toward it.
+        this.setBufferRow(target.row);
+      }
+    } else if (!this.fitView) {
+      this.fitView = this.frameFor(60, 72);
+      this.setBufferRow(this.fitView.row);
+    }
+    if (this.fitGlide) {
+      const k = Math.min(1, (now - this.fitGlide.t0) / FIT_GLIDE_MS);
+      const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+      const { from: a, to: b } = this.fitGlide;
+      this.fitView = { top: a.top + (b.top - a.top) * e, row: a.row + (b.row - a.row) * e };
+      if (k >= 1) {
+        this.fitView = { ...b };
+        this.fitGlide = null;
+      }
+    }
+    const view = this.fitView!;
+    this.viewScale = view.row / this.rowHeightPx;
+    this.scrollY = (this.maxMidi - view.top) * this.rowHeightPx;
   }
 
   setLoopRegion(region: LoopRegion | null) {
@@ -236,6 +386,13 @@ export class PianoRoll {
     this.contentBufferDirty = true;
     this.lyricBitmaps.clear(); // cached bitmaps are baked at the old dpr
 
+    if (this.autoFit) {
+      // Re-frame for the new size on the next render, without a glide.
+      this.fitView = null;
+      this.fitGlide = null;
+      this.autoFitSuspended = false;
+      return;
+    }
     const totalRows = Math.max(1, this.maxMidi - this.minMidi);
     this.rowHeightPx = Math.max(MIN_ROW_HEIGHT_PX, this.contentAreaHeight() / totalRows);
 
@@ -279,7 +436,7 @@ export class PianoRoll {
 
   /** Inverse of rowY(): canvas-local y (accounting for the ruler strip and current vertical scroll) -> midi. */
   private yToMidi(y: number): number {
-    const contentY = (y - RULER_HEIGHT_PX) + this.scrollY;
+    const contentY = (y - RULER_HEIGHT_PX) / this.viewScale + this.scrollY;
     const height = this.contentHeightPx();
     return this.minMidi + Math.floor((height - contentY) / this.rowHeightPx);
   }
@@ -331,7 +488,9 @@ export class PianoRoll {
     const contentAreaHeight = this.contentAreaHeight();
     const ctx = this.ctx2d;
     const anchorX = this.playheadX(width);
+    this.updateAutoFit(displayBeat);
     const rowHeight = this.rowHeightPx;
+    const scale = this.viewScale;
     const contentH = this.contentHeightPx();
 
     // beatToX is anchored to displayBeat (the view's own reference point, at the fixed anchorX
@@ -409,14 +568,18 @@ export class PianoRoll {
     }
     if (this.contentBuffer) {
       const destX = this.snapToDevicePx(anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat);
-      const scrollYSnapped = this.snapToDevicePx(this.scrollY);
+      // During a follow-the-music glide the buffer is scaled vertically (scale != 1); at rest it
+      // is a pixel-aligned 1:1 copy, as before.
+      const scrollYSnapped = scale === 1 ? this.snapToDevicePx(this.scrollY) : this.scrollY;
       const bufferCssWidth = this.contentBufferBeatsSpan * this.pixelsPerBeat;
       const srcStartCss = Math.max(0, -destX);
       const srcEndCss = Math.min(bufferCssWidth, width - destX);
       const srcWidthCss = srcEndCss - srcStartCss;
-      const srcHeightCss = Math.min(contentAreaHeight, contentH - scrollYSnapped);
+      const srcTop = Math.max(0, scrollYSnapped);
+      const destTop = (srcTop - scrollYSnapped) * scale;
+      const srcHeightCss = Math.min(contentAreaHeight / scale, contentH - srcTop);
       if (srcWidthCss > 0 && srcHeightCss > 0) {
-        ctx.drawImage(this.contentBuffer, srcStartCss * this.dpr, scrollYSnapped * this.dpr, srcWidthCss * this.dpr, srcHeightCss * this.dpr, destX + srcStartCss, 0, srcWidthCss, srcHeightCss);
+        ctx.drawImage(this.contentBuffer, srcStartCss * this.dpr, srcTop * this.dpr, srcWidthCss * this.dpr, srcHeightCss * this.dpr, destX + srcStartCss, destTop, srcWidthCss, srcHeightCss * scale);
       }
     }
 
@@ -428,13 +591,13 @@ export class PianoRoll {
       ctx.fillStyle = PAST_SHADE;
       ctx.fillRect(0, 0, Math.min(width, playheadXPos), contentAreaHeight);
     }
-    this.drawSoundingNotes(ctx, playheadBeat, beatToX, rowHeight, contentAreaHeight);
+    this.drawSoundingNotes(ctx, playheadBeat, beatToX, rowHeight, contentAreaHeight, scale);
 
     // Preview note label: set by a click on a note (see hitTestNote); shows its pitch name at the
     // start of that note. Drawn fresh each frame since it's transient UI state, not score content.
     if (this.previewNote) {
       const x = this.snapToDevicePx(beatToX(this.previewNote.startBeat));
-      const y = this.rowY(this.previewNote.midi) - rowHeight - this.scrollY;
+      const y = (this.rowY(this.previewNote.midi) - rowHeight - this.scrollY) * scale;
       if (x >= -60 && x <= width + 10 && y >= -20 && y <= contentAreaHeight) {
         const label = midiName(this.previewNote.midi);
         ctx.font = `600 12px ${FONT_MONO}`;
@@ -472,8 +635,8 @@ export class PianoRoll {
   }
 
   /** Redraws, lit and glowing, the pill of every note sounding at the playhead (in content-area coordinates). */
-  private drawSoundingNotes(ctx: CanvasRenderingContext2D, beat: number, beatToX: (b: number) => number, rowHeight: number, areaHeight: number) {
-    const pillH = this.pillHeight(rowHeight);
+  private drawSoundingNotes(ctx: CanvasRenderingContext2D, beat: number, beatToX: (b: number) => number, rowHeight: number, areaHeight: number, scale: number) {
+    const pillH = this.pillHeight(rowHeight) * scale;
     for (const part of this.score.parts) {
       if (this.hiddenParts.has(part.id) || this.dimmedParts.has(part.id)) continue;
       const notes = this.notesByPart.get(part.id);
@@ -491,7 +654,7 @@ export class PianoRoll {
         if (note.startBeat + note.durationBeats <= beat) continue;
         const x = beatToX(note.startBeat);
         const w = note.durationBeats * this.pixelsPerBeat;
-        const y = this.rowY(note.midi + this.transpose) - rowHeight - this.scrollY + BAR_PAD_PX;
+        const y = (this.rowY(note.midi + this.transpose) - rowHeight - this.scrollY + BAR_PAD_PX) * scale;
         if (y + pillH < 0 || y > areaHeight) continue;
         ctx.save();
         ctx.shadowColor = color;

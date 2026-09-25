@@ -9,7 +9,7 @@ import { parseMusicXML } from './musicxml';
 import { parseMIDI } from './midi';
 import { AudioEngine, startTonesLeadSec, type PartMixState } from './audioEngine';
 import { PianoRoll, RULER_HEIGHT_PX, type LoopRegion } from './pianoRoll';
-import { StaffView, STAFF_RULER_HEIGHT_PX } from './staffView';
+import { StaffView } from './staffView';
 import { OverviewStrip } from './overview';
 import { colorForPart } from './palette';
 import { measureAtBeat, type Score } from './score';
@@ -343,13 +343,45 @@ function renderModeControls() {
   const following = isFollower();
   if (sessionMode === 'solo') modeBadge.innerHTML = `${icon('user')}<span>${t('solo')}</span>`;
   else if (leading) modeBadge.innerHTML = `${icon('crown')}<span>${t('leading')}</span><i class="live-dot" aria-hidden="true"></i>`;
+  else if (following && isSingAlong()) modeBadge.innerHTML = `${icon('crown')}<span>${t('led')}</span><b class="follow-pos" data-bind="pos-bar"></b><i class="live-dot" aria-hidden="true"></i>`;
   else if (following) modeBadge.innerHTML = `${icon('users')}<span>${t('following')}</span><i class="live-dot" aria-hidden="true"></i>`;
   else modeBadge.innerHTML = `${icon('users')}<span>${t('ensemble')}</span><i class="live-dot" aria-hidden="true"></i>`;
   modeBadge.classList.toggle('is-leading', leading);
   modeBadge.title = following ? t('followingHint') : '';
   modeBadge.hidden = !isFirebaseConfigured;
+  fillBindings(modeBadge);
   app.classList.toggle('following', following);
+  const singAlong = isSingAlong();
+  if (singAlong !== app.classList.contains('sing-along')) {
+    app.classList.toggle('sing-along', singAlong);
+    applyAutoFit();
+    renderChipTitles();
+    if (singAlong) toast(t('singAlongOn'));
+  }
 }
+
+// Sing-along view: when someone else leads the rehearsal, this device shows only the music and
+// the voices (see style.css, #app.sing-along). The full view stays one menu tap away, and that
+// choice is remembered on this device.
+const FULL_VIEW_KEY = 'ai-capella-full-view';
+let fullViewChosen = localStorage.getItem(FULL_VIEW_KEY) === '1';
+function isSingAlong(): boolean {
+  return isFollower() && !fullViewChosen;
+}
+function setFullView(full: boolean) {
+  fullViewChosen = full;
+  if (full) localStorage.setItem(FULL_VIEW_KEY, '1');
+  else localStorage.removeItem(FULL_VIEW_KEY);
+  renderModeControls();
+}
+
+// Follow the music (piano roll rows zoom to what's being sung): on phones, and in the sing-along view.
+const narrowQuery = window.matchMedia('(max-width: 899px)');
+function applyAutoFit() {
+  pianoRoll?.setAutoFit(narrowQuery.matches || app.classList.contains('sing-along'));
+  requestAnimationFrame(resizeCanvases);
+}
+narrowQuery.addEventListener('change', applyAutoFit);
 
 async function requestModeSwitch(mode: 'solo' | 'ensemble') {
   if (mode === sessionMode) return;
@@ -377,6 +409,11 @@ modeBadge.addEventListener('click', () => {
   if (leaderId === myDeviceId) items.push({ label: t('releaseLead'), icon: 'crown', onSelect: () => pushState({ leaderId: null }, { leadershipChange: true }) });
   else if (leaderId) items.push({ label: t('takeOverLead'), icon: 'crown', onSelect: () => void takeOverLead() });
   else items.push({ label: t('leadRehearsal'), icon: 'crown', onSelect: () => takeLead() });
+  if (isFollower()) {
+    items.push(fullViewChosen
+      ? { label: t('singAlongView'), icon: 'users', onSelect: () => setFullView(false) }
+      : { label: t('fullView'), icon: 'mixer', onSelect: () => setFullView(true) });
+  }
   items.push({ label: t('switchToSoloItem'), icon: 'user', onSelect: () => void requestModeSwitch('solo') });
   openMenu(modeBadge, items, t('ensemble'));
 });
@@ -874,6 +911,7 @@ async function loadSongLocally(song: SongEntry) {
   setViewMode('player');
   pianoRoll = new PianoRoll(canvas, score, partColor);
   pianoRoll.setLoopRegion(null);
+  pianoRoll.setAutoFit(narrowQuery.matches || app.classList.contains('sing-along'));
   staffView = new StaffView(staffCanvas, score, partColor);
   overview = new OverviewStrip(overviewCanvas, score, partColor);
   // MIDI imports have no real notated spelling -- only a heuristic chromatic fallback (see
@@ -975,6 +1013,17 @@ async function publishPlayingAt(originBeat: number, extra: Partial<PlaybackState
 
 function isFollower(): boolean {
   return syncEnabled() && leaderId != null && leaderId !== myDeviceId;
+}
+
+// Development builds only: lets automated tests show this device as following someone else's lead
+// without writing to the shared session.
+if (import.meta.env.DEV) {
+  (window as unknown as { __aiCapellaDev: unknown }).__aiCapellaDev = {
+    setLeader(id: string | null) {
+      leaderId = id;
+      renderModeControls();
+    },
+  };
 }
 
 /** The single place that applies shared-session state locally -- see pushState()'s doc comment. */
@@ -1201,6 +1250,7 @@ function buildVoiceControls(score: Score) {
     return chip;
   });
   chipsEl.replaceChildren(...chips);
+  renderChipTitles();
 }
 
 function applyMixToViews() {
@@ -1249,6 +1299,49 @@ function toggleTrueSolo(partId: string) {
   for (const p of currentScore.parts) setPartMixState(p.id, alreadyIsolated || p.id === partId ? 'normal' : 'muted');
   applyMixToViews();
 }
+
+/** Sing-along chips: a tap switches a voice on or off (the last one heard stays on). */
+function toggleHearing(partId: string) {
+  if (!currentScore) return;
+  const current = partMix.get(partId) ?? 'normal';
+  if (current !== 'muted') {
+    const heard = currentScore.parts.filter((p) => partMix.get(p.id) !== 'muted').length;
+    if (heard <= 1) return;
+  }
+  setPartMixState(partId, current === 'muted' ? 'normal' : 'muted');
+  applyMixToViews();
+}
+
+/** Chip tooltips follow what a tap does in the current view. */
+function renderChipTitles() {
+  const singAlong = app.classList.contains('sing-along');
+  document.querySelectorAll<HTMLElement>('.chip[data-part]').forEach((chip) => {
+    const name = chip.textContent ?? '';
+    chip.title = singAlong ? t('voiceOnOff', { name }) : t('onlyVoice', { name });
+  });
+}
+
+// Holding a voice chip opens the voices sheet (mute, solo, volume of the others), on every screen.
+let chipLongPressed = false;
+let chipPressTimer: number | null = null;
+chipsEl.addEventListener('pointerdown', (e) => {
+  const chip = (e.target as HTMLElement).closest<HTMLElement>('.chip[data-part]');
+  if (!chip) return;
+  chipLongPressed = false;
+  if (chipPressTimer != null) clearTimeout(chipPressTimer);
+  chipPressTimer = window.setTimeout(() => {
+    chipPressTimer = null;
+    chipLongPressed = true;
+    openMixerSheet(chip);
+  }, 520);
+});
+for (const type of ['pointerup', 'pointercancel', 'pointerleave'] as const) {
+  chipsEl.addEventListener(type, () => {
+    if (chipPressTimer != null) clearTimeout(chipPressTimer);
+    chipPressTimer = null;
+  });
+}
+chipsEl.addEventListener('contextmenu', (e) => e.preventDefault());
 
 function toggleMix(partId: string, action: PartMixState) {
   const current = partMix.get(partId) ?? 'normal';
@@ -1787,7 +1880,12 @@ document.addEventListener('click', (e) => {
   }
   const chip = target.closest<HTMLElement>('.chip[data-part]');
   if (chip) {
-    toggleTrueSolo(chip.dataset.part!);
+    if (chipLongPressed) {
+      chipLongPressed = false;
+      return;
+    }
+    if (app.classList.contains('sing-along')) toggleHearing(chip.dataset.part!);
+    else toggleTrueSolo(chip.dataset.part!);
     return;
   }
   const el = target.closest<HTMLElement>('[data-action]');
@@ -2235,6 +2333,13 @@ overviewCanvas.addEventListener('pointercancel', () => {
 // ---------------------------------------------------------------------------------------------
 
 const boundTexts = new Map<string, string>();
+/** Fills freshly created [data-bind] elements with their current text (setBound skips unchanged text). */
+function fillBindings(root: ParentNode) {
+  root.querySelectorAll<HTMLElement>('[data-bind]').forEach((el) => {
+    const text = boundTexts.get(el.dataset.bind!);
+    if (text != null) el.textContent = text;
+  });
+}
 function setBound(bind: string, text: string) {
   // During playback this runs every animation frame; writing textContent unconditionally forces a
   // style/layout invalidation even when the string hasn't changed (most frames).
@@ -2289,7 +2394,11 @@ function updateVoiceLights(beat: number) {
 /** Renders only whichever view is currently visible -- the hidden one costs nothing per frame. */
 function renderActiveView(displayBeatValue: number, playheadBeatValue: number) {
   if (activeView === 'staff') staffView?.render(displayBeatValue, playheadBeatValue);
-  else pianoRoll?.render(displayBeatValue, playheadBeatValue);
+  else {
+    pianoRoll?.render(displayBeatValue, playheadBeatValue);
+    // A follow-the-music glide keeps going while paused (e.g. after switching a voice off).
+    if (pianoRoll?.isAnimating() && rafId == null) scheduleRender();
+  }
   overview?.render(playheadBeatValue);
   updateVoiceLights(playheadBeatValue);
 }
@@ -2353,6 +2462,7 @@ function renderLoop() {
   rafId = requestAnimationFrame(renderLoop);
 }
 function startRenderLoop() {
+  pianoRoll?.resumeAutoFit();
   startAudioTick();
   if (rafId == null) rafId = requestAnimationFrame(renderLoop);
 }
@@ -2418,7 +2528,7 @@ staffCanvas.addEventListener(
 staffCanvas.addEventListener('click', (e) => {
   if (!staffView || !currentScore) return;
   const rect = staffCanvas.getBoundingClientRect();
-  if (e.clientY - rect.top >= STAFF_RULER_HEIGHT_PX) return;
+  if (e.clientY - rect.top >= staffView.rulerHeight()) return;
   const beat = staffView.xToBeat(e.clientX - rect.left, displayBeat());
   seekToBeat(measureAtBeat(currentScore, beat)?.startBeat ?? beat);
 });
@@ -2442,7 +2552,7 @@ staffCanvas.addEventListener('pointerdown', (e) => {
     return;
   }
   const rect = staffCanvas.getBoundingClientRect();
-  if (e.clientY - rect.top < STAFF_RULER_HEIGHT_PX) return; // ruler strip stays tap-to-seek only
+  if (e.clientY - rect.top < staffView.rulerHeight()) return; // ruler strip stays tap-to-seek only
   staffDragPointerId = e.pointerId;
   staffDragStartX = e.clientX;
   staffDragStartY = e.clientY;
