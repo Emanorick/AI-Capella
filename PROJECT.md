@@ -74,8 +74,9 @@ connected device — so nobody is left with music playing to an empty player.
   (10.5-15 px) and is set like a choral score: a light tint of the voice colour, hyphens between
   the syllables of a word and an extender line under a held syllable (from MusicXML's
   `<syllabic>`/`<extend>`, `NoteEvent.lyricJoin/lyricExtend`); the syllable being sung lights up.
-- **Follows the music** (`setAutoFit`) -- always on phones; on a laptop switchable with the
-  height button in the zoom control or the **F** key (remembered per device, on by default): the
+- **Follows the music** (`setAutoFit`) -- switchable in the player menu ("Height follows the
+  music") and on a laptop also with the height button in the zoom control or the **F** key
+  (remembered per device, on by default): the
   rows zoom to the pitch range sung around the playhead by the voices in focus (every visible
   voice, or only the soloed ones while any are soloed -- soloing a voice zooms onto it), never fewer
   than 11 rows or taller than 56 px, and glide (420 ms) to a new range only when the music leaves
@@ -83,7 +84,9 @@ connected device — so nobody is left with music playing to an empty player.
   the new row height and scaled during the glide, so a zoom change doesn't cost a repaint per
   frame. Scrolling by hand takes over until the next Play. **Alt + wheel** (or Alt + trackpad
   pinch) sets the height by hand around the pointer (`zoomRows`, 32-64 px rows), switching
-  follow-the-music off but starting from its current framing. Notes are never taller than 22 px;
+  follow-the-music off but starting from its current framing; on a phone a two-finger pinch with
+  the fingers one above the other does the same (side by side it zooms time, as before). Notes are
+  never taller than 22 px;
   extra row height becomes space between the lines.
 - A fixed **ruler strip** along the top (28px) is the *only* place in the score a click or drag
   can set where playback starts, or define a loop region (the whole-piece strip below the score
@@ -362,6 +365,13 @@ layer (strength between "subtle" and "balanced" of its design draft):
   is still there as `?logo=1`.) The app mark, app icons and favicon are the four voice lines
   written with the pointed pen on night paper (icons generated from the same geometry as
   `drawMark`; the service worker's cache name was bumped so installed apps pick them up).
+- **Title screen draft (`?start=neu`, design.ts `START_DRAFT`; not the default yet).** The voice
+  lines, written by the pen as before, become figures of light (`lightRibbons.ts`): a thin bright
+  core in a soft glow (drawn wide and faint at a quarter of the size in three widths, scaled up),
+  sparks travelling along them. They answer the hand (`RibbonField`): near the pointer they give
+  way a little; a click or tap draws them toward it for a moment with a small flare of light. The
+  name is printed into the paper (ink with an uneven grain, pressed-in edges) and the two choices
+  are paper tabs embossed out of the sheet.
 - **Piano roll as a lit paper roll ("lantern").** `NOTE_STYLE` in `pianoRoll.ts`: part of the
   paper design (Samt & Glas uses the gel notes); any device can also pick it with `?roll=lantern`
   / `?roll=gel`. The roll is dark paper (with fibres, `theme.ts paperGrain`) with a round hole per
@@ -403,6 +413,8 @@ layer (strength between "subtle" and "balanced" of its design draft):
   a web-app manifest, so "Add to Home Screen" opens AI-Capella full-screen.
 - **Overlays** (`ui.ts`): menus (bottom sheets on phones), popovers, bottom sheets, confirm and
   rename dialogs, and toasts — one open at a time, Escape/outside-click to close, focus returned.
+  A bottom sheet can also be pulled down to close it (when its content is scrolled to the top): it
+  follows the finger and closes when pulled far enough or flicked, else springs back.
 
 ---
 

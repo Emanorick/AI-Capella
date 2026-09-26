@@ -386,15 +386,15 @@ function setFullView(full: boolean) {
   renderModeControls();
 }
 
-// Follow the music (piano roll rows zoom to what's being sung): always on phones; on a laptop
-// switchable in the zoom control (key F), remembered per device, on by default. Alt + wheel sets
-// the height by hand, which switches it off.
+// Follow the music (piano roll rows zoom to what's being sung): on by default, remembered per
+// device; switchable in the player menu, and on a laptop also in the zoom control (key F). Setting
+// the height by hand -- Alt + wheel, or a vertical two-finger pinch on a phone -- switches it off.
 const narrowQuery = window.matchMedia('(max-width: 899px)');
 const FOLLOW_KEY = 'ai-capella-follow';
 let followPref = localStorage.getItem(FOLLOW_KEY) !== '0';
 document.querySelectorAll<HTMLElement>('[data-action="follow"]').forEach((b) => b.setAttribute('aria-pressed', String(followPref)));
 function followActive(): boolean {
-  return narrowQuery.matches || followPref;
+  return followPref;
 }
 function applyAutoFit() {
   pianoRoll?.setAutoFit(followActive());
@@ -408,6 +408,19 @@ function setFollow(on: boolean) {
   applyAutoFit();
 }
 narrowQuery.addEventListener('change', applyAutoFit);
+/** The rows' height set by hand around y (px from the roll's top): takes over from follow-the-music, from its current framing. */
+function zoomRowsByHand(factor: number, y: number) {
+  if (!pianoRoll) return;
+  if (followPref) {
+    pianoRoll.freezeAutoFit();
+    followPref = false;
+    localStorage.setItem(FOLLOW_KEY, '0');
+    document.querySelectorAll<HTMLElement>('[data-action="follow"]').forEach((b) => b.setAttribute('aria-pressed', 'false'));
+    toast(t('followOff'));
+  }
+  pianoRoll.zoomRows(factor, y);
+  scheduleRender();
+}
 
 async function requestModeSwitch(mode: 'solo' | 'ensemble') {
   if (mode === sessionMode) return;
@@ -2011,6 +2024,7 @@ function openPlayerMenu(anchor: HTMLElement) {
     if (!isNarrow()) items.push({ label: t('saveDefaults'), icon: 'save', onSelect: saveDefaults });
     if (sectionsEditable() && manualSections.length) items.push({ label: t('removeAllSections'), icon: 'flag', onSelect: () => void removeAllSections() });
   }
+  if (activeView === 'roll') items.push({ label: t('followMusic'), icon: 'fitHeight', checked: followPref, onSelect: () => setFollow(!followPref) });
   items.push(...soundItems(), ...languageItems());
   openMenu(anchor, items, t('menu'));
 }
@@ -2258,15 +2272,8 @@ canvas.addEventListener(
     if (e.altKey) {
       // Alt + wheel (or Alt + trackpad pinch): the rows' height, by hand, around the pointer.
       // Takes over from follow-the-music, keeping its current framing as the starting point.
-      if (followActive() && !narrowQuery.matches) {
-        pianoRoll.freezeAutoFit();
-        followPref = false;
-        localStorage.setItem(FOLLOW_KEY, '0');
-        document.querySelectorAll<HTMLElement>('[data-action="follow"]').forEach((b) => b.setAttribute('aria-pressed', 'false'));
-      }
       const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
-      pianoRoll.zoomRows(Math.exp(-delta * (e.ctrlKey ? 0.01 : 0.0015)), e.clientY - canvas.getBoundingClientRect().top);
-      scheduleRender();
+      zoomRowsByHand(Math.exp(-delta * (e.ctrlKey ? 0.01 : 0.0015)), e.clientY - canvas.getBoundingClientRect().top);
     } else if (e.ctrlKey) {
       // Trackpad pinch arrives as ctrl+wheel.
       applyZoom(Math.exp(-e.deltaY * 0.01));
@@ -2292,6 +2299,14 @@ canvas.addEventListener(
 class PinchZoomTracker {
   private points = new Map<number, { x: number; y: number }>();
   private lastDist: number | null = null;
+  /** How the two fingers lay when the pinch began: side by side ('x') or one above the other ('y'). */
+  axis: 'x' | 'y' = 'x';
+
+  /** The fingers' midpoint, vertically (client px). */
+  get midY(): number {
+    const pts = Array.from(this.points.values());
+    return pts.reduce((a, p) => a + p.y, 0) / Math.max(1, pts.length);
+  }
 
   get activeCount(): number {
     return this.points.size;
@@ -2305,6 +2320,10 @@ class PinchZoomTracker {
   onPointerDown(e: PointerEvent) {
     this.points.set(e.pointerId, { x: e.clientX, y: e.clientY });
     this.lastDist = this.currentDist();
+    if (this.points.size === 2) {
+      const [a, b] = Array.from(this.points.values());
+      this.axis = Math.abs(a.y - b.y) > Math.abs(a.x - b.x) ? 'y' : 'x';
+    }
   }
 
   /** Returns a zoom ratio to apply once two fingers are down, else null (nothing to do). */
@@ -2372,7 +2391,9 @@ canvas.addEventListener('pointerdown', (e) => {
 canvas.addEventListener('pointermove', (e) => {
   const pinchRatio = rollPinch.onPointerMove(e);
   if (pinchRatio != null) {
-    applyZoom(pinchRatio);
+    // Fingers one above the other set the rows' height; side by side, the time scale.
+    if (rollPinch.axis === 'y') zoomRowsByHand(pinchRatio, rollPinch.midY - canvasTop);
+    else applyZoom(pinchRatio);
     return;
   }
   if (dragPointerId !== e.pointerId || !pianoRoll) return;

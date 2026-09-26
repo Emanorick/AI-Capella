@@ -1,7 +1,8 @@
 import type { Score } from './score';
 import { colorForPart } from './palette';
 import { paperGrain, withAlpha } from './theme';
-import { LOGO_DRAFT, PAPER_DESIGN, type LogoDraft } from './design';
+import { LOGO_DRAFT, PAPER_DESIGN, START_DRAFT, type LogoDraft } from './design';
+import { drawLightRibbons, RibbonField } from './lightRibbons';
 import { broadNib, pointAlong, pointedPen, type Pt } from './pen';
 
 export interface RibbonOptions {
@@ -57,7 +58,7 @@ export function drawRibbons(ctx: CanvasRenderingContext2D, w: number, h: number,
 }
 
 /** One voice's ribbon at time t: parting from the others in the middle, meeting them at both ends. */
-function ribbonPoints(i: number, o: RibbonOptions, t: number, steps: number, swing = 1): Pt[] {
+export function ribbonPoints(i: number, o: RibbonOptions, t: number, steps: number, swing = 1): Pt[] {
   const k = i - (o.voices - 1) / 2;
   const pts: Pt[] = [];
   const amp = o.amp * swing;
@@ -73,7 +74,7 @@ function ribbonPoints(i: number, o: RibbonOptions, t: number, steps: number, swi
 }
 
 /** Lets the ribbons melt into the ground at both ends. */
-function fadeEnds(ctx: CanvasRenderingContext2D, w: number, h: number, o: RibbonOptions, left: number, right: number) {
+export function fadeEnds(ctx: CanvasRenderingContext2D, w: number, h: number, o: RibbonOptions, left: number, right: number) {
   ctx.save();
   ctx.globalCompositeOperation = 'destination-out';
   const span = o.x1 - o.x0;
@@ -154,7 +155,7 @@ export function drawPenRibbons(ctx: CanvasRenderingContext2D, w: number, h: numb
 }
 
 /** How far each voice has been written `sec` seconds into the title animation, and when all are done. */
-function writing(draft: LogoDraft, voices: number, sec: number): { progress: number[]; done: number } {
+export function writing(draft: LogoDraft, voices: number, sec: number): { progress: number[]; done: number } {
   const start = (i: number) => (draft === '1' ? i * 0.12 : i * 0.42);
   const dur = draft === '1' ? 2.4 : 1.35;
   const ease = (u: number) => 0.35 * u * u * (3 - 2 * u) + 0.65 * u;
@@ -339,15 +340,23 @@ export function animateRibbons(canvas: HTMLCanvasElement, layout: (w: number, h:
   let raf = 0;
   let last = 0;
   const start = performance.now();
+  // The draft title screen: lines of light that answer the pointer (see lightRibbons.ts).
+  const field = START_DRAFT && !still && canvas.parentElement ? new RibbonField(canvas.parentElement, canvas) : null;
   const frame = (now: number) => {
     raf = still ? 0 : requestAnimationFrame(frame);
-    if (!still && (document.hidden || now - last < 32)) return;
+    // About 30 frames a second, the full rate while someone is moving the lines.
+    if (!still && (document.hidden || now - last < (field?.lively ? 15 : 32))) return;
+    field?.step(Math.min(0.1, (now - last) / 1000), now / 1000);
     last = now;
     const prepared = prepareCanvas(canvas);
     if (!prepared) return;
     const sec = still ? 99 : (now - start) / 1000;
     const o = layout(prepared.w, prepared.h);
-    if (PAPER_DESIGN) {
+    if (START_DRAFT) {
+      const { progress, done } = writing(LOGO_DRAFT, o.voices, sec);
+      const lit = Math.min(1, Math.max(0, (sec - done) / 1.4));
+      drawLightRibbons(prepared.ctx, prepared.w, prepared.h, 12 + sec, o, progress, lit * lit * (3 - 2 * lit), field, now / 1000);
+    } else if (PAPER_DESIGN) {
       const { progress, done } = writing(LOGO_DRAFT, o.voices, sec);
       const glow = Math.min(1, Math.max(0, (sec - done) / 1.4));
       drawPenRibbons(prepared.ctx, prepared.w, prepared.h, 12 + sec, o, progress, glow * glow * (3 - 2 * glow), LOGO_DRAFT);
@@ -361,6 +370,7 @@ export function animateRibbons(canvas: HTMLCanvasElement, layout: (w: number, h:
   return () => {
     cancelAnimationFrame(raf);
     window.removeEventListener('resize', onResize);
+    field?.dispose();
   };
 }
 

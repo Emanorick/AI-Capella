@@ -31,4 +31,12 @@ export const PAPER_DESIGN = DESIGN === 'papier';
 export type LogoDraft = '1' | '2';
 export const LOGO_DRAFT: LogoDraft = deviceChoice('logo', 'ai-capella-logo', ['1', '2'] as const, '2');
 
+/**
+ * Draft of the next title screen (?start=neu): the voice lines as figures of light with a soft glow,
+ * giving way to the pointer and drawn toward a click; the name and buttons printed and embossed in
+ * the paper.
+ */
+export const START_DRAFT = PAPER_DESIGN && deviceChoice('start', 'ai-capella-start', ['neu', 'heute'] as const, 'heute') === 'neu';
+
 document.documentElement.dataset.design = DESIGN;
+if (START_DRAFT) document.documentElement.dataset.start = 'neu';
