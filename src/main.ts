@@ -22,6 +22,8 @@ import { countLabel, keyName, lang, setLang, t } from './i18n';
 import { canvasFontsReady } from './theme';
 import { initScan, openScanSheet, scanAvailable, scanStatusLine } from './scan';
 import { WaveBackdrop } from './backdrop';
+import { START_DRAFT } from './design';
+import { inkWordmark } from './inkWordmark';
 import { closeOverlay, confirmDialog, isNarrow, openMenu, openPopover, openSheet, promptDialog, toast } from './ui';
 import * as sync from './sync';
 import type { PlaybackState } from './sync';
@@ -2882,6 +2884,8 @@ renderModeControls();
 renderSongList();
 refreshBindings();
 requestAnimationFrame(drawMarks);
+// Draft title screen: the name written in ink, floating over the paper.
+if (START_DRAFT) inkWordmark(document.querySelector<HTMLElement>('.landing-name')!);
 window.addEventListener('online', renderSongList);
 window.addEventListener('offline', renderSongList);
 

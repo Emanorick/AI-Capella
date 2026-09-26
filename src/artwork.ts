@@ -344,8 +344,8 @@ export function animateRibbons(canvas: HTMLCanvasElement, layout: (w: number, h:
   const field = START_DRAFT && !still && canvas.parentElement ? new RibbonField(canvas.parentElement, canvas) : null;
   const frame = (now: number) => {
     raf = still ? 0 : requestAnimationFrame(frame);
-    // About 30 frames a second, the full rate while someone is moving the lines.
-    if (!still && (document.hidden || now - last < (field?.lively ? 15 : 32))) return;
+    // About 30 frames a second; the interactive draft runs at the full rate (strings, sparks).
+    if (!still && (document.hidden || now - last < (field ? 0 : 32))) return;
     field?.step(Math.min(0.1, (now - last) / 1000), now / 1000);
     last = now;
     const prepared = prepareCanvas(canvas);

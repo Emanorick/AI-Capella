@@ -1,8 +1,8 @@
 // Draft of the next title screen (design.ts START_DRAFT): the voice lines, written by the pen as
 // before, become figures of light -- a thin bright core in each voice's colour inside a soft glow
 // that fades out gently (composed at a quarter of the resolution and scaled up, so it has no hard
-// edge). They answer the hand: near the pointer they give way a little; a click or tap draws them
-// toward it for a moment, with a brief flare of light where it landed.
+// edge). They answer the hand: moving across a line plucks it like a string; a click or tap draws
+// them toward it for a moment, with a brief flare of light where it landed.
 
 import { colorForPart } from './palette';
 import { withAlpha } from './theme';
@@ -10,18 +10,27 @@ import { pointAlong, pointedPen, type Pt } from './pen';
 import { fadeEnds, ribbonPoints, type RibbonOptions } from './artwork';
 
 const GLOW_SCALE = 0.25;
-const EVADE_PX = 26; // how far the lines give way right under the pointer
 const PULL = 0.5; // how much of the way to a click the lines go, at its strongest
 const PULL_SEC = 1.3; // how long a click's pull lasts
+// The lines as strings: caught where the pointer crosses one, drawn along with it for a little way,
+// then let go -- they ring out as a damped wave running along the line.
+const STRING_SUBSTEPS = 4;
+const STRING_DAMPING = 1.6; // per second
+const STRING_SPEED = 2.2; // line lengths per second
+const STRING_SMOOTHING = 10; // damps short ripples much more than the long swing, so no kinks run along
+const HOLD_SPREAD = 2.2; // samples: the finger holds a rounded stretch of the line, not a point
 
 type Pull = { x: number; y: number; t0: number };
+type Pointer = { x: number; y: number };
+type Str = { disp: Float32Array; vel: Float32Array; caught: boolean; prevRel: number | null };
 
-/** Where the hand is, and the clicks still pulling -- fed by pointer events, read every frame. */
+/** Where the hand is, the clicks still pulling, and the strings' motion -- fed by pointer events. */
 export class RibbonField {
-  private pointer: { x: number; y: number } | null = null;
-  private presence = 0; // eases toward 1 while the pointer is over the lines' area, else 0
+  private pointer: Pointer | null = null;
+  private prevPointer: Pointer | null = null;
   private pulls: Pull[] = [];
-  private lastInput = 0;
+  private strings: Str[] = [];
+  private dt = 0;
 
   private readonly target: HTMLElement;
   private readonly canvas: HTMLCanvasElement;
@@ -40,58 +49,103 @@ export class RibbonField {
     this.target.removeEventListener('pointerleave', this.onLeave);
   }
 
-  /** True shortly after any input -- the animation runs at full frame rate then. */
-  get lively(): boolean {
-    return performance.now() - this.lastInput < 2000 || this.pulls.length > 0 || this.presence > 0.01;
-  }
-
-  private local(e: PointerEvent): { x: number; y: number } {
+  private local(e: PointerEvent): Pointer {
     const r = this.canvas.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
   private onMove = (e: PointerEvent) => {
     this.pointer = this.local(e);
-    this.lastInput = performance.now();
   };
 
   private onDown = (e: PointerEvent) => {
     // Buttons keep their own meaning; everywhere else a press draws the lines to it.
     if ((e.target as HTMLElement).closest('button')) return;
     const p = this.local(e);
+    this.pointer = p;
     this.pulls.push({ ...p, t0: performance.now() / 1000 });
     if (this.pulls.length > 4) this.pulls.shift();
-    this.lastInput = performance.now();
   };
 
   private onLeave = () => {
     this.pointer = null;
   };
 
-  /** Advances the easing by dt seconds. */
+  /** Called once per frame before the lines are drawn: dt seconds since the last frame. */
   step(dt: number, now: number) {
-    const target = this.pointer ? 1 : 0;
-    this.presence += (target - this.presence) * Math.min(1, dt * 5);
+    this.dt = dt;
     this.pulls = this.pulls.filter((p) => now - p.t0 < PULL_SEC * 3);
   }
 
-  /** Bends a line's points: away from the pointer, toward recent clicks. */
-  bend(pts: Pt[], h: number, now: number): Pt[] {
-    const reach = Math.min(170, h * 0.28);
-    const pullReach = Math.min(300, h * 0.5);
-    return pts.map(([x, y]) => {
-      let dy = 0;
-      if (this.pointer && this.presence > 0.001) {
-        const ox = x - this.pointer.x;
-        const oy = y - this.pointer.y;
-        const f = Math.exp(-(ox * ox + oy * oy) / (reach * reach));
-        dy += (oy / (Math.abs(oy) + 14)) * EVADE_PX * f * this.presence;
+  /** Called after the lines of a frame: the pointer's position now becomes "before". */
+  endFrame() {
+    this.prevPointer = this.pointer ? { ...this.pointer } : null;
+  }
+
+  /**
+   * Moves line i's string on by this frame (catching it where the pointer crosses, letting it go
+   * once pulled too far) and returns the line bent by it and by recent clicks.
+   */
+  bend(i: number, pts: Pt[], h: number, now: number): Pt[] {
+    const n = pts.length - 1;
+    const str = (this.strings[i] ??= { disp: new Float32Array(n + 1), vel: new Float32Array(n + 1), caught: false, prevRel: null });
+    if (str.disp.length !== n + 1) {
+      str.disp = new Float32Array(n + 1);
+      str.vel = new Float32Array(n + 1);
+    }
+    const { disp, vel } = str;
+    const x0 = pts[0][0];
+    const dx = (pts[n][0] - x0) / n;
+    const maxPull = Math.min(70, h * 0.1);
+    const p = this.pointer;
+    let held = -1; // centre of the stretch held by the pointer
+    if (p && p.x > x0 && p.x < pts[n][0]) {
+      const j = Math.min(n - 4, Math.max(4, Math.round((p.x - x0) / dx)));
+      const rest = pts[j][1];
+      const rel = p.y - (rest + disp[j]);
+      // Crossing the string catches it.
+      if (!str.caught && str.prevRel !== null && this.prevPointer && Math.sign(rel) !== Math.sign(str.prevRel) && Math.abs(rel) < maxPull) str.caught = true;
+      if (str.caught) {
+        const pull = p.y - rest;
+        if (Math.abs(pull) > maxPull) str.caught = false; // slips off and rings
+        else held = j;
+        if (held >= 0) {
+          for (let k = -3; k <= 3; k++) {
+            const w = Math.exp(-((k / HOLD_SPREAD) ** 2));
+            disp[j + k] = disp[j + k] * (1 - w) + pull * w;
+            vel[j + k] *= 1 - w;
+          }
+        }
       }
-      for (const p of this.pulls) {
-        const t = now - p.t0;
+      str.prevRel = str.caught ? 0 : rel;
+    } else {
+      str.caught = false;
+      str.prevRel = null;
+    }
+    // The wave equation, damped, both ends fixed where the voices meet.
+    // Enough steps a second (c * step < 1 sample) whatever the frame rate, so it stays stable.
+    const sub = Math.max(STRING_SUBSTEPS, Math.ceil(this.dt * STRING_SPEED * n * 1.6));
+    const h2 = this.dt / sub;
+    const c = STRING_SPEED * n; // in samples per second
+    for (let s = 0; s < sub && this.dt > 0; s++) {
+      for (let j = 1; j < n; j++) {
+        if (j === held) {
+          vel[j] = 0;
+          continue;
+        }
+        vel[j] +=
+          (c * c * (disp[j - 1] - 2 * disp[j] + disp[j + 1]) + STRING_SMOOTHING * (vel[j - 1] - 2 * vel[j] + vel[j + 1]) - STRING_DAMPING * vel[j]) * h2;
+      }
+      for (let j = 1; j < n; j++) if (j !== held) disp[j] += vel[j] * h2;
+    }
+    const pullReach = Math.min(300, h * 0.5);
+    return pts.map(([x, y], j) => {
+      let dy = disp[j];
+      for (const q of this.pulls) {
+        const t = now - q.t0;
         const a = (1 - Math.exp(-t / 0.14)) * Math.exp(-t / PULL_SEC);
-        const f = Math.exp(-((x - p.x) * (x - p.x)) / (pullReach * pullReach));
-        dy += (p.y - y) * PULL * a * f;
+        const f = Math.exp(-((x - q.x) * (x - q.x)) / (pullReach * pullReach));
+        dy += (q.y - y) * PULL * a * f;
       }
       return [x, y + dy];
     });
@@ -104,6 +158,14 @@ export class RibbonField {
       return { x: p.x, y: p.y, k: (1 - Math.exp(-t / 0.06)) * Math.exp(-t / 0.7) };
     });
   }
+}
+
+/** The point at fraction u (0..1) along a line of evenly spaced samples, between samples too. */
+function sampleAt(pts: Pt[], u: number): Pt {
+  const f = u * (pts.length - 1);
+  const j = Math.min(pts.length - 2, Math.floor(f));
+  const k = f - j;
+  return [pts[j][0] + (pts[j + 1][0] - pts[j][0]) * k, pts[j][1] + (pts[j + 1][1] - pts[j][1]) * k];
 }
 
 let glowLayer: HTMLCanvasElement | null = null;
@@ -119,8 +181,9 @@ export function drawLightRibbons(ctx: CanvasRenderingContext2D, w: number, h: nu
   const halo = o.halo ?? 14;
   const lines = Array.from({ length: o.voices }, (_, i) => {
     const pts = ribbonPoints(i, o, t, steps, 0.6 + 0.4 * lit);
-    return { color: colorForPart(i, o.voices), pts: field ? field.bend(pts, h, now) : pts, p: progress[i] };
+    return { color: colorForPart(i, o.voices), pts: field ? field.bend(i, pts, h, now) : pts, p: progress[i] };
   });
+  field?.endFrame();
 
   // The glow: the lines drawn wide and faint at a quarter of the size, in three widths, then
   // scaled up -- which blurs it into a soft fall-off.
@@ -204,7 +267,7 @@ export function drawLightRibbons(ctx: CanvasRenderingContext2D, w: number, h: nu
     lines.forEach(({ color, pts }, i) => {
       for (let b = 0; b < 3; b++) {
         const u = (((t * (0.035 + i * 0.006) + b / 3 + i * 0.13) % 1) + 1) % 1;
-        const [bx, by] = pts[Math.round(u * steps)];
+        const [bx, by] = sampleAt(pts, u);
         const a = Math.sin(Math.PI * u) * lit;
         const r = (o.bead ?? 3.2) * (0.6 + 0.4 * a);
         const spark = ctx.createRadialGradient(bx, by, 0, bx, by, r * 3.5);

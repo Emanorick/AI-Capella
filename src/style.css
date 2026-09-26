@@ -2908,13 +2908,54 @@ body:has(#app.mode-landing)::after {
    as paper tabs embossed out of the sheet. */
 
 :root[data-start='neu'] .landing-name {
-  color: transparent;
-  --ink-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='260' height='120'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='.018 .35' numOctaves='3' seed='9' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .1  0 0 0 0 .07  0 0 0 0 .12  0 0 0 .5 -.12'/></filter><rect width='100%' height='100%' filter='url(%23g)'/></svg>");
-  background: var(--ink-grain), linear-gradient(180deg, #f2e9dc, #e4d8c6);
-  -webkit-background-clip: text;
-  background-clip: text;
-  /* Pressed in: the upper edge of each letter in shadow, the lower edge catching light. */
-  filter: drop-shadow(0 -1px 0 rgb(0 0 0 / 0.55)) drop-shadow(0 1px 0 rgb(255 244 228 / 0.1));
+  line-height: 0;
+}
+
+/* The inked name (inkWordmark.ts): hovering over the paper -- a soft shadow some way below it, a
+   slow drift -- and written in from left to right when the title screen opens. */
+:root[data-start='neu'] .landing-name .ink {
+  display: block;
+  filter: drop-shadow(0 16px 14px rgb(0 0 0 / 0.5)) drop-shadow(0 2px 2px rgb(0 0 0 / 0.28));
+  animation: ink-float 7s ease-in-out 1.6s infinite;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(var(--written) - 8%), transparent var(--written));
+  mask-image: linear-gradient(90deg, #000 calc(var(--written) - 8%), transparent var(--written));
+}
+
+@property --written {
+  syntax: '<percentage>';
+  inherits: false;
+  initial-value: 108%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-start='neu'] .landing-name .ink {
+    animation: ink-write 1.5s cubic-bezier(0.45, 0.1, 0.4, 1) 0.15s both, ink-float 7s ease-in-out 1.7s infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-start='neu'] .landing-name .ink {
+    animation: none;
+  }
+}
+
+@keyframes ink-write {
+  from {
+    --written: 0%;
+  }
+  to {
+    --written: 108%;
+  }
+}
+
+@keyframes ink-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
 }
 
 :root[data-start='neu'] .mode-btn {

@@ -368,10 +368,15 @@ layer (strength between "subtle" and "balanced" of its design draft):
 - **Title screen draft (`?start=neu`, design.ts `START_DRAFT`; not the default yet).** The voice
   lines, written by the pen as before, become figures of light (`lightRibbons.ts`): a thin bright
   core in a soft glow (drawn wide and faint at a quarter of the size in three widths, scaled up),
-  sparks travelling along them. They answer the hand (`RibbonField`): near the pointer they give
-  way a little; a click or tap draws them toward it for a moment with a small flare of light. The
-  name is printed into the paper (ink with an uneven grain, pressed-in edges) and the two choices
-  are paper tabs embossed out of the sheet.
+  sparks gliding along them (positions interpolated between samples, full frame rate). The lines
+  are strings (`RibbonField`): crossing one with the pointer catches it, it is drawn along for a
+  way and slips off, then rings out -- a damped wave equation per line, both ends fixed, with extra
+  damping of short ripples so no kinks run along it. A click or tap draws the lines toward it for a
+  moment with a small flare of light. The name (`inkWordmark.ts`) is the Bodoni traced in ink: each
+  letter set down by hand (a hair of tilt and lift), a pen's minimum line width, the ink feathered
+  into the paper's fibres at the edges and pooled along them; it floats over the paper on a soft
+  shadow and is written in from left to right. The two choices are paper tabs embossed out of the
+  sheet.
 - **Piano roll as a lit paper roll ("lantern").** `NOTE_STYLE` in `pianoRoll.ts`: part of the
   paper design (Samt & Glas uses the gel notes); any device can also pick it with `?roll=lantern`
   / `?roll=gel`. The roll is dark paper (with fibres, `theme.ts paperGrain`) with a round hole per
