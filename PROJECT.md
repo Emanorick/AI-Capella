@@ -365,18 +365,17 @@ layer (strength between "subtle" and "balanced" of its design draft):
   is still there as `?logo=1`.) The app mark, app icons and favicon are the four voice lines
   written with the pointed pen on night paper (icons generated from the same geometry as
   `drawMark`; the service worker's cache name was bumped so installed apps pick them up).
-- **Title screen draft (`?start=neu`, design.ts `START_DRAFT`; not the default yet).** The voice
-  lines, written by the pen as before, become figures of light (`lightRibbons.ts`): a thin bright
-  core in a soft glow (drawn wide and faint at a quarter of the size in three widths, scaled up),
-  sparks gliding along them (positions interpolated between samples, full frame rate). The lines
-  are strings (`RibbonField`): crossing one with the pointer catches it, it is drawn along for a
-  way and slips off, then rings out -- a damped wave equation per line, both ends fixed, with extra
-  damping of short ripples so no kinks run along it. A click or tap draws the lines toward it for a
-  moment with a small flare of light. The name (`inkWordmark.ts`) is the Bodoni traced in ink: each
-  letter set down by hand (a hair of tilt and lift), a pen's minimum line width, the ink feathered
-  into the paper's fibres at the edges and pooled along them; it floats over the paper on a soft
-  shadow and is written in from left to right. The two choices are paper tabs embossed out of the
-  sheet.
+- **Title screen (paper design; design.ts `START_DRAFT`, `?start=heute` brings back the earlier
+  one).** The voice lines, written by the pen one after another, become figures of light
+  (`lightRibbons.ts`): a thin bright core in a soft glow (drawn wide and faint at a quarter of the
+  size in three widths, scaled up), sparks gliding along them (positions interpolated between
+  samples, full frame rate). A click or tap draws the lines toward it for a moment with a small
+  flare of light (`RibbonField`). (Plucking the lines like strings was tried and dropped: it made
+  them strings instead of lines of music.) The name (`inkWordmark.ts`) is the Bodoni traced in
+  ink: each letter set down by hand (a hair of tilt and lift), a pen's minimum line width, the ink
+  feathered into the paper's fibres at the edges and pooled along them; it floats over the paper
+  on a soft shadow and is written in from left to right. The two choices are paper tabs embossed
+  out of the sheet.
 - **Piano roll as a lit paper roll ("lantern").** `NOTE_STYLE` in `pianoRoll.ts`: part of the
   paper design (Samt & Glas uses the gel notes); any device can also pick it with `?roll=lantern`
   / `?roll=gel`. The roll is dark paper (with fibres, `theme.ts paperGrain`) with a round hole per
