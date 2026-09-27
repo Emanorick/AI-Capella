@@ -290,6 +290,10 @@ button:disabled {
 
 #landing {
   position: relative;
+  /* A title screen, not a text: nothing on it gets selected by a stray drag or double-click. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
   flex-direction: column;
   align-items: center;
   justify-content: center;
