@@ -393,6 +393,16 @@ layer (strength between "subtle" and "balanced" of its design draft):
   nib; what is written glows, and breathes softly once done. The name floats over the paper. In the
   header and on the PIN screen the same pairing is set in type (`.ls-l`, "Score" in gold). The two choices are paper tabs embossed
   out of the sheet.
+- **Draft title "Die erste Zeile" (`?start=zeile`, `titleStaff.ts`).** The title as the first line
+  of a score: a rastral (the five-nibbed pen music paper was ruled with) draws a staff across the
+  paper; "Score" is pressed into it in gold, its letters standing exactly between the top and bottom
+  lines (the container, holding still -- the name neither rises in nor floats here); the pen of
+  light writes "Light" across the staff, its L, g and h breaking out of the lines (the contained,
+  moving), and the player's reading line follows the pen, lighting the staff from behind; then it
+  runs on to the staff's end and the five lines take on the five voices' colours in its wake. A
+  few notes of light travel along them afterwards; a tap sends a pulse along the staff.
+  `lightScoreName(host, true)` keeps "Score" in place and reports the name's geometry and the
+  nib's position (`TitleName.geometry()`, `nib()`) for the staff to be drawn to.
 - **Piano roll as a lit paper roll ("lantern").** `NOTE_STYLE` in `pianoRoll.ts`: part of the
   paper design (Samt & Glas uses the gel notes); any device can also pick it with `?roll=lantern`
   / `?roll=gel`. The roll is dark paper (with fibres, `theme.ts paperGrain`) with a round hole per

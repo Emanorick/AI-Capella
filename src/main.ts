@@ -23,8 +23,9 @@ import { countLabel, keyName, lang, setLang, t } from './i18n';
 import { canvasFontsReady } from './theme';
 import { initScan, openScanSheet, scanAvailable, scanStatusLine } from './scan';
 import { WaveBackdrop } from './backdrop';
-import { START_DRAFT } from './design';
+import { START_DRAFT, START_STAFF } from './design';
 import { lightScoreName, type TitleName } from './lightName';
+import { animateStaff } from './titleStaff';
 import { loadScriptFont } from './goldInk';
 import { closeOverlay, confirmDialog, isNarrow, openMenu, openPopover, openSheet, promptDialog, toast } from './ui';
 import * as sync from './sync';
@@ -306,7 +307,10 @@ function setViewMode(mode: 'landing' | 'library' | 'player') {
   // The title screen keeps its plain ground: only the voice ribbons move there.
   backdrop.setShown(mode !== 'landing');
   closeOverlay();
-  if (mode === 'landing' && !stopLandingRibbons) {
+  if (mode === 'landing' && !stopLandingRibbons && START_STAFF && titleName) {
+    // Draft: the title as the first line of a score (titleStaff.ts).
+    stopLandingRibbons = animateStaff(document.querySelector<HTMLCanvasElement>('#landing-ribbons')!, titleName);
+  } else if (mode === 'landing' && !stopLandingRibbons) {
     stopLandingRibbons = animateRibbons(
       document.querySelector<HTMLCanvasElement>('#landing-ribbons')!,
       (w, h) =>
@@ -2976,7 +2980,7 @@ async function runBootstrap() {
 // Ensemble choice comes after it (the last choice is marked). The one exception is the reload right
 // after switching modes from inside the app, which goes straight on in the new mode.
 // The title screen's name, written before anything else moves there (the voice lines wait for it).
-if (START_DRAFT) titleName = lightScoreName(document.querySelector<HTMLElement>('.landing-name')!);
+if (START_DRAFT) titleName = lightScoreName(document.querySelector<HTMLElement>('.landing-name')!, START_STAFF);
 const storedMode = localStorage.getItem(MODE_STORAGE_KEY);
 const switchedMode = sessionStorage.getItem(MODE_SWITCH_KEY);
 sessionStorage.removeItem(MODE_SWITCH_KEY);

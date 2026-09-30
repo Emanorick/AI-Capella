@@ -3089,3 +3089,32 @@ body:has(#app.mode-landing)::after {
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
+
+/* ---- Draft title "Die erste Zeile" (?start=zeile, titleStaff.ts) -----------------------------
+   The name stands still on the ruled staff: no rising in, no floating (the staff is drawn to its
+   exact position). "Score" is pressed into the paper in gold, a moment into the ruling; the two
+   choices come once "Light" is written. */
+:root[data-title='zeile'] .landing-name,
+:root[data-title='zeile'] .ls-name {
+  animation: none;
+}
+:root[data-title='zeile'] .landing-name .ls-score {
+  opacity: 0;
+  filter: drop-shadow(0 1px 0 rgb(255 236 200 / 0.07)) drop-shadow(0 -1px 1px rgb(0 0 0 / 0.55));
+}
+:root[data-title='zeile'] .landing-name .ls-name.score-in .ls-score {
+  animation: ls-appear 0.9s ease-out 0.55s both;
+}
+:root[data-title='zeile'] .landing-modes {
+  animation-delay: 3.6s;
+}
+/* The name and its staff are one line now, not a name over a band of lines: the choices sit closer. */
+:root[data-title='zeile'] #landing {
+  gap: clamp(96px, 16vh, 170px);
+  padding-bottom: calc(6vh + var(--safe-b));
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-title='zeile'] .landing-name .ls-score {
+    opacity: 1;
+  }
+}

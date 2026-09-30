@@ -136,17 +136,24 @@ function penPath(art: LightArt): PenPoint[] {
 }
 
 export interface TitleName {
-  shown: Promise<void>; // "Score" is up, in the middle
+  shown: Promise<void>; // "Score" is up (in the middle, or in its place on the staff)
+  written: Promise<void>; // the pen has finished "Light"
   scoreLeft(): number; // where its S begins, viewport px
-  push(): void; // glide "Score" aside, and set the pen to "Light"
+  push(): void; // glide "Score" aside (staff: leave it), and set the pen to "Light"
+  /** "Score"'s baseline and cap height, and the name's extent -- viewport px (the staff's frame). */
+  geometry(): { baseline: number; capTop: number; left: number; right: number } | null;
+  nib(): { x: number; y: number } | null; // where the pen of light is right now, viewport px
 }
 
-/** Replaces `host`'s text with the name (it stays readable for screen readers as a label). */
-export function lightScoreName(host: HTMLElement): TitleName {
+/**
+ * Replaces `host`'s text with the name (it stays readable for screen readers as a label). With
+ * `staff` (titleStaff.ts) "Score" appears in its place rather than in the middle, and holds still.
+ */
+export function lightScoreName(host: HTMLElement, staff = false): TitleName {
   host.textContent = '';
   host.setAttribute('aria-label', 'LightScore');
   const wrap = document.createElement('span');
-  wrap.className = 'ls-name';
+  wrap.className = staff ? 'ls-name staff' : 'ls-name';
   wrap.setAttribute('aria-hidden', 'true');
   const light = document.createElement('canvas');
   light.className = 'ls-light';
@@ -170,6 +177,13 @@ export function lightScoreName(host: HTMLElement): TitleName {
   let leftCache: number | null = null;
   let shownNow!: () => void;
   const shown = new Promise<void>((resolve) => (shownNow = resolve));
+  let writtenNow!: () => void;
+  const written = new Promise<void>((resolve) => (writtenNow = resolve));
+  let nibAt: { x: number; y: number } | null = null; // css px in the light canvas
+  let capAscent = 0;
+  let scoreBaseline = 0; // css px in the score canvas
+  let rects: { light: DOMRect; score: DOMRect } | null = null;
+  const measured = () => (rects ??= { light: light.getBoundingClientRect(), score: score.getBoundingClientRect() });
 
   const push = () => {
     if (glided || !art) return;
@@ -182,6 +196,8 @@ export function lightScoreName(host: HTMLElement): TitleName {
 
   const finish = () => {
     done = true;
+    nibAt = null;
+    writtenNow();
     wrap.classList.add('light-written');
     wrap.classList.add('light-settled');
     const ctx = light.getContext('2d')!;
@@ -199,7 +215,10 @@ export function lightScoreName(host: HTMLElement): TitleName {
       finish();
       return;
     }
-    if (t > end) wrap.classList.add('light-written');
+    if (t > end) {
+      wrap.classList.add('light-written');
+      writtenNow();
+    }
     const dpr = art.dpr;
     // What the nib has covered since the last frame joins the written part.
     const m = mask.getContext('2d')!;
@@ -237,6 +256,7 @@ export function lightScoreName(host: HTMLElement): TitleName {
     glow(ctx, revealed, dpr, art.size);
 
     // The nib: a bright point where the pen is, dimming while it is lifted and after the last stroke.
+    nibAt = nib && t <= end ? { x: nib.x, y: nib.y } : null;
     if (nib) {
       const lifted = next && !next.dot && t < next.t ? Math.max(0, 1 - (t - (masked > 0 ? path[masked - 1].t : 0)) / 0.08) : 1;
       const fade = t > end ? Math.max(0, 1 - (t - end) / FINISH_SEC) : 1;
@@ -271,6 +291,10 @@ export function lightScoreName(host: HTMLElement): TitleName {
     const ink = renderInk(score, 'Score', size, 600, 'gold');
     inkPad = ink.pad;
     leftCache = null;
+    rects = null;
+    scoreBaseline = ink.baseline;
+    probe.font = `600 ${size}px ${FONT_DISPLAY}`;
+    capAscent = probe.measureText('S').actualBoundingBoxAscent;
     art = renderLight(size * LIGHT_SCALE, dpr);
     path = penPath(art);
     light.width = art.core.width;
@@ -295,7 +319,7 @@ export function lightScoreName(host: HTMLElement): TitleName {
     score.style.left = `${art.width + size * GAP - ink.pad}px`;
     score.style.top = `${baseline - ink.baseline}px`;
     // In the middle of the name's box, before it glides aside.
-    scoreShift = (art.width + size * GAP + scoreW) / 2 - (art.width + size * GAP + scoreW / 2);
+    scoreShift = staff ? 0 : (art.width + size * GAP + scoreW) / 2 - (art.width + size * GAP + scoreW / 2);
     if (!glided) score.style.transform = `translateX(${scoreShift}px)`;
   };
 
@@ -311,6 +335,7 @@ export function lightScoreName(host: HTMLElement): TitleName {
     wrap.classList.add('score-in');
     shownNow();
     window.setTimeout(push, PUSH_FALLBACK_SEC * 1000);
+    // (The staff calls push() itself once it is ruled; the fallback is only for when it can't.)
   });
   // Should the typefaces never arrive, the voice lines needn't wait for ever.
   window.setTimeout(shownNow, 6000);
@@ -325,7 +350,15 @@ export function lightScoreName(host: HTMLElement): TitleName {
   });
   return {
     shown,
+    written,
     scoreLeft: () => (leftCache ??= score.getBoundingClientRect().left + inkPad),
     push,
+    geometry: () => {
+      if (!art) return null;
+      const r = measured();
+      const baseline = r.score.top + scoreBaseline;
+      return { baseline, capTop: baseline - capAscent, left: r.light.left + art.pad, right: r.score.right - inkPad };
+    },
+    nib: () => (nibAt ? { x: measured().light.left + nibAt.x, y: measured().light.top + nibAt.y } : null),
   };
 }
