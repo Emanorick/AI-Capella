@@ -56,7 +56,7 @@ export type Sound = 'piano' | 'voice';
 // tied to the context that decoded it). Until they're in -- or if they can't be loaded -- the
 // synthesized piano below plays instead.
 const SAMPLE_ROOTS = Array.from({ length: 22 }, (_, i) => 33 + i * 3);
-const SAMPLE_LEVEL = 1.8; // matched in loudness to the other sounds (measured over a six-voice passage)
+const SAMPLE_LEVEL = 1.5; // matched in loudness to the other sounds (six voices, with the brightening below)
 const SAMPLE_RELEASE_SEC = 0.09;
 const PIANO_AIR_HZ = 2600; // high shelf: presence and sparkle
 const PIANO_AIR_DB = 5;
@@ -64,8 +64,9 @@ const PIANO_BODY_HZ = 180; // low shelf: a little less boom in the bass
 const PIANO_BODY_DB = -2; // time constant of the damper after note-off
 // Every recording starts with a few milliseconds of silence (and an MP3 decoder may add its own
 // padding in front), which would put each note audibly behind the light that marks it. Playback
-// starts each recording this little before its attack instead.
-const SAMPLE_PREROLL_SEC = 0.001;
+// starts each recording this little before its attack instead, fading in over that time: starting
+// cold on the room noise before the attack clicked, most audibly on chords.
+const SAMPLE_PREROLL_SEC = 0.004;
 type PianoSample = { root: number; buffer: AudioBuffer; onset: number };
 let sampleBuffers: Map<number, PianoSample> | null = null;
 let sampleLoad: Promise<void> | null = null;
@@ -115,8 +116,9 @@ export function playSampledNote(ctx: AudioContext, destination: AudioNode, start
   source.playbackRate.value = Math.pow(2, (midi - sample.root) / 12);
   const gain = ctx.createGain();
   const noteOff = startTime + duration;
-  gain.gain.setValueAtTime(SAMPLE_LEVEL, startTime);
-  gain.gain.setValueAtTime(SAMPLE_LEVEL, noteOff);
+  gain.gain.setValueAtTime(0, startTime);
+  gain.gain.linearRampToValueAtTime(SAMPLE_LEVEL, startTime + SAMPLE_PREROLL_SEC);
+  gain.gain.setValueAtTime(SAMPLE_LEVEL, Math.max(noteOff, startTime + SAMPLE_PREROLL_SEC));
   gain.gain.setTargetAtTime(0, noteOff, SAMPLE_RELEASE_SEC);
   source.connect(gain).connect(destination);
   source.start(startTime, sample.onset);
@@ -485,10 +487,12 @@ export class AudioEngine {
     // A limiter last in line: many voices on one chord (or a unison) must never clip -- the old
     // synthesized sound did, measured at peaks of 1.15 with six voices.
     const limiter = this.ctx.createDynamicsCompressor();
-    limiter.threshold.value = -3;
-    limiter.knee.value = 0;
+    // Not quite instant: gripping within a millisecond distorted the attacks of full chords (heard
+    // as a click on each new chord).
+    limiter.threshold.value = -2;
+    limiter.knee.value = 2;
     limiter.ratio.value = 20;
-    limiter.attack.value = 0.001;
+    limiter.attack.value = 0.003;
     limiter.release.value = 0.1;
     this.compressor.connect(limiter).connect(this.ctx.destination);
 

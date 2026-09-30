@@ -231,6 +231,7 @@ let duckVolume = 0.25;
 let transpose = 0;
 let zoom = 1;
 let viewOffsetBeats = 0;
+let landingNameWritten: Promise<void> | null = null;
 // A view on its way back to the playback position: how far off it started, when, for how long --
 // the screen travels there with a gentle start and landing instead of jumping (recenterSmoothly).
 let viewGlide: { from: number; t0: number; ms: number } | null = null;
@@ -306,10 +307,14 @@ function setViewMode(mode: 'landing' | 'library' | 'player') {
   backdrop.setShown(mode !== 'landing');
   closeOverlay();
   if (mode === 'landing' && !stopLandingRibbons) {
-    stopLandingRibbons = animateRibbons(document.querySelector<HTMLCanvasElement>('#landing-ribbons')!, (w, h) =>
-      w < 700
-        ? { voices: 6, x0: -0.1 * w, x1: 1.1 * w, cy: h * 0.5, gap: 13, amp: 26, line: 2.2, halo: 12 }
-        : { voices: 6, x0: -0.04 * w, x1: 1.04 * w, cy: h * 0.5, gap: Math.min(24, h * 0.03), amp: Math.min(46, h * 0.055), line: 2.6, halo: 16, bead: 3.6 },
+    stopLandingRibbons = animateRibbons(
+      document.querySelector<HTMLCanvasElement>('#landing-ribbons')!,
+      (w, h) =>
+        w < 700
+          ? { voices: 6, x0: -0.1 * w, x1: 1.1 * w, cy: h * 0.5, gap: 13, amp: 26, line: 2.2, halo: 12 }
+          : { voices: 6, x0: -0.04 * w, x1: 1.04 * w, cy: h * 0.5, gap: Math.min(24, h * 0.03), amp: Math.min(46, h * 0.055), line: 2.6, halo: 16, bead: 3.6 },
+      // The voice lines come once the name is written (lightName.ts).
+      landingNameWritten ?? undefined,
     );
   } else if (mode !== 'landing' && stopLandingRibbons) {
     stopLandingRibbons();
@@ -2959,6 +2964,8 @@ async function runBootstrap() {
 // Mode resolution: with a shared backend, every start opens on the title screen and the Solo /
 // Ensemble choice comes after it (the last choice is marked). The one exception is the reload right
 // after switching modes from inside the app, which goes straight on in the new mode.
+// The title screen's name, written before anything else moves there (the voice lines wait for it).
+if (START_DRAFT) landingNameWritten = lightScoreName(document.querySelector<HTMLElement>('.landing-name')!);
 const storedMode = localStorage.getItem(MODE_STORAGE_KEY);
 const switchedMode = sessionStorage.getItem(MODE_SWITCH_KEY);
 sessionStorage.removeItem(MODE_SWITCH_KEY);
@@ -2976,8 +2983,6 @@ renderModeControls();
 renderSongList();
 refreshBindings();
 requestAnimationFrame(drawMarks);
-// Draft title screen: the name written in ink, floating over the paper.
-if (START_DRAFT) lightScoreName(document.querySelector<HTMLElement>('.landing-name')!);
 // The pen script of the gold-ink markings: draw again once it is in.
 void loadScriptFont().then(() => renderNow());
 window.addEventListener('online', renderSongList);
