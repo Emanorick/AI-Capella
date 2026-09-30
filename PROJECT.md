@@ -398,11 +398,16 @@ layer (strength between "subtle" and "balanced" of its design draft):
   paper; "Score" is pressed into it in gold, its letters standing exactly between the top and bottom
   lines (the container, holding still -- the name neither rises in nor floats here); the pen of
   light writes "Light" across the staff, its L, g and h breaking out of the lines (the contained,
-  moving), and the player's reading line follows the pen, lighting the staff from behind; then it
-  runs on to the staff's end and the five lines take on the five voices' colours in its wake. A
-  few notes of light travel along them afterwards; a tap sends a pulse along the staff.
-  `lightScoreName(host, true)` keeps "Score" in place and reports the name's geometry and the
-  nib's position (`TitleName.geometry()`, `nib()`) for the staff to be drawn to.
+  moving). Once written, "Light" flares up and sends out the player's reading line: it rises at
+  the end of the word and glides, easing in and out, to the end of the staff, lighting the lines
+  from behind as it passes. Past "Score" it finds the voices -- five notes punched into the paper
+  like the piano roll's, entering one after another from the lowest, each as long as the others --
+  and lights them in their colours as it crosses them. The lines stay neutral, as the sheet view's
+  staff: the colours belong to the notes, as everywhere in the app (a first draft coloured the lines
+  themselves; they read as voices then, not as a staff). On a phone the name starts the line and
+  leaves its end to the voices. A tap sends a pulse along the staff.
+  `lightScoreName(host, true)` keeps "Score" in place and reports the name's geometry
+  (`TitleName.geometry()`) for the staff to be drawn to.
 - **Piano roll as a lit paper roll ("lantern").** `NOTE_STYLE` in `pianoRoll.ts`: part of the
   paper design (Samt & Glas uses the gel notes); any device can also pick it with `?roll=lantern`
   / `?roll=gel`. The roll is dark paper (with fibres, `theme.ts paperGrain`) with a round hole per

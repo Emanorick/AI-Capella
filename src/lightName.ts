@@ -141,7 +141,7 @@ export interface TitleName {
   scoreLeft(): number; // where its S begins, viewport px
   push(): void; // glide "Score" aside (staff: leave it), and set the pen to "Light"
   /** "Score"'s baseline and cap height, and the name's extent -- viewport px (the staff's frame). */
-  geometry(): { baseline: number; capTop: number; left: number; right: number } | null;
+  geometry(): { baseline: number; capTop: number; left: number; right: number; lightRight: number; scoreLeft: number } | null;
   nib(): { x: number; y: number } | null; // where the pen of light is right now, viewport px
 }
 
@@ -285,7 +285,11 @@ export function lightScoreName(host: HTMLElement, staff = false): TitleName {
     const probe = document.createElement('canvas').getContext('2d')!;
     probe.font = `400 ${base * LIGHT_SCALE}px ${FONT_SCRIPT}`;
     const lightW = probe.measureText('Light').width;
-    const fit = Math.min(1, (window.innerWidth * 0.9) / (lightW + base * (GAP + 2.95)));
+    // On a phone's staff the name starts the line and leaves its end to the voices (titleStaff.ts).
+    const narrowStaff = staff && window.innerWidth < 700;
+    const fit = Math.min(1, (window.innerWidth * (narrowStaff ? 0.62 : 0.9)) / (lightW + base * (GAP + 2.95)));
+    wrap.style.marginLeft = narrowStaff ? '6px' : '';
+    host.style.alignSelf = narrowStaff ? 'stretch' : '';
     const size = base * fit;
 
     const ink = renderInk(score, 'Score', size, 600, 'gold');
@@ -357,7 +361,14 @@ export function lightScoreName(host: HTMLElement, staff = false): TitleName {
       if (!art) return null;
       const r = measured();
       const baseline = r.score.top + scoreBaseline;
-      return { baseline, capTop: baseline - capAscent, left: r.light.left + art.pad, right: r.score.right - inkPad };
+      return {
+        baseline,
+        capTop: baseline - capAscent,
+        left: r.light.left + art.pad,
+        right: r.score.right - inkPad,
+        lightRight: r.light.left + art.pad + art.width,
+        scoreLeft: r.score.left + inkPad,
+      };
     },
     nib: () => (nibAt ? { x: measured().light.left + nibAt.x, y: measured().light.top + nibAt.y } : null),
   };
