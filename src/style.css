@@ -2958,7 +2958,7 @@ body:has(#app.mode-landing)::after {
 }
 
 /* LightScore on the title screen (lightName.ts): the two words sit on one baseline and float
-   together; "Score" is written in once "Light" has been, and "Light" breathes softly afterwards. */
+   together; "Score" is written in once the pen has written "Light", which then breathes softly. */
 :root[data-start='neu'] .ls-name {
   position: relative;
   display: block;
@@ -2967,15 +2967,19 @@ body:has(#app.mode-landing)::after {
 :root[data-start='neu'] .ls-light {
   position: absolute;
 }
-:root[data-start='neu'] .ls-name.written .ls-light {
+:root[data-start='neu'] .ls-name.light-settled .ls-light {
   animation: ls-breathe 6s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: no-preference) {
   :root[data-start='neu'] .ls-name {
-    animation: ink-float 7s ease-in-out 3s infinite;
+    animation: ink-float 7s ease-in-out 5s infinite;
   }
   :root[data-start='neu'] .landing-name .ls-score {
-    animation: ink-write 1.1s cubic-bezier(0.45, 0.1, 0.4, 1) 1.3s both;
+    --written: 0%;
+    animation: none;
+  }
+  :root[data-start='neu'] .landing-name .ls-name.light-written .ls-score {
+    animation: ink-write 1.1s cubic-bezier(0.45, 0.1, 0.4, 1) 0.05s both;
   }
 }
 @keyframes ls-breathe {

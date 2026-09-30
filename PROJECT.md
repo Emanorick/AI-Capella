@@ -376,9 +376,14 @@ layer (strength between "subtle" and "balanced" of its design draft):
   samples, full frame rate). A click or tap draws the lines toward it for a moment with a small
   flare of light (`RibbonField`). (Plucking the lines like strings was tried and dropped: it made
   them strings instead of lines of music.) The name, **LightScore** (`lightName.ts`): "Light" moves,
-  "Score" holds. "Light" is written with light in a pen script (Italianno) -- a bright point
-  travels along the letters (following where their ink lies, column by column) and leaves them
-  glowing, then they breathe softly; "Score" follows in ink, the Bodoni traced by
+  "Score" holds. "Light" is written with light in a pen script (Italianno), stroke by stroke
+  in the order a hand writes it (the L; the i into the g's bowl; the g's stem and loop; the dot; the
+  h into the t; the t's bar), at a writing hand's pace: about 4 em per second on the straight,
+  slower through the curves, easing in and out of each stroke, a short lift between strokes, about
+  three seconds in all. The strokes (`lightStrokes.ts`) were traced from the rendered glyphs: their
+  skeleton (thinned), routed between hand-placed waypoints, with the stroke's half-width at each
+  point, so the nib's reveal (circles along the way, into a mask) follows the real letters. A
+  bright point marks the nib; what is written glows, and breathes softly once done; "Score" follows in ink, the Bodoni traced by
   `inkWordmark.ts` (`renderInk`: each letter set down by hand, a pen's minimum line width, the ink
   feathered into the paper's fibres and pooled along the edges), written in from left to right.
   The name floats over the paper, the voice lines of light run across the whole width beneath it.
