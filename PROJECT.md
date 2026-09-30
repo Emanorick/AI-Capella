@@ -385,7 +385,7 @@ layer (strength between "subtle" and "balanced" of its design draft):
   t's bar), at a writing hand's pace: about 5.6 em per second on the straight, slower through the
   curves, easing in and out of each stroke, a short lift between strokes, a little over two seconds
   in all; and with the pen the voice lines of light come in -- five, like the lines of a staff,
-  written and swaying at 0.72 of their former pace (`animateRibbons(…, after, pace)`). strokes (`lightStrokes.ts`) were traced from the rendered glyphs: their skeleton (thinned),
+  written and swaying at 0.72 of their former pace (`animateRibbons(…, after, pace)`). The strokes (`lightStrokes.ts`) were traced from the rendered glyphs: their skeleton (thinned),
   routed between hand-placed waypoints, with the stroke's half-width at each point, so the nib's
   reveal (circles along the way, into a mask) follows the real letters. A bright point marks the
   nib; what is written glows, and breathes softly once done. The name floats over the paper. In the
