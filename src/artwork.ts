@@ -334,7 +334,7 @@ function drawPenCover(ctx: CanvasRenderingContext2D, w: number, h: number, data:
  * Draws a single still frame for people who ask for reduced motion, and skips frames while the
  * tab is hidden.
  */
-export function animateRibbons(canvas: HTMLCanvasElement, layout: (w: number, h: number) => RibbonOptions, after?: Promise<void>): () => void {
+export function animateRibbons(canvas: HTMLCanvasElement, layout: (w: number, h: number) => RibbonOptions, after?: Promise<void>, pace = 1): () => void {
   // (In the paper design the lines are first written by a pen -- see drawPenRibbons.)
   const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   let raf = 0;
@@ -352,7 +352,8 @@ export function animateRibbons(canvas: HTMLCanvasElement, layout: (w: number, h:
     last = now;
     const prepared = prepareCanvas(canvas);
     if (!prepared) return;
-    const sec = still ? 99 : Math.max(0, (now - start) / 1000);
+    // `pace` below 1: the lines are written, and sway, more slowly and calmly.
+    const sec = still ? 99 : Math.max(0, (now - start) / 1000) * pace;
     const o = layout(prepared.w, prepared.h);
     if (START_DRAFT) {
       const { progress, done } = writing(LOGO_DRAFT, o.voices, sec);

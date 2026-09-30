@@ -231,7 +231,7 @@ let duckVolume = 0.25;
 let transpose = 0;
 let zoom = 1;
 let viewOffsetBeats = 0;
-let landingNameWritten: Promise<void> | null = null;
+let landingPenStarts: Promise<void> | null = null;
 // A view on its way back to the playback position: how far off it started, when, for how long --
 // the screen travels there with a gentle start and landing instead of jumping (recenterSmoothly).
 let viewGlide: { from: number; t0: number; ms: number } | null = null;
@@ -310,11 +310,13 @@ function setViewMode(mode: 'landing' | 'library' | 'player') {
     stopLandingRibbons = animateRibbons(
       document.querySelector<HTMLCanvasElement>('#landing-ribbons')!,
       (w, h) =>
+        // Five lines, as a staff has.
         w < 700
-          ? { voices: 6, x0: -0.1 * w, x1: 1.1 * w, cy: h * 0.5, gap: 13, amp: 26, line: 2.2, halo: 12 }
-          : { voices: 6, x0: -0.04 * w, x1: 1.04 * w, cy: h * 0.5, gap: Math.min(24, h * 0.03), amp: Math.min(46, h * 0.055), line: 2.6, halo: 16, bead: 3.6 },
-      // The voice lines come once the name is written (lightName.ts).
-      landingNameWritten ?? undefined,
+          ? { voices: 5, x0: -0.1 * w, x1: 1.1 * w, cy: h * 0.5, gap: 14, amp: 22, line: 2.2, halo: 12 }
+          : { voices: 5, x0: -0.04 * w, x1: 1.04 * w, cy: h * 0.5, gap: Math.min(26, h * 0.032), amp: Math.min(40, h * 0.048), line: 2.6, halo: 16, bead: 3.6 },
+      // The voice lines come in as the pen starts writing the name (lightName.ts), slow and calm.
+      landingPenStarts ?? undefined,
+      0.72,
     );
   } else if (mode !== 'landing' && stopLandingRibbons) {
     stopLandingRibbons();
@@ -2965,7 +2967,7 @@ async function runBootstrap() {
 // Ensemble choice comes after it (the last choice is marked). The one exception is the reload right
 // after switching modes from inside the app, which goes straight on in the new mode.
 // The title screen's name, written before anything else moves there (the voice lines wait for it).
-if (START_DRAFT) landingNameWritten = lightScoreName(document.querySelector<HTMLElement>('.landing-name')!);
+if (START_DRAFT) landingPenStarts = lightScoreName(document.querySelector<HTMLElement>('.landing-name')!);
 const storedMode = localStorage.getItem(MODE_STORAGE_KEY);
 const switchedMode = sessionStorage.getItem(MODE_SWITCH_KEY);
 sessionStorage.removeItem(MODE_SWITCH_KEY);

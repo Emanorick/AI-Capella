@@ -33,7 +33,7 @@ export function ensureAccess(): Promise<void> {
     overlay.querySelector('button')!.textContent = t('pinContinue');
     document.body.appendChild(overlay);
     const stopRibbons = animateRibbons(overlay.querySelector<HTMLCanvasElement>('.ribbons')!, (w, h) => ({
-      voices: 6,
+      voices: 5,
       x0: -0.08 * w,
       x1: 1.08 * w,
       cy: h * 0.22,
