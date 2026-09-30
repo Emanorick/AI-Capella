@@ -1,5 +1,6 @@
 import type { Score } from './score';
 import { getBeatMarkers } from './score';
+import { dynamicLevels } from './dynamics';
 
 const DEFAULT_DUCKED_VOLUME = 0.25; // default level for non-soloed parts when at least one part is soloed
 const RELEASE_TIME = 0.25;
@@ -466,6 +467,7 @@ export class AudioEngine {
   private score: Score;
   private pianoTone: { air: BiquadFilterNode; body: BiquadFilterNode }[] = [];
   private beatMarkers: ReturnType<typeof getBeatMarkers>;
+  private dynamicLevel: (partId: string, beat: number) => number;
   private scheduledUpToBeat = 0; // notes/clicks with a beat before this have already been scheduled for the current play() session
 
   constructor(score: Score, sound: Sound = 'piano') {
@@ -473,6 +475,7 @@ export class AudioEngine {
     this.sound = sound;
     if (sound === 'piano') void loadPianoSamples(this.ctx);
     this.beatMarkers = getBeatMarkers(score);
+    this.dynamicLevel = dynamicLevels(score);
     this.masterGain = this.ctx.createGain();
     this.masterGain.gain.value = 0.9;
 
@@ -559,7 +562,14 @@ export class AudioEngine {
   }
 
   /** One note in the current sound (the synthesized piano stands in until the samples are loaded). */
-  private playNote(destination: AudioNode, start: number, duration: number, midi: number): Voice {
+  private playNote(destination: AudioNode, start: number, duration: number, midi: number, level = 1): Voice {
+    if (level !== 1) {
+      // The printed dynamic at this note (see dynamics.ts), as a fixed gain in front of the part's.
+      const dyn = this.ctx.createGain();
+      dyn.gain.value = level;
+      dyn.connect(destination);
+      destination = dyn;
+    }
     if (this.sound === 'voice') return playVoiceNote(this.ctx, destination, start, duration, midi);
     const sample = nearestSample(midi);
     if (sample) return playSampledNote(this.ctx, destination, start, duration, midi, sample);
@@ -788,7 +798,7 @@ export class AudioEngine {
       const gainNode = this.partGains.get(note.partId);
       if (!gainNode) continue;
       try {
-        this.scheduledVoices.push(this.playNote(gainNode, start, dur, note.midi + this.lastTranspose));
+        this.scheduledVoices.push(this.playNote(gainNode, start, dur, note.midi + this.lastTranspose, this.dynamicLevel(note.partId, note.startBeat)));
       } catch (err) {
         console.error('Skipping a note that could not be scheduled:', note, err);
       }

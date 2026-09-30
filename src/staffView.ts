@@ -5,7 +5,10 @@ import { PAPER_DESIGN } from './design';
 import { drawRulerSignature, signatureChanges, type SignatureChange } from './signatures';
 import { drawInkMark, layoutMarks, MARKS_ON, type MarkLayout } from './goldInk';
 
-export const BASE_PIXELS_PER_BEAT = 70;
+// Wider than the piano roll's (70): noteheads, stems, accidentals and syllables need the room.
+// A phone draws its staves larger (see updateFill), so it starts from less to show about a bar.
+export const BASE_PIXELS_PER_BEAT = 120;
+const BASE_PIXELS_PER_BEAT_NARROW = 76;
 export const STAFF_RULER_HEIGHT_PX = 28; // matches PianoRoll's ruler height, for a consistent look when toggling views
 const PLAYHEAD_X_RATIO = 0.2;
 // On a narrow (phone-width) canvas the playhead sits a little further right of the pinned margin,
@@ -214,6 +217,14 @@ function transposeSpelling(spelling: { step: string; alter: number; octave: numb
   const newStep = LETTER_ORDER[((newDiatonicIndex % 7) + 7) % 7];
   const alter = midi + semitones - naturalMidi(newStep, newOctave);
   return { step: newStep, alter, octave: newOctave };
+}
+
+/** A note's place in a chord of its voice: shared stem direction, whether it draws the stem (up to
+ *  the chord's furthest note, in staff positions), and a sideways shift for a second. */
+interface ChordPlace {
+  stemUp: boolean;
+  stemTo: number | null;
+  dx: number;
 }
 
 /** Ledger-line positions (in the same half-step units as staff position) needed for a note this far outside the staff. */
@@ -445,6 +456,7 @@ export class StaffView {
   private cssWidth = 0;
   private cssHeight = 0;
   private pixelsPerBeat = BASE_PIXELS_PER_BEAT;
+  private zoom = 1;
   private scrollY = 0; // css px scrolled down, when the stacked staves don't all fit vertically
   private notesByPart: Map<string, NoteEvent[]>;
   private layouts: PartLayout[];
@@ -511,6 +523,7 @@ export class StaffView {
     this.canvas.width = Math.max(1, Math.round(rect.width * this.dpr));
     this.canvas.height = Math.max(1, Math.round(rect.height * this.dpr));
     this.ctx2d.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.setZoom(this.zoom);
     this.updateFill();
     this.scrollByPixels(0);
   }
@@ -552,7 +565,9 @@ export class StaffView {
   }
 
   setZoom(factor: number) {
-    this.pixelsPerBeat = BASE_PIXELS_PER_BEAT * factor;
+    this.zoom = factor;
+    const base = this.cssWidth > 0 && this.cssWidth < MOBILE_BREAKPOINT_PX ? BASE_PIXELS_PER_BEAT_NARROW : BASE_PIXELS_PER_BEAT;
+    this.pixelsPerBeat = base * factor;
   }
 
   /** Fully key-signature-aware: also shifts the drawn key signature, not just note spellings. */
@@ -896,9 +911,38 @@ export class StaffView {
     const accidentalMap = new Map<string, number>();
     const notes = this.notesByPart.get(layout.partId) ?? [];
     const notesStartIdx = effectiveMeasure ? firstIndexAtOrAfter(notes, effectiveMeasure.startBeat) : 0;
+    // Notes of one voice sounding together for the same length (divisi) are a chord: one stem for
+    // all of them, in the direction the note furthest from the middle line asks for.
+    const chords = new Map<NoteEvent, ChordPlace>();
+    const placeOf = (n: NoteEvent) => {
+      const sp = this.effectiveSpelling(n);
+      return diatonicIndex(sp.step, sp.octave) - (CLEF_BOTTOM_LINE[layout.clef] - layout.octaveShift * 7);
+    };
     for (let i = notesStartIdx; i < notes.length; i++) {
       const note = notes[i];
       if (note.startBeat > endBeat) break;
+      if (!chords.has(note)) {
+        const group = [note];
+        for (let j = i + 1; j < notes.length && Math.abs(notes[j].startBeat - note.startBeat) < 1e-6; j++) {
+          if (Math.abs(notes[j].durationBeats - note.durationBeats) < 1e-6) group.push(notes[j]);
+        }
+        if (group.length > 1) {
+          const placed = group.map((n) => ({ n, pos: placeOf(n) })).sort((a, b) => a.pos - b.pos);
+          const low = placed[0].pos;
+          const high = placed[placed.length - 1].pos;
+          const stemUp = high - 4 < 4 - low;
+          const owner = stemUp ? placed[0] : placed[placed.length - 1];
+          const far = stemUp ? high : low;
+          // Walked from the stem's end of the chord: a second's two heads can't share a column, so
+          // the one further along moves to the other side of the stem, as engravers do.
+          const walk = stemUp ? placed : [...placed].reverse();
+          walk.forEach(({ n, pos }, k) => {
+            const before = walk[k - 1];
+            const displaced = !!before && Math.abs(before.pos - pos) === 1 && !chords.get(before.n)?.dx;
+            chords.set(n, { stemUp, stemTo: n === owner.n ? far : null, dx: displaced ? (stemUp ? 1 : -1) * (HEAD_W - STEM_THICKNESS) : 0 });
+          });
+        }
+      }
       if (note.measureNumber !== currentMeasureNumber) {
         currentMeasureNumber = note.measureNumber;
         accidentalMap.clear();
@@ -911,7 +955,7 @@ export class StaffView {
       accidentalMap.set(key, spelling.alter);
 
       if (note.startBeat + note.durationBeats < startBeat - 2) continue;
-      this.drawNote(ctx, note, bottomLineIndex, bottomLineY, displayBeat, playheadBeat, color, dimmed, showAccidental);
+      this.drawNote(ctx, note, bottomLineIndex, bottomLineY, displayBeat, playheadBeat, color, dimmed, showAccidental, chords.get(note));
     }
 
     const rests = this.restsByPart.get(layout.partId) ?? [];
@@ -1007,6 +1051,7 @@ export class StaffView {
     color: string,
     dimmed: boolean,
     showAccidental: boolean,
+    chord?: ChordPlace,
   ) {
     const firstX = this.beatToX(note.startBeat, displayBeat) + NOTE_X_OFFSET_PX;
     const lastX = this.beatToX(note.startBeat + note.durationBeats, displayBeat) + NOTE_X_OFFSET_PX;
@@ -1015,15 +1060,11 @@ export class StaffView {
     const spelling = this.effectiveSpelling(note);
     const staffPosition = diatonicIndex(spelling.step, spelling.octave) - bottomLineIndex;
     const y = bottomLineY - staffPosition * HALF_SPACE_PX;
-    // Standard convention: stem up when the note is below the middle line, down at or above it.
-    const stemUp = staffPosition < 4;
+    // Standard convention: stem up when the note is below the middle line, down at or above it; a
+    // chord's notes share their stem's direction.
+    const stemUp = chord ? chord.stemUp : staffPosition < 4;
+    const shift = chord?.dx ?? 0;
     const sounding = !dimmed && note.startBeat <= playheadBeat && playheadBeat < note.startBeat + note.durationBeats;
-
-    // Ledger lines (neutral, like the staff), once at the note's actual start.
-    ctx.fillStyle = paper(0.45);
-    for (const pos of ledgerLinePositions(staffPosition)) {
-      ctx.fillRect(firstX - HEAD_W / 2 - LEDGER_EXTENSION, Math.round(bottomLineY - pos * HALF_SPACE_PX), HEAD_W + LEDGER_EXTENSION * 2, 1.2);
-    }
 
     ctx.fillStyle = color;
     ctx.font = MUSIC_FONT;
@@ -1050,7 +1091,15 @@ export class StaffView {
       if (onScreen) {
         const head = shape.name === 'whole' ? GLYPH.noteheadWhole : shape.filled ? GLYPH.noteheadBlack : GLYPH.noteheadHalf;
         const headW = shape.name === 'whole' ? WHOLE_HEAD_W : HEAD_W;
-        const hx = segX - headW / 2;
+        const hx = segX - headW / 2 + shift;
+        // Ledger lines (neutral, like the staff) under every head outside the staff -- the heads
+        // a tie carries on past a bar line need them just as much as the first.
+        const ledgers = ledgerLinePositions(staffPosition);
+        if (ledgers.length) {
+          ctx.fillStyle = paper(0.55);
+          for (const pos of ledgers) ctx.fillRect(hx - LEDGER_EXTENSION, Math.round(bottomLineY - pos * HALF_SPACE_PX), headW + LEDGER_EXTENSION * 2, 1.2);
+          ctx.fillStyle = color;
+        }
         const lit = sounding && seg.startBeat <= playheadBeat && playheadBeat < seg.startBeat + seg.durationBeats;
         if (lit) {
           ctx.save();
@@ -1066,15 +1115,17 @@ export class StaffView {
           ctx.fillText(GLYPH.dot, hx + headW + 0.35 * SP, y - (staffPosition % 2 === 0 ? HALF_SPACE_PX : 0));
         }
 
-        if (shape.hasStem) {
-          const stemLength = STEM_LENGTH + Math.max(0, shape.flags - 1) * 0.75 * SP;
+        // In a chord only one note draws the stem, from its head past the chord's furthest note.
+        if (shape.hasStem && (!chord || chord.stemTo !== null)) {
+          const reach = chord && chord.stemTo !== null ? Math.abs(chord.stemTo - staffPosition) * HALF_SPACE_PX : 0;
+          const stemLength = STEM_LENGTH + reach + Math.max(0, shape.flags - 1) * 0.75 * SP;
           if (stemUp) {
-            const sx = hx + HEAD_W - STEM_THICKNESS;
+            const sx = hx - shift + HEAD_W - STEM_THICKNESS;
             const top = y - stemLength;
             ctx.fillRect(sx, top, STEM_THICKNESS, y - STEM_ANCHOR_Y - top);
             if (shape.flags) ctx.fillText(FLAG_UP[Math.min(3, shape.flags)], sx, top);
           } else {
-            const sx = hx;
+            const sx = hx - shift;
             const bottom = y + stemLength;
             ctx.fillRect(sx, y + STEM_ANCHOR_Y, STEM_THICKNESS, bottom - y - STEM_ANCHOR_Y);
             if (shape.flags) ctx.fillText(FLAG_DOWN[Math.min(3, shape.flags)], sx, bottom);

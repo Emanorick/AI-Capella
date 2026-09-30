@@ -203,7 +203,11 @@ and popovers can't drift apart.
   the piece (committed on release). Rendered once per size/mix change and only blitted per frame
   (`overview.ts`).
 - **Transpose** (±7 semitones) and **Zoom** (25%–300%; − / + at the score's corner on a laptop,
-  pinch on touch, ctrl/pinch-wheel on a trackpad) apply live, including mid-playback.
+  pinch on touch, ctrl/pinch-wheel on a trackpad) apply live, including mid-playback. The time
+  zoom is kept **per view** (`zoomOf.roll` / `zoomOf.staff` in `main.ts`): notation needs far more
+  room per beat than the roll's bars, so zooming one leaves the other as it was. At 100% the sheet
+  view draws 120 px per beat on a laptop and 76 on a phone (whose staves are drawn larger), the
+  piano roll 70.
 
 ### Per-voice mixing
 On a laptop the **voices sidebar** lists every voice with a light that glows while that voice is
@@ -776,6 +780,12 @@ Two playback sounds, chosen per device in the player ⋯ menu (`ai-capella-sound
   (`setTargetAtTime` for a short, click-free ramp), routed through a shared
   `DynamicsCompressorNode` before the destination — doubled/unison voices (common in choral
   writing) stack gain and can clip without it.
+- **Printed dynamics are heard, gently** (`dynamics.ts`): each note plays through a small gain
+  set from its part's dynamic at its start, relative to mf — pp 0.6 (about −4 dB), p 0.75,
+  mp 0.88, f 1.12, ff 1.24 (about +2 dB) — and hairpins ramp from the level where they start to
+  the dynamic printed at their end (or ×1.2 / ×0.83 when none is). Before a part's first
+  dynamic it plays at mf; a part with no dynamics of its own follows the others'. Enough to hear
+  the shape of a phrase without losing a quiet voice in the mix.
 - **`pause()` suspends the `AudioContext` *and* clears every scheduled-but-not-yet-fired
   oscillator.** Suspending alone freezes the clock but doesn't cancel already-scheduled
   `.start()`/`.stop()` calls — they just wait. Since clicking a note to preview its pitch
@@ -1124,7 +1134,11 @@ enharmonic spelling, only a reasonable one.
 **Layout.** Diatonic staff position is computed from `(step, octave)` via a simple letter-index
 formula (`octave*7 + letterIndex`), independent of accidental — the standard trick that makes
 adjacent-letter steps exactly half a line-spacing apart regardless of sharps/flats. Ledger lines
-are derived from the same position. **Clef per part** is a heuristic, since no clef is parsed
+are derived from the same position, drawn under each notehead (also each tied segment) in the
+paper tone. **Chords**: notes of one part starting together with the same length share one
+stem, as engraved — its direction set by the note furthest from the middle line, drawn from
+the note at the stem's far end through to the other, with a second displaced to the stem's other
+side. (Overlapping notes of different lengths are real second voices and keep their own stems.) **Clef per part** is a heuristic, since no clef is parsed
 anywhere in this app's pipeline: each part's average MIDI pitch decides treble vs. bass at
 construction time. **Note duration shape** (filled vs. hollow notehead, stem, flag count) is
 classified from the nearest standard duration to the note's continuous `durationBeats` value

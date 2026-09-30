@@ -230,7 +230,9 @@ let activeView: 'roll' | 'staff' = 'roll';
 let bpm = 100;
 let duckVolume = 0.25;
 let transpose = 0;
-let zoom = 1;
+// Horizontal zoom, one per view: the sheet view needs room for its noteheads, stems and lyrics
+// that the piano roll's bars don't, so each keeps its own.
+const zoomOf = { roll: 1, staff: 1 };
 let viewOffsetBeats = 0;
 let titleName: TitleName | null = null;
 // A view on its way back to the playback position: how far off it started, when, for how long --
@@ -1044,7 +1046,8 @@ async function loadSongLocally(song: SongEntry) {
   // reloaded fresh from this song's saved config every time, never carried over from whatever the
   // previously-open song had.
   manualSections = score.rehearsalMarks.length ? [] : (song.savedConfig?.sections ?? []).slice();
-  zoom = 1;
+  zoomOf.roll = 1;
+  zoomOf.staff = 1;
   zoomValueEl.textContent = '100%';
   viewOffsetBeats = 0;
   viewGlide = null;
@@ -1653,7 +1656,7 @@ function rebuildStaffView() {
   if (!currentScore || !currentPartColor) return;
   staffView = new StaffView(staffCanvas, currentScore, currentPartColor);
   staffView.setTranspose(transpose);
-  staffView.setZoom(zoom);
+  staffView.setZoom(zoomOf.staff);
   staffView.setPartMix(partMix);
   staffView.setSections(effectiveSections());
   resizeCanvases();
@@ -1964,9 +1967,9 @@ function applyTranspose(delta: number) {
 
 function applyZoom(factor: number) {
   if (!pianoRoll && !staffView) return;
-  zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor));
-  pianoRoll?.setZoom(zoom);
-  staffView?.setZoom(zoom);
+  const zoom = (zoomOf[activeView] = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomOf[activeView] * factor)));
+  if (activeView === 'roll') pianoRoll?.setZoom(zoom);
+  else staffView?.setZoom(zoom);
   zoomValueEl.textContent = `${Math.round(zoom * 100)}%`;
   clampViewOffset();
   renderNow();
@@ -2808,6 +2811,7 @@ canvasResizeObserver.observe(overviewCanvas);
 
 function setActiveView(view: 'roll' | 'staff') {
   activeView = view;
+  zoomValueEl.textContent = `${Math.round(zoomOf[view] * 100)}%`;
   canvas.hidden = activeView !== 'roll';
   staffCanvas.hidden = activeView !== 'staff';
   document.querySelectorAll<HTMLButtonElement>('#view-seg [data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
