@@ -18,6 +18,9 @@ const LOOKAHEAD_REFILL_SEC = 3; // top up once the scheduled horizon is within t
 // audible click/pop. This just needs to be short enough that an early Stop/Pause/reschedule
 // doesn't feel laggy.
 const FADE_SEC = 0.01;
+// Each DynamicsCompressorNode holds the signal back by a fixed look-ahead (6 ms in Chrome and
+// Safari); the bus has two of them in a row.
+const COMPRESSOR_DELAY_SEC = 0.012;
 // Starting tones ("Anfangstöne"): each voice's tone one after another ("du du du"), one beat
 // apart at the current tempo, then all of them together as the chord they make (two beats), then
 // half a beat's breath before the count-in/music. Kept within sensible limits at extreme tempos.
@@ -55,8 +58,17 @@ export type Sound = 'piano' | 'voice';
 // synthesized piano below plays instead.
 const SAMPLE_ROOTS = Array.from({ length: 22 }, (_, i) => 33 + i * 3);
 const SAMPLE_LEVEL = 1.8; // matched in loudness to the other sounds (measured over a six-voice passage)
-const SAMPLE_RELEASE_SEC = 0.09; // time constant of the damper after note-off
-let sampleBuffers: Map<number, AudioBuffer> | null = null;
+const SAMPLE_RELEASE_SEC = 0.09;
+const PIANO_AIR_HZ = 2600; // high shelf: presence and sparkle
+const PIANO_AIR_DB = 5;
+const PIANO_BODY_HZ = 180; // low shelf: a little less boom in the bass
+const PIANO_BODY_DB = -2; // time constant of the damper after note-off
+// Every recording starts with a few milliseconds of silence (and an MP3 decoder may add its own
+// padding in front), which would put each note audibly behind the light that marks it. Playback
+// starts each recording this little before its attack instead.
+const SAMPLE_PREROLL_SEC = 0.001;
+type PianoSample = { root: number; buffer: AudioBuffer; onset: number };
+let sampleBuffers: Map<number, PianoSample> | null = null;
 let sampleLoad: Promise<void> | null = null;
 
 export function loadPianoSamples(ctx: BaseAudioContext): Promise<void> {
@@ -66,7 +78,8 @@ export function loadPianoSamples(ctx: BaseAudioContext): Promise<void> {
       SAMPLE_ROOTS.map(async (midi) => {
         const res = await fetch(`${base}p${midi}.mp3`);
         if (!res.ok) throw new Error(`p${midi}.mp3: ${res.status}`);
-        return [midi, await ctx.decodeAudioData(await res.arrayBuffer())] as const;
+        const buffer = await ctx.decodeAudioData(await res.arrayBuffer());
+        return [midi, { root: midi, buffer, onset: attackOnset(buffer) }] as const;
       }),
     );
     sampleBuffers = new Map(entries);
@@ -77,16 +90,27 @@ export function loadPianoSamples(ctx: BaseAudioContext): Promise<void> {
   return sampleLoad;
 }
 
-export function nearestSample(midi: number): { root: number; buffer: AudioBuffer } | null {
+/** Where the recording's attack begins, in seconds (the first sample above 2% of its peak). */
+function attackOnset(buffer: AudioBuffer): number {
+  const data = buffer.getChannelData(0);
+  const scan = Math.min(data.length, Math.round(buffer.sampleRate * 0.2));
+  let peak = 0;
+  for (let i = 0; i < scan; i++) peak = Math.max(peak, Math.abs(data[i]));
+  for (let i = 0; i < scan; i++) {
+    if (Math.abs(data[i]) > peak * 0.02) return Math.max(0, i / buffer.sampleRate - SAMPLE_PREROLL_SEC);
+  }
+  return 0;
+}
+
+export function nearestSample(midi: number): PianoSample | null {
   if (!sampleBuffers) return null;
   const clamped = Math.min(SAMPLE_ROOTS[SAMPLE_ROOTS.length - 1], Math.max(SAMPLE_ROOTS[0], midi));
   const root = SAMPLE_ROOTS[Math.round((clamped - SAMPLE_ROOTS[0]) / 3)];
-  const buffer = sampleBuffers.get(root);
-  return buffer ? { root, buffer } : null;
+  return sampleBuffers.get(root) ?? null;
 }
 
 /** One note of the sampled piano: the nearest recording, re-pitched, with a damper at note-off. */
-export function playSampledNote(ctx: AudioContext, destination: AudioNode, startTime: number, duration: number, midi: number, sample: { root: number; buffer: AudioBuffer }): Voice {
+export function playSampledNote(ctx: AudioContext, destination: AudioNode, startTime: number, duration: number, midi: number, sample: PianoSample): Voice {
   const source = ctx.createBufferSource();
   source.buffer = sample.buffer;
   source.playbackRate.value = Math.pow(2, (midi - sample.root) / 12);
@@ -96,8 +120,8 @@ export function playSampledNote(ctx: AudioContext, destination: AudioNode, start
   gain.gain.setValueAtTime(SAMPLE_LEVEL, noteOff);
   gain.gain.setTargetAtTime(0, noteOff, SAMPLE_RELEASE_SEC);
   source.connect(gain).connect(destination);
-  source.start(startTime);
-  source.stop(Math.min(noteOff + SAMPLE_RELEASE_SEC * 7, startTime + sample.buffer.duration / source.playbackRate.value));
+  source.start(startTime, sample.onset);
+  source.stop(Math.min(noteOff + SAMPLE_RELEASE_SEC * 7, startTime + (sample.buffer.duration - sample.onset) / source.playbackRate.value));
   source.addEventListener('ended', () => {
     try {
       source.disconnect();
@@ -439,6 +463,7 @@ export class AudioEngine {
   private metronomeEnabled = false;
   private duckedVolume = DEFAULT_DUCKED_VOLUME;
   private score: Score;
+  private pianoTone: { air: BiquadFilterNode; body: BiquadFilterNode }[] = [];
   private beatMarkers: ReturnType<typeof getBeatMarkers>;
   private scheduledUpToBeat = 0; // notes/clicks with a beat before this have already been scheduled for the current play() session
 
@@ -485,11 +510,29 @@ export class AudioEngine {
       const g = this.ctx.createGain();
       const pan = this.ctx.createStereoPanner();
       pan.pan.value = score.parts.length > 1 ? -0.45 + (0.9 * i) / (score.parts.length - 1) : 0;
-      g.connect(pan).connect(this.masterGain);
+      // The grand piano a little brighter: more of its hammer and overtones, a touch less boom.
+      const air = this.ctx.createBiquadFilter();
+      air.type = 'highshelf';
+      air.frequency.value = PIANO_AIR_HZ;
+      const body = this.ctx.createBiquadFilter();
+      body.type = 'lowshelf';
+      body.frequency.value = PIANO_BODY_HZ;
+      this.pianoTone.push({ air, body });
+      g.connect(air).connect(body).connect(pan).connect(this.masterGain);
       this.partGains.set(part.id, g);
       this.mixState.set(part.id, 'normal');
     });
     this.applyMix();
+    this.applyTone();
+  }
+
+  /** The brightening is for the piano only; the sung "oo" stays as it is. */
+  private applyTone() {
+    const piano = this.sound === 'piano';
+    for (const { air, body } of this.pianoTone) {
+      air.gain.value = piano ? PIANO_AIR_DB : 0;
+      body.gain.value = piano ? PIANO_BODY_DB : 0;
+    }
   }
 
   setPartMixState(partId: string, state: PartMixState) {
@@ -508,7 +551,8 @@ export class AudioEngine {
     if (sound === this.sound) return;
     this.sound = sound;
     if (sound === 'piano') void loadPianoSamples(this.ctx);
-    if (this.playing && !this.isCountingIn()) this.play(this.getCurrentBeat(), 60 / this.secPerBeat, this.lastTranspose);
+    this.applyTone();
+    if (this.playing && !this.isCountingIn()) this.play(this.scheduledBeat(), 60 / this.secPerBeat, this.lastTranspose);
   }
 
   /** One note in the current sound (the synthesized piano stands in until the samples are loaded). */
@@ -539,7 +583,7 @@ export class AudioEngine {
       this.pendingMetronomeReschedule = true;
       return;
     }
-    this.play(this.getCurrentBeat(), 60 / this.secPerBeat, this.lastTranspose);
+    this.play(this.scheduledBeat(), 60 / this.secPerBeat, this.lastTranspose);
   }
 
   /** Volume (0-1) for non-soloed parts while at least one part has its Solo button active. */
@@ -623,7 +667,8 @@ export class AudioEngine {
     this.lastCountInBeats = countInBeats + startTones.length;
     const now = this.ctx.currentTime;
     if (startAtEpochMs != null) {
-      const deltaSec = (startAtEpochMs - Date.now()) / 1000;
+      // Handed to the output early by its latency, so every device sounds at the shared instant.
+      const deltaSec = (startAtEpochMs - Date.now()) / 1000 - this.outputDelay();
       if (deltaSec > 0) {
         this.playStartCtxTime = now + deltaSec;
         this.playStartBeat = fromBeat;
@@ -685,12 +730,12 @@ export class AudioEngine {
 
   /** True while the starting tones of the most recent play() are still sounding. */
   isPlayingStartTones(): boolean {
-    return this.playing && this.ctx.currentTime < this.startTonesEndCtxTime;
+    return this.playing && this.heardTime() < this.startTonesEndCtxTime;
   }
 
   /** True while a count-in (or starting tones) scheduled by the most recent play() is still sounding, before the actual music starts. */
   isCountingIn(): boolean {
-    return this.playing && this.lastCountInBeats > 0 && this.ctx.currentTime < this.playStartCtxTime;
+    return this.playing && this.lastCountInBeats > 0 && this.heardTime() < this.playStartCtxTime;
   }
 
   /**
@@ -705,16 +750,16 @@ export class AudioEngine {
       // apply the deferred toggle with a full reschedule, same as the normal (not-counting-in)
       // path would have done immediately.
       this.pendingMetronomeReschedule = false;
-      this.play(this.getCurrentBeat(), 60 / this.secPerBeat, this.lastTranspose);
+      this.play(this.scheduledBeat(), 60 / this.secPerBeat, this.lastTranspose);
       return;
     }
     const horizonBeats = LOOKAHEAD_REFILL_SEC / this.secPerBeat;
-    if (this.scheduledUpToBeat - this.getCurrentBeat() < horizonBeats) this.scheduleAhead(false);
+    if (this.scheduledUpToBeat - this.scheduledBeat() < horizonBeats) this.scheduleAhead(false);
   }
 
   private scheduleAhead(includeAlreadySounding: boolean) {
     const lookaheadBeats = LOOKAHEAD_SEC / this.secPerBeat;
-    const targetBeat = this.getCurrentBeat() + lookaheadBeats;
+    const targetBeat = this.scheduledBeat() + lookaheadBeats;
     if (targetBeat <= this.scheduledUpToBeat && !includeAlreadySounding) return;
     const fromBeatExclusive = includeAlreadySounding ? -Infinity : this.scheduledUpToBeat;
     this.scheduleNotesInRange(fromBeatExclusive, targetBeat);
@@ -801,9 +846,35 @@ export class AudioEngine {
     this.pausedBeat = Math.max(0, Math.min(this.score.totalBeats, beat));
   }
 
+  /**
+   * The beat being heard right now -- what the light on the score follows. The context's clock
+   * runs ahead of the loudspeaker by the output latency (a few ms on a laptop, 150 ms and more over
+   * Bluetooth), so the light would otherwise hit each note before it sounds.
+   */
   getCurrentBeat(): number {
     if (!this.playing) return this.pausedBeat;
-    const beat = this.playStartBeat + (this.ctx.currentTime - this.playStartCtxTime) / this.secPerBeat;
-    return Math.max(this.playStartBeat, beat);
+    return this.beatAt(this.heardTime());
+  }
+
+  /** The beat whose audio is being handed to the output right now (the scheduler's clock). */
+  private scheduledBeat(): number {
+    if (!this.playing) return this.pausedBeat;
+    return this.beatAt(this.ctx.currentTime);
+  }
+
+  private beatAt(ctxTime: number): number {
+    return Math.max(this.playStartBeat, this.playStartBeat + (ctxTime - this.playStartCtxTime) / this.secPerBeat);
+  }
+
+  /** How long audio takes from the context's clock to the air, in seconds. */
+  outputDelay(): number {
+    const c = this.ctx as AudioContext & { outputLatency?: number };
+    const out = Number.isFinite(c.outputLatency) ? c.outputLatency! : 0;
+    const base = Number.isFinite(c.baseLatency) ? c.baseLatency : 0;
+    return Math.min(0.6, Math.max(0, out + base) + COMPRESSOR_DELAY_SEC);
+  }
+
+  private heardTime(): number {
+    return this.ctx.currentTime - this.outputDelay();
   }
 }

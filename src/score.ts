@@ -65,6 +65,21 @@ export interface RehearsalMark {
   beat: number;
 }
 
+/**
+ * A performance marking printed in the source (MusicXML <direction>): a dynamic (p, mf, sfz...),
+ * a hairpin (endBeat set), a tempo mark (words and/or a metronome mark), or other printed words
+ * (cresc., rit., instructions). Recorded per part, since each voice carries its own dynamics.
+ */
+export interface ScoreMark {
+  kind: 'dynamic' | 'wedge' | 'tempo' | 'words';
+  partId: string;
+  beat: number;
+  text: string; // the dynamic ('mf'), 'crescendo' / 'diminuendo' for a wedge, or the printed words
+  endBeat?: number; // wedges: where the hairpin closes
+  metronome?: { unit: string; dots: number; perMinute: string }; // tempo: e.g. quarter = 76
+  below?: boolean; // printed below the staff in the source (words only)
+}
+
 export interface Score {
   title: string;
   parts: PartInfo[];
@@ -88,6 +103,8 @@ export interface Score {
   // metronome mark, MIDI set-tempo) -- the starting tempo when a song is opened without a saved
   // default. Absent when the file states none.
   tempo?: number;
+  // Dynamics, hairpins, tempo and other printed directions (MusicXML only), sorted by beat.
+  marks?: ScoreMark[];
 }
 
 export interface BeatMarker {

@@ -3,6 +3,7 @@ import { getBeatMarkers } from './score';
 import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, withAlpha, stageFill, gelPill, playheadBeam, paperGrain } from './theme';
 import { Lantern, type Flare } from './lantern';
 import { deviceChoice, PAPER_DESIGN } from './design';
+import { drawRulerSignature, signatureChanges, transposeFifths, type SignatureChange } from './signatures';
 
 export const BASE_PIXELS_PER_BEAT = 70;
 // The only place a click/drag sets the playback start point or defines a loop region -- clicks in
@@ -119,6 +120,7 @@ export class PianoRoll {
   private dimmedParts = new Set<string>();
   private loopRegion: LoopRegion | null = null;
   private beatMarkers: ReturnType<typeof getBeatMarkers>;
+  private signatureAt: Map<number, SignatureChange>; // by bar start beat
   private notesByPart: Map<string, NoteEvent[]>;
   private slursByPart: Map<string, SlurArc[]>;
   private dpr = 1;
@@ -173,6 +175,7 @@ export class PianoRoll {
     if (!ctx) throw new Error('Canvas 2D context unavailable');
     this.ctx2d = ctx;
     this.beatMarkers = getBeatMarkers(score);
+    this.signatureAt = new Map(signatureChanges(score.measures).map((c) => [c.beat, c]));
 
     this.notesByPart = new Map();
     for (const note of score.notes) {
@@ -892,6 +895,11 @@ export class PianoRoll {
         rctx.font = `600 11px ${FONT_MONO}`;
         rctx.fillStyle = paper(0.62);
         rctx.fillText(String(marker.measureNumber), textX, 18);
+        const change = this.signatureAt.get(marker.beat);
+        if (change) {
+          const fifths = change.fifths !== undefined ? transposeFifths(change.fifths, this.transpose) : undefined;
+          drawRulerSignature(rctx, change, fifths, textX + rctx.measureText(String(marker.measureNumber)).width + 7, paper(0.85));
+        }
       }
       // Section letters that don't sit on a bar line (hand-marked mid-bar) still get their box.
       for (const section of this.sections) {

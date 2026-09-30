@@ -7,7 +7,8 @@
 @font-face {
   font-family: 'Bravura';
   /* SMuFL engraving font by Steinberg (SIL OFL 1.1, see assets/fonts/Bravura-OFL.txt), subset to
-     the clefs, noteheads, flags, accidentals, rests and dots the sheet view draws. */
+     the clefs, noteheads, flags, accidentals, rests, dots, time signature digits and dynamics the
+     views draw. */
   src: url('./assets/fonts/bravura-subset.woff2') format('woff2');
   font-display: block;
 }

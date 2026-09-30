@@ -2,6 +2,7 @@ import type { MeasureInfo, NoteEvent, PartInfo, Score } from './score';
 import type { PartMixState } from './audioEngine';
 import { FONT_DISPLAY, FONT_MONO, FONT_MUSIC, FONT_TEXT, INK1, PAPER, paper, stageFill, playheadBeam, readingStrip, paperGrain } from './theme';
 import { PAPER_DESIGN } from './design';
+import { drawRulerSignature, signatureChanges, type SignatureChange } from './signatures';
 
 export const BASE_PIXELS_PER_BEAT = 70;
 export const STAFF_RULER_HEIGHT_PX = 28; // matches PianoRoll's ruler height, for a consistent look when toggling views
@@ -449,6 +450,7 @@ export class StaffView {
   private hiddenParts = new Set<string>();
   private dimmedParts = new Set<string>();
   private measureByNumber: Map<number, MeasureInfo>;
+  private signatureAt: Map<number, SignatureChange>; // by bar start beat
   private restsByPart: Map<string, { startBeat: number; durationBeats: number }[]>;
   private transpose = 0;
   private gutterPx = 80;
@@ -469,6 +471,7 @@ export class StaffView {
     this.ctx2d = ctx;
 
     this.measureByNumber = new Map(score.measures.map((m) => [m.number, m]));
+    this.signatureAt = new Map(signatureChanges(score.measures).map((c) => [c.beat, c]));
 
     this.notesByPart = new Map();
     for (const note of score.notes) {
@@ -834,6 +837,11 @@ export class StaffView {
       ctx.font = `600 11px ${FONT_MONO}`;
       ctx.fillStyle = paper(0.62);
       ctx.fillText(String(measure.number), textX, 18);
+      const change = this.signatureAt.get(measure.startBeat);
+      if (change) {
+        const fifths = change.fifths !== undefined ? this.transposedFifths(change.fifths) : undefined;
+        drawRulerSignature(ctx, change, fifths, textX + ctx.measureText(String(measure.number)).width + 7, paper(0.85));
+      }
     }
     ctx.restore();
   }
@@ -849,6 +857,8 @@ export class StaffView {
       if (measure.startBeat < startBeat - 4 || measure.startBeat > endBeat) continue;
       const x = Math.round(this.beatToX(measure.startBeat, displayBeat));
       ctx.fillRect(x, top, 1, bottom - top);
+      // A change of key is marked with a double bar line, as printed.
+      if (this.signatureAt.get(measure.startBeat)?.keyChange) ctx.fillRect(x - 3, top, 1, bottom - top);
     }
     // Final barline: a classical thin + thick double bar, culled in pixel space.
     const endX = Math.round(this.beatToX(this.score.totalBeats, displayBeat));

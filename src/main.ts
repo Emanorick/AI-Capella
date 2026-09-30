@@ -229,6 +229,10 @@ let duckVolume = 0.25;
 let transpose = 0;
 let zoom = 1;
 let viewOffsetBeats = 0;
+// A view on its way back to the playback position: how far off it started, when, for how long --
+// the screen travels there with a gentle start and landing instead of jumping (recenterSmoothly).
+let viewGlide: { from: number; t0: number; ms: number } | null = null;
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 let metronomeOn = false;
 let customStartBeat: number | null = null; // last spot set via the ruler; Stop returns here
 let previewNoteTimeout: number | null = null;
@@ -561,6 +565,11 @@ function normalizeStoredScore(raw: Partial<Score>): Score {
   };
 }
 
+/** The piece's time signatures in order of appearance, e.g. "12/8, 5/8, 6/8" for a changing metre. */
+function timeSignatureList(score: Score): string {
+  return [...new Set(score.measures.map((m) => `${m.beats}/${m.beatType}`))].join(', ');
+}
+
 /** Voices, bars, key, time signature and cover for a library card -- parsed once per song version, one at a time so a big library doesn't freeze the page. */
 function songMeta(song: SongEntry): Promise<SongMeta | null> {
   const key = `${song.id}:${song.xml?.length ?? 0}`;
@@ -579,7 +588,7 @@ function songMeta(song: SongEntry): Promise<SongMeta | null> {
                 bars: score.measures.at(-1)?.number ?? score.measures.length,
                 // MIDI imports carry no key signature (older ones not even a fifths field), so no key is named for them.
                 key: first && song.format !== 'score' ? keyName(first.fifths, first.mode) : '',
-                time: first ? `${first.beats}/${first.beatType}` : '',
+                time: timeSignatureList(score),
                 cover: coverDataFromScore(score),
               });
             } catch {
@@ -975,6 +984,7 @@ async function loadSongLocally(song: SongEntry) {
   zoom = 1;
   zoomValueEl.textContent = '100%';
   viewOffsetBeats = 0;
+  viewGlide = null;
   customStartBeat = null;
   // Force whatever timing/metronome state applyPlaybackState() applies right after this returns
   // to actually run against the brand-new AudioEngine below, rather than being skipped as
@@ -1007,7 +1017,7 @@ async function loadSongLocally(song: SongEntry) {
   songTitleEl.title = song.imported ? t('renameSong') : '';
   const first = score.measures[0];
   songMetaEl.textContent = first
-    ? [song.format === 'score' ? '' : keyName(first.fifths, first.mode), `${first.beats}/${first.beatType}`, countLabel(score.measures.at(-1)?.number ?? score.measures.length, 'barsOne', 'barsMany')]
+    ? [song.format === 'score' ? '' : keyName(first.fifths, first.mode), timeSignatureList(score), countLabel(score.measures.at(-1)?.number ?? score.measures.length, 'barsOne', 'barsMany')]
         .filter(Boolean)
         .join(' · ')
     : '';
@@ -1172,7 +1182,7 @@ async function applyPlaybackState(state: PlaybackState) {
     return;
   }
 
-  viewOffsetBeats = 0;
+  recenterSmoothly();
   if (!state.playing) {
     audioEngine.stop();
     audioEngine.setPausedBeat(state.originBeat);
@@ -2187,7 +2197,41 @@ function engineBeat(): number {
 }
 
 function displayBeat(): number {
-  return engineBeat() + viewOffsetBeats;
+  return engineBeat() + viewOffsetBeats + glideResidual();
+}
+
+/** What is left of the current glide back to the playback position, in beats. */
+function glideResidual(): number {
+  if (!viewGlide) return 0;
+  const t = (performance.now() - viewGlide.t0) / viewGlide.ms;
+  if (t >= 1) {
+    viewGlide = null;
+    return 0;
+  }
+  const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(2 - 2 * t, 3) / 2; // ease in and out
+  return viewGlide.from * (1 - eased);
+}
+
+/**
+ * Brings the view back to the playback position (a new start point, a bar or section jump) by
+ * travelling there -- speeding up, then easing in -- so the reader can follow where it went.
+ */
+function recenterSmoothly() {
+  const from = viewOffsetBeats + glideResidual();
+  viewOffsetBeats = 0;
+  const px = Math.abs(from) * (pianoRoll?.getPixelsPerBeat() ?? 40);
+  if (px < 2 || reducedMotion.matches) {
+    viewGlide = null;
+    return;
+  }
+  viewGlide = { from, t0: performance.now(), ms: Math.min(950, 300 + 22 * Math.sqrt(px)) };
+  scheduleRender();
+}
+
+/** The reader takes over (pans, drags): the glide stops where it is. */
+function settleGlide() {
+  viewOffsetBeats += glideResidual();
+  viewGlide = null;
 }
 
 function clampViewOffset() {
@@ -2204,6 +2248,7 @@ function panByBeats(deltaBeats: number) {
   // exactly what put the playhead out of sync with the music. Still allowed while paused/stopped,
   // to browse the score.
   if (audioEngine?.isPlaying()) return;
+  settleGlide();
   viewOffsetBeats += deltaBeats;
   clampViewOffset();
   scheduleRender();
@@ -2225,13 +2270,10 @@ function seekToBeat(beat: number, opts?: { recenterView?: boolean }) {
   } else {
     pushState({ playing: false, originBeat: clamped, originServerTimeMs: 0, freshStart: true });
   }
-  if (opts?.recenterView) {
-    viewOffsetBeats = 0;
-  } else {
-    // View-position compensation only, so the screen doesn't visibly jump for the person who just
-    // tapped -- purely local, independent of the authoritative position change published above.
-    viewOffsetBeats += oldEngineBeat - clamped;
-  }
+  // The view stays where it was for this instant (purely local, independent of the authoritative
+  // position change published above), then travels to the new position rather than jumping.
+  viewOffsetBeats += oldEngineBeat - clamped;
+  if (opts?.recenterView) recenterSmoothly();
   clampViewOffset();
   renderNow();
 }
@@ -2492,6 +2534,7 @@ overviewCanvas.addEventListener('pointermove', (e) => {
   if (!overviewPointer.moved) return;
   if (overviewPointer.touch) {
     if (audioEngine?.isPlaying()) return;
+    viewGlide = null;
     viewOffsetBeats = overviewBeat(e.clientX) - engineBeat();
     clampViewOffset();
     scheduleRender();
@@ -2603,6 +2646,7 @@ function renderNow() {
   const beat = displayBeat();
   renderActiveView(beat, engineBeat());
   updatePositionDisplay(beat);
+  if (viewGlide && rafId == null) scheduleRender();
 }
 
 // Scheduling top-up (audioEngine.tick()) and the loop/end-of-piece boundary check run on their
@@ -2628,13 +2672,13 @@ function audioTick() {
   }
 
   const resetBeat = loopRegion ? loopRegion.start : 0;
+  viewOffsetBeats += beat - resetBeat;
   audioEngine.stop();
   audioEngine.setPausedBeat(resetBeat);
-  viewOffsetBeats = 0;
+  recenterSmoothly();
   syncPlayButtons(false);
-  renderActiveView(resetBeat, resetBeat);
-  updatePositionDisplay(resetBeat);
   stopRenderLoop();
+  renderNow();
 }
 function startAudioTick() {
   if (audioTickIntervalId == null) audioTickIntervalId = window.setInterval(audioTick, AUDIO_TICK_INTERVAL_MS);
@@ -2653,8 +2697,9 @@ function renderLoop() {
     return;
   }
   const beat = audioEngine.getCurrentBeat();
-  renderActiveView(beat + viewOffsetBeats, beat);
-  updatePositionDisplay(beat + viewOffsetBeats);
+  const shown = beat + viewOffsetBeats + glideResidual();
+  renderActiveView(shown, beat);
+  updatePositionDisplay(shown);
   rafId = requestAnimationFrame(renderLoop);
 }
 function startRenderLoop() {

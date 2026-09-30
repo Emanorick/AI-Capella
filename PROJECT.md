@@ -499,7 +499,10 @@ tracking a `cursor` (in beats) that advances with each `<note>` and rewinds/adva
 `<backup>`/`<forward>` (used for chords and cross-voice layering within a measure). It
 handles:
 - Multiple parts, multi-note chords (`<chord/>`), rests.
-- Mid-piece `<divisions>` and `<time>` (time signature) changes.
+- Mid-piece `<divisions>`, `<time>` (including additive numerators like 3+2) and `<key>` changes,
+  recorded per bar (`MeasureInfo`). Both views show the time signature and the key in the ruler at
+  bar 1 and wherever they change (`signatures.ts`; the key transposed with the song), the sheet
+  view also a double bar line at a key change; the header lists every metre the piece uses.
 - **Slurs** (`<notations><slur>`), tracked per-voice with an open/close map keyed by the
   slur's `number` attribute.
 - **Ties**, checked against *both* `<tie>` (the sound-level element) and
@@ -546,26 +549,34 @@ certain point onward). A grace note is still added as a real (if very short,
 `GRACE_NOTE_DURATION_BEATS`) audible/visible `NoteEvent`, ending exactly at the position the next
 real note starts — just never allowed to move `cursor` itself.
 
-**A measure's real length is however far its own content actually reaches, not always the
-time-signature-implied length (`beats * 4/beatType`).** Those only coincide for an ordinarily-
-complete measure; a **pickup/anacrusis measure** is genuinely shorter, and is a normal, common
-case, not an error — concretely, "Nachtigall" (a reported bug) opens with a single eighth-note
-upbeat in a 3/8 piece, well short of a full 3/8 measure. The parser used to always advance
-`measureStartBeat` by the full time-signature length regardless, which for a pickup measure
-silently padded in an extra gap of silence before measure 2 and shifted every subsequent
-measure/note in the piece later than the source actually notates — worse the more measures away
-from the pickup, which is why it showed up most obviously as a *different* voice's first real
-note (e.g. a Tenor/Bass part resting through the pickup and the next couple of measures) landing
-at the wrong beat entirely, not just "one beat off." Fixed by tracking the furthest `cursor`
-actually reaches while walking a measure's content (across every backup/forward-interleaved
-voice) and using that as the measure's real length, falling back to the time-signature length
-only when a measure has no content at all to measure against. Relies on the source file being
-internally consistent about where a pickup measure's shorter boundary falls across every part —
-true of any properly engraved score (parts sharing a measure numbering only makes musical sense
-if all of them agree on where each measure starts and ends), but this is why the *measures* list
-itself is still only ever built from the first part processed (`measuresBuilt`): every other
-part's per-note beat math uses this same actual-content-length logic independently, and should
-agree with the first part's boundaries rather than needing to re-derive/share them.
+**Bar lengths are agreed across all parts, in two passes.** Pass 1 walks every part and notes,
+per bar, how far its content reaches (overall and per `<voice>`). `planBars()` then lays the bars
+out once for the whole piece: a bar is as long as its time signature says, unless *no* part fills
+it that way — then the length most parts agree on (a pickup/anacrusis, a bar split around a
+repeat; "Nachtigall" opens with a single eighth-note upbeat in 3/8, "As torrents" has 2+1 split
+bars). Pass 2 walks every part again, starting each bar exactly where the plan says. So one part
+whose bar is too long or too short can no longer drift out of step with the others (or with the
+bar lines) for the rest of the piece, which the earlier per-part "the bar is as long as its
+content" rule allowed. A voice whose content overruns its bar (typically an unmarked triplet from
+a scan) is fitted into the bar proportionally.
+
+Concretely reported: **Mondlicht bar 49** was shifted against the PDF. The scan (Soundslice
+export) writes every whole-bar rest (`<rest measure="yes"/>`) with a 4/4 whole rest's duration,
+also in the piece's 12/8 bars — 4 beats instead of 6. Each part lost 2 beats per such rest, at
+different bars (the soprano already from bar 2, soprano/alto at 45–46, tenor/bass at 47–48), so by
+bar 49 every voice was somewhere else. A whole-bar rest now always lasts its bar, whatever its
+`<duration>` says, and has no say in the bar's length. Only Mondlicht and Space Oddity (an alto
+missing a sixteenth in bar 51, unmarked triplets in 52/55) parse differently from before; every
+other song in the library comes out identical.
+
+The first part supplies the piece-level information: bar numbers, time and key signatures per
+bar, rehearsal marks.
+
+**Directions** (`<direction>`) are read into `Score.marks` per part: dynamics (`<dynamics>`),
+hairpins (`<wedge>` crescendo/diminuendo to its stop), tempo marks (a `<metronome>`, `<sound
+tempo>`, or words starting with a tempo term — Andante, rit., a tempo, …) and other printed words.
+Left out: titles and credits typed as words (large type or set high above the staff), syllables
+typed as words among the lyrics, and chord symbols.
 
 **`<clef>` (sign/line/clef-octave-change) is now read from `<attributes>` and stored on
 `PartInfo.clef`**, rather than every part's staff-view clef being purely a heuristic guess from
@@ -580,10 +591,9 @@ therefore MIDI/playback) is unaffected either way, since clef only ever changes 
 *positioned* on the page, never what pitch it actually is.
 
 **`<direction><direction-type><rehearsal>` marks are parsed into `Score.rehearsalMarks`**
-(label + beat position), the same way `<clef>` and everything else structural is: only from the
-first part processed (`measuresBuilt` again — a rehearsal mark is a piece-level concept, and real
-scores conventionally print one only once, usually on the top staff), recorded at whatever `cursor`
-position the `<direction>` element appears at in the file. See §2's "Section markers" for how
+(label + beat position), from the first part only (a rehearsal mark is a piece-level concept, and
+real scores conventionally print one only once, usually on the top staff), recorded at the
+`<direction>`'s position in the bar. See §2's "Section markers" for how
 `main.ts` uses this (and what happens when a file has none).
 
 **MIDI import** (`midi.ts`) is a from-scratch standard MIDI file (SMF) reader — no external
@@ -702,6 +712,17 @@ Two playback sounds, chosen per device in the player ⋯ menu (`ai-capella-sound
   1.6 s) on everything but the metronome; bus compressor, then a limiter — measured over a six-voice
   passage, the old synthesized sound peaked at 1.15 (clipping), now every sound stays below 0.95 at
   matched loudness.
+- **The light follows what is heard.** The context's clock runs ahead of the loudspeaker by the
+  output latency (`outputLatency` + `baseLatency`, plus the two compressors' 6 ms look-ahead): a few
+  milliseconds on a laptop, 150 ms and more over Bluetooth. `getCurrentBeat()` — which every view
+  draws from — is the beat being *heard*, so the light reaches a note as it sounds (reported: the
+  piano came after the light). The scheduler itself keeps the context's clock
+  (`scheduledBeat()`), and a synced start hands the audio to the output early by the latency, so
+  every device sounds at the shared instant. Each piano recording also starts right at its attack
+  (`attackOnset()`: 1 ms before the first sample above 2 % of its peak), skipping the recording's
+  and the MP3 decoder's leading silence.
+- **Brighter piano**: each voice's chain has a high shelf (+5 dB above 2.6 kHz) and a low shelf
+  (−2 dB below 180 Hz), active for the piano only.
 - Playback works by **scheduling every note's oscillators up front** at the moment `play()` is
   called, using the Web Audio clock (`AudioContext.currentTime` plus each note's beat offset
   converted via the current BPM) — not by ticking through notes one at a time in JS. This is
@@ -771,6 +792,12 @@ Two playback sounds, chosen per device in the player ⋯ menu (`ai-capella-sound
 
 ### 4.5 Input handling (`main.ts`)
 
+- **The view travels, it doesn't jump.** Whenever the view returns to the playback position — a
+  new start point followed by Play, a bar or section jump, a synced change from another device,
+  the end of the piece — `recenterSmoothly()` starts a glide: the remaining distance eases in and
+  out (cubic) over 0.3–0.95 s depending on how far it goes, so the reader sees where the music
+  went instead of having to find their place again (reported from rehearsal). Panning or dragging
+  the overview stops a glide where it is; with reduced motion requested, the view jumps as before.
 - All view-affecting input (wheel, drag, resize) goes through `scheduleRender()`, which
   coalesces any number of same-frame requests into a single `requestAnimationFrame` callback —
   wheel/pointermove events fire far faster than the display refreshes, and rendering
