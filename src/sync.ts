@@ -118,7 +118,7 @@ export async function calibrateClockOffset(): Promise<void> {
   // hasn't NTP-synced recently -- logged so it's diagnosable rather than a mysteriously "async"
   // sounding group. A likely cause if this keeps failing: Firestore security rules that only
   // cover sessions/live and not the whole sessions/** collection (this writes sessions/clockPing_*).
-  console.warn('[AI-Capella] Clock calibration failed; synced playback may start noticeably out of sync on this device until it succeeds.');
+  console.warn('[LightScore] Clock calibration failed; synced playback may start noticeably out of sync on this device until it succeeds.');
 }
 
 /** Calibrates immediately, then periodically and whenever the tab becomes visible again. */

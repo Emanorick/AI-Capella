@@ -1,4 +1,8 @@
-# AI-Capella
+# LightScore
+
+*Formerly AI-Capella. The repository, the site's address (`…/AI-Capella/`), the Firebase
+project and the device settings keep the old name, so links, bookmarks and saved settings keep
+working.*
 
 A browser-based rehearsal tool for a cappella / choir groups. You import a MusicXML score,
 and it turns into an interactive, scrolling "piano roll" you can play back, mute/solo
@@ -18,7 +22,7 @@ track that's locked to one fixed speed and one fixed set of voices. Existing too
 full notation software (heavyweight, not built for "just play my part back to me") or crude
 MIDI players (no per-voice mixing, no visual reference for where you are in the piece).
 
-AI-Capella is a much narrower, much more focused answer to that problem:
+LightScore is a much narrower, much more focused answer to that problem:
 
 - Take a MusicXML file (the de-facto standard export format from Finale, Sibelius, MuseScore,
   and most notation/OMR software).
@@ -371,10 +375,14 @@ layer (strength between "subtle" and "balanced" of its design draft):
   size in three widths, scaled up), sparks gliding along them (positions interpolated between
   samples, full frame rate). A click or tap draws the lines toward it for a moment with a small
   flare of light (`RibbonField`). (Plucking the lines like strings was tried and dropped: it made
-  them strings instead of lines of music.) The name (`inkWordmark.ts`) is the Bodoni traced in
-  ink: each letter set down by hand (a hair of tilt and lift), a pen's minimum line width, the ink
-  feathered into the paper's fibres at the edges and pooled along them; it floats over the paper
-  on a soft shadow and is written in from left to right. The two choices are paper tabs embossed
+  them strings instead of lines of music.) The name, **LightScore** (`lightName.ts`): "Light" moves,
+  "Score" holds. "Light" is written with light in a pen script (Italianno) -- a bright point
+  travels along the letters (following where their ink lies, column by column) and leaves them
+  glowing, then they breathe softly; "Score" follows in ink, the Bodoni traced by
+  `inkWordmark.ts` (`renderInk`: each letter set down by hand, a pen's minimum line width, the ink
+  feathered into the paper's fibres and pooled along the edges), written in from left to right.
+  The name floats over the paper, the voice lines of light run across the whole width beneath it.
+  In the header and on the PIN screen the same pairing is set in type (`.ls-l`). The two choices are paper tabs embossed
   out of the sheet.
 - **Piano roll as a lit paper roll ("lantern").** `NOTE_STYLE` in `pianoRoll.ts`: part of the
   paper design (Samt & Glas uses the gel notes); any device can also pick it with `?roll=lantern`
@@ -387,8 +395,8 @@ layer (strength between "subtle" and "balanced" of its design draft):
   Behind the paper the spot is egg-shaped, as from a lamp aimed obliquely: it falls off quickly
   over the music already played and reaches far over the music to come. Slurs are printed on the
   paper like engraved ones (thin ends, swelling in the middle), from the edge of one hole to the
-  facing edge of the next (`paintSlurSpindles`). After a jump of the playhead (a click on the ruler, a loop going round) the lamp glides
-  over instead of jumping (`LAMP_GLIDE_S`). The light is composed at ¼–½ resolution each frame;
+  facing edge of the next (`paintSlurSpindles`). The lamp sits at the playhead; after a jump the view travels there
+  (§4.5) and carries it along. The light is composed at ¼–½ resolution each frame;
   the glow is laid over the paper (source-over) rather than added, because a full-screen
   'lighter' pass cost many frames on a software-rendered canvas (measured in headless Chromium,
   which has no GPU: gel 0–2, lantern 2–18 frames over 33 ms out of ~230 while playing, varying a
@@ -414,7 +422,7 @@ layer (strength between "subtle" and "balanced" of its design draft):
 - **Language**: German and English (`i18n.ts`), following the device language, switchable from
   the ⋯ menus. German key names use German spelling (B-Dur, H-Dur, fis-Moll).
 - **App identity**: the mark (four voice lines that part and meet), favicon, home-screen icons and
-  a web-app manifest, so "Add to Home Screen" opens AI-Capella full-screen.
+  a web-app manifest, so "Add to Home Screen" opens LightScore full-screen.
 - **Overlays** (`ui.ts`): menus (bottom sheets on phones), popovers, bottom sheets, confirm and
   rename dialogs, and toasts — one open at a time, Escape/outside-click to close, focus returned.
   A bottom sheet can also be pulled down to close it (when its content is scrolled to the top): it
@@ -693,16 +701,13 @@ strip" report, rather than trusting the incremental rebuild-margin heuristic bli
 viewport size changes — address bar show/hide, dynamic toolbars — that don't fire a `resize`
 event but do change the canvas's actual laid-out box.
 
-**Gold-ink markings (draft, `goldInk.ts`).** Behind a device switch (`?zeichen=stich|feder`,
-`?zeichen=aus` to hide; off by default): dynamics, hairpins, tempo and printed words from
-`Score.marks`, written over the score in dark gold ink. *stich* uses Bravura's engraved dynamics
-and Bodoni italic, *feder* a narrow pen script (Italianno, bundled via Fontsource and loaded only
-when switched on). To keep the page calm: tempo marks, and dynamics every voice shares, sit once in
-a lane along the top of the piano roll; a voice's own marks stand just above the note they start
-at, one after another when several fall on the same spot; words repeated bar after bar are written
-once. The sheet view writes them above each staff, as a choral score prints them, shared words only
-over the top staff. The gold is still until the reading line passes: a sheen travels across the
-letters and a few specks sparkle near the line.
+**Gold-ink markings (`goldInk.ts`).** Dynamics, hairpins, tempo and printed words from
+`Score.marks`, written above the staves of the sheet view in gold ink with a pen (Italianno): ink
+on the paper, so nothing glows or sparkles as the reading line passes. On by default;
+`?zeichen=aus` hides them on a device. As a choral score prints them: dynamics and hairpins over
+each staff (one after another when several fall on the same spot), tempo marks and words every
+voice shares once, over the top staff; words repeated bar after bar are written the first time
+only. (Tried in the piano roll too, and dropped there: too much over the lit notes.)
 
 ### 4.4 Audio (`audioEngine.ts`)
 
@@ -724,8 +729,11 @@ Two playback sounds, chosen per device in the player ⋯ menu (`ai-capella-sound
   passage, the old synthesized sound peaked at 1.15 (clipping), now every sound stays below 0.95 at
   matched loudness.
 - **The light follows what is heard.** The context's clock runs ahead of the loudspeaker by the
-  output latency (`outputLatency` + `baseLatency`, plus the two compressors' 6 ms look-ahead): a few
-  milliseconds on a laptop, 150 ms and more over Bluetooth. `getCurrentBeat()` — which every view
+  output latency (`outputLatency`, or `baseLatency` where a browser reports none, plus the bus
+  compressor's 6 ms look-ahead): a few milliseconds on a laptop, 150 ms and more over Bluetooth.
+  Adding `baseLatency` on top of `outputLatency` overshot (reported: the sound came slightly before
+  the light). Loudspeakers differ, so each device can fine-tune it in the ⋯ menu ("Light and sound",
+  ±150 ms, `ai-capella-light-offset`). `getCurrentBeat()` — which every view
   draws from — is the beat being *heard*, so the light reaches a note as it sounds (reported: the
   piano came after the light). The scheduler itself keeps the context's clock
   (`scheduledBeat()`), and a synced start hands the audio to the output early by the latency, so
@@ -803,11 +811,14 @@ Two playback sounds, chosen per device in the player ⋯ menu (`ai-capella-sound
 
 ### 4.5 Input handling (`main.ts`)
 
-- **The view travels, it doesn't jump.** Whenever the view returns to the playback position — a
-  new start point followed by Play, a bar or section jump, a synced change from another device,
-  the end of the piece — `recenterSmoothly()` starts a glide: the remaining distance eases in and
-  out (cubic) over 0.3–0.95 s depending on how far it goes, so the reader sees where the music
-  went instead of having to find their place again (reported from rehearsal). Panning or dragging
+- **The view travels, it doesn't jump.** Whenever playback moves — a new start point, a bar or
+  section jump, a synced change from another device, the end of the piece — the view keeps what
+  it showed at that instant and then travels to the new position (`recenterSmoothly()`): the
+  distance eases in and out (cubic) over 0.5–1.25 s depending on how far it goes, so the reader
+  sees where the music went instead of having to find their place again (reported from
+  rehearsal). The compensation happens in `applyPlaybackState()`, where the position really
+  changes: a synced start arrives a moment after the tap, and compensating at the tap already
+  showed a mirrored jump for those few frames (reported as a flash). Panning or dragging
   the overview stops a glide where it is; with reduced motion requested, the view jumps as before.
 - All view-affecting input (wheel, drag, resize) goes through `scheduleRender()`, which
   coalesces any number of same-frame requests into a single `requestAnimationFrame` callback —
@@ -1253,7 +1264,7 @@ To point the app at your own Firebase project instead of the bundled one, edit
   calibration — `calibrateClockOffset()` swallows the permission-denied error and just leaves
   the offset at its default of 0, which shows up as synced playback starting audibly out of
   sync (by however much this device's own clock differs from the server) rather than as an
-  obvious error. Check the browser console for a `[AI-Capella] Clock calibration failed` warning
+  obvious error. Check the browser console for a `[LightScore] Clock calibration failed` warning
   if that happens.
 
 ### Deployment

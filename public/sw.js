@@ -1,4 +1,4 @@
-// AI-Capella service worker: keeps the app itself available offline (rehearsal rooms without
+// LightScore service worker: keeps the app itself available offline (rehearsal rooms without
 // Wi-Fi). Songs are not stored here -- Firestore keeps its own offline copy (see firebase.ts).
 //
 // - Page loads: network first, falling back to the stored page when offline. Every successful
@@ -6,7 +6,7 @@
 // - Everything else from this site (hashed build files, fonts, icons, the sample song, the piano
 //   samples): stored copy first, network otherwise -- build files never change under the same name.
 // - Other hosts (Firebase) are left alone.
-const CACHE = 'ai-capella-v2'; // v2: the paper design's icons
+const CACHE = 'ai-capella-v3'; // v3: the new name, LightScore
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

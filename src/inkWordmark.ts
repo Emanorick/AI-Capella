@@ -1,9 +1,9 @@
-// Draft title screen (design.ts START_DRAFT): the name written in ink, floating over the paper.
+// Letters written in ink, for the title screen's name (lightName.ts: the "Score" of LightScore).
 // The letters are the app's Bodoni -- itself a pointed-pen letter, thick downstrokes and hairlines --
 // traced as if with a fountain pen: each letter set down by hand (a hair of tilt and lift), the ink
 // feathered into the paper's fibres at the edges, a little denser along them where it pooled while
 // drying. Rendered once into a canvas (and again on resize); the page shows it with a soft shadow
-// beneath, so it hovers, and writes it in from left to right (style.css).
+// beneath, so it hovers (style.css).
 
 import { FONT_DISPLAY } from './theme';
 
@@ -66,94 +66,83 @@ function fibreNoise(w: number, h: number, cw: number, ch: number, seed: number):
   return out;
 }
 
-/** Replaces `host`'s text with the inked name (the text stays for screen readers). */
-export function inkWordmark(host: HTMLElement) {
-  const text = host.textContent?.trim() || 'AI-Capella';
-  host.textContent = '';
-  host.setAttribute('aria-label', text);
-  const canvas = document.createElement('canvas');
-  canvas.className = 'ink';
-  canvas.setAttribute('aria-hidden', 'true');
-  host.appendChild(canvas);
+export interface InkMetrics {
+  cssW: number; // the canvas's size in css px
+  cssH: number;
+  pad: number; // room around the letters (for the feathering and the tilt)
+  baseline: number; // from the canvas's top, css px
+}
 
-  const draw = () => {
-    const size = parseFloat(getComputedStyle(host).fontSize) || 96;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const font = `500 ${size}px ${FONT_DISPLAY}`;
-    const measure = document.createElement('canvas').getContext('2d')!;
-    measure.font = font;
-    const track = -0.015 * size;
-    // Letter positions from the widths of the growing text, so the font's kerning is kept.
-    const xs = [...text].map((_, i) => measure.measureText(text.slice(0, i)).width + i * track);
-    const width = measure.measureText(text).width + (text.length - 1) * track;
-    const pad = Math.round(size * 0.22);
-    const cssW = Math.ceil(width + pad * 2);
-    const cssH = Math.ceil(size * 1.32 + pad);
-    const W = Math.round(cssW * dpr);
-    const H = Math.round(cssH * dpr);
+/**
+ * Traces `text` in simulated ink into `canvas` at `size` px (`weight` of the app's Bodoni) and
+ * sizes the canvas to fit; the canvas extends `pad` px beyond the letters on every side.
+ */
+export function renderInk(canvas: HTMLCanvasElement, text: string, size: number, weight = 500): InkMetrics {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const font = `${weight} ${size}px ${FONT_DISPLAY}`;
+  const measure = document.createElement('canvas').getContext('2d')!;
+  measure.font = font;
+  const track = -0.015 * size;
+  // Letter positions from the widths of the growing text, so the font's kerning is kept.
+  const xs = [...text].map((_, i) => measure.measureText(text.slice(0, i)).width + i * track);
+  const width = measure.measureText(text).width + (text.length - 1) * track;
+  const pad = Math.round(size * 0.22);
+  const cssW = Math.ceil(width + pad * 2);
+  const cssH = Math.ceil(size * 1.32 + pad);
+  const W = Math.round(cssW * dpr);
+  const H = Math.round(cssH * dpr);
 
-    // 1. The letters, each set down by hand.
-    const mask = document.createElement('canvas');
-    mask.width = W;
-    mask.height = H;
-    const m = mask.getContext('2d')!;
-    m.scale(dpr, dpr);
-    m.font = font;
-    m.fillStyle = '#fff';
-    // A pen's ink line is never as fine as the typeface's display hairlines: a little width all round.
-    m.strokeStyle = '#fff';
-    m.lineWidth = Math.max(1, size * 0.014);
-    m.lineJoin = 'round';
-    m.textBaseline = 'alphabetic';
-    const r = rng(7);
-    const baseline = pad + size * 0.98;
-    [...text].forEach((ch, i) => {
-      m.save();
-      m.translate(pad + xs[i], baseline + (r() - 0.5) * size * 0.012);
-      m.rotate(((r() - 0.5) * 1.6 * Math.PI) / 180);
-      m.strokeText(ch, 0, 0);
-      m.fillText(ch, 0, 0);
-      m.restore();
-    });
-    const img = m.getImageData(0, 0, W, H);
-    const alpha = new Float32Array(W * H);
-    for (let i = 0; i < alpha.length; i++) alpha[i] = img.data[i * 4 + 3] / 255;
-
-    // 2. Ink: edges feathered along the fibres, denser where it pooled at the rim.
-    const soft = boxBlur(alpha, W, H, Math.max(1, Math.round(0.9 * dpr)));
-    const fibres = fibreNoise(W, H, Math.round(16 * dpr), Math.max(1, Math.round(2.2 * dpr)), 11);
-    const grain = fibreNoise(W, H, Math.max(1, Math.round(3 * dpr)), Math.max(1, Math.round(1.2 * dpr)), 23);
-    const out = m.createImageData(W, H);
-    for (let i = 0; i < alpha.length; i++) {
-      const b = soft[i];
-      if (b < 0.02) continue;
-      // Mostly the letter itself (so hairlines survive), its blurred edge frayed by the fibres.
-      const v = 0.62 * alpha[i] + 0.38 * b + (fibres[i] - 0.5) * 0.3 + (grain[i] - 0.5) * 0.12;
-      const cover = smooth(0.3, 0.55, v);
-      if (cover <= 0) continue;
-      const rim = cover * (1 - smooth(0.6, 0.97, b));
-      const density = Math.min(1, 0.84 + 0.16 * rim + (grain[i] - 0.5) * 0.14);
-      const lift = 0.3 * rim; // pooled ink catches a little more light
-      out.data[i * 4] = INK[0] + (255 - INK[0]) * lift;
-      out.data[i * 4 + 1] = INK[1] + (252 - INK[1]) * lift;
-      out.data[i * 4 + 2] = INK[2] + (246 - INK[2]) * lift;
-      out.data[i * 4 + 3] = 255 * cover * density;
-    }
-    canvas.width = W;
-    canvas.height = H;
-    canvas.style.width = `${cssW}px`;
-    canvas.style.height = `${cssH}px`;
-    // The canvas's padding (for the feathering and the tilt) shouldn't push the layout around.
-    canvas.style.margin = `${-pad}px`;
-    canvas.getContext('2d')!.putImageData(out, 0, 0);
-  };
-
-  let timer = 0;
-  window.addEventListener('resize', () => {
-    clearTimeout(timer);
-    timer = window.setTimeout(draw, 120);
+  // 1. The letters, each set down by hand.
+  const mask = document.createElement('canvas');
+  mask.width = W;
+  mask.height = H;
+  const m = mask.getContext('2d')!;
+  m.scale(dpr, dpr);
+  m.font = font;
+  m.fillStyle = '#fff';
+  // A pen's ink line is never as fine as the typeface's display hairlines: a little width all round.
+  m.strokeStyle = '#fff';
+  m.lineWidth = Math.max(1, size * 0.014);
+  m.lineJoin = 'round';
+  m.textBaseline = 'alphabetic';
+  const r = rng(7);
+  const baseline = pad + size * 0.98;
+  [...text].forEach((ch, i) => {
+    m.save();
+    m.translate(pad + xs[i], baseline + (r() - 0.5) * size * 0.012);
+    m.rotate(((r() - 0.5) * 1.6 * Math.PI) / 180);
+    m.strokeText(ch, 0, 0);
+    m.fillText(ch, 0, 0);
+    m.restore();
   });
-  const ready = 'fonts' in document ? document.fonts.load(`500 100px ${FONT_DISPLAY}`).catch(() => undefined) : Promise.resolve();
-  draw();
-  void ready.then(draw);
+  const img = m.getImageData(0, 0, W, H);
+  const alpha = new Float32Array(W * H);
+  for (let i = 0; i < alpha.length; i++) alpha[i] = img.data[i * 4 + 3] / 255;
+
+  // 2. Ink: edges feathered along the fibres, denser where it pooled at the rim.
+  const soft = boxBlur(alpha, W, H, Math.max(1, Math.round(0.9 * dpr)));
+  const fibres = fibreNoise(W, H, Math.round(16 * dpr), Math.max(1, Math.round(2.2 * dpr)), 11);
+  const grain = fibreNoise(W, H, Math.max(1, Math.round(3 * dpr)), Math.max(1, Math.round(1.2 * dpr)), 23);
+  const out = m.createImageData(W, H);
+  for (let i = 0; i < alpha.length; i++) {
+    const b = soft[i];
+    if (b < 0.02) continue;
+    // Mostly the letter itself (so hairlines survive), its blurred edge frayed by the fibres.
+    const v = 0.62 * alpha[i] + 0.38 * b + (fibres[i] - 0.5) * 0.3 + (grain[i] - 0.5) * 0.12;
+    const cover = smooth(0.3, 0.55, v);
+    if (cover <= 0) continue;
+    const rim = cover * (1 - smooth(0.6, 0.97, b));
+    const density = Math.min(1, 0.84 + 0.16 * rim + (grain[i] - 0.5) * 0.14);
+    const lift = 0.3 * rim; // pooled ink catches a little more light
+    out.data[i * 4] = INK[0] + (255 - INK[0]) * lift;
+    out.data[i * 4 + 1] = INK[1] + (252 - INK[1]) * lift;
+    out.data[i * 4 + 2] = INK[2] + (246 - INK[2]) * lift;
+    out.data[i * 4 + 3] = 255 * cover * density;
+  }
+  canvas.width = W;
+  canvas.height = H;
+  canvas.style.width = `${cssW}px`;
+  canvas.style.height = `${cssH}px`;
+  canvas.getContext('2d')!.putImageData(out, 0, 0);
+  return { cssW, cssH, pad, baseline };
 }

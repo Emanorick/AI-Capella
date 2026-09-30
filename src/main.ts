@@ -4,6 +4,7 @@
 import '@fontsource-variable/bodoni-moda/opsz.css';
 import '@fontsource-variable/atkinson-hyperlegible-next/wght.css';
 import '@fontsource-variable/atkinson-hyperlegible-mono/wght.css';
+import '@fontsource/italianno/latin-400.css';
 import './style.css';
 import { parseMusicXML } from './musicxml';
 import { parseMIDI } from './midi';
@@ -23,8 +24,8 @@ import { canvasFontsReady } from './theme';
 import { initScan, openScanSheet, scanAvailable, scanStatusLine } from './scan';
 import { WaveBackdrop } from './backdrop';
 import { START_DRAFT } from './design';
-import { inkWordmark } from './inkWordmark';
-import { loadMarkFonts } from './goldInk';
+import { lightScoreName } from './lightName';
+import { loadScriptFont } from './goldInk';
 import { closeOverlay, confirmDialog, isNarrow, openMenu, openPopover, openSheet, promptDialog, toast } from './ui';
 import * as sync from './sync';
 import type { PlaybackState } from './sync';
@@ -69,9 +70,9 @@ const SEARCH_THRESHOLD = 8; // the search field only appears once the library is
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const backdrop = new WaveBackdrop();
 app.innerHTML = `
-  <section id="landing" class="view" aria-label="AI-Capella">
+  <section id="landing" class="view" aria-label="LightScore">
     <canvas class="ribbons" id="landing-ribbons" aria-hidden="true"></canvas>
-    <h1 class="landing-name">AI-Capella</h1>
+    <h1 class="landing-name" aria-label="LightScore"><span class="ls-l">Light</span>Score</h1>
     <div class="landing-modes">
       <button type="button" class="mode-btn" id="mode-solo-btn">${icon('user')}<span>${t('practiseAlone')}</span></button>
       <button type="button" class="mode-btn" id="mode-ensemble-btn">${icon('users')}<span>${t('rehearseTogether')}</span></button>
@@ -80,7 +81,7 @@ app.innerHTML = `
 
   <section id="library" class="view">
     <header class="lib-top">
-      <span class="brand"><canvas class="mark" aria-hidden="true"></canvas><span class="wordmark">AI-Capella</span></span>
+      <span class="brand"><canvas class="mark" aria-hidden="true"></canvas><span class="wordmark" aria-label="LightScore"><span class="ls-l">Light</span>Score</span></span>
       <div class="lib-top-r">
         <div class="seg mode-seg" id="mode-seg" role="group" aria-label="${t('mode')}">
           <button type="button" data-action="mode" data-mode="solo">${icon('user')}<span>${t('solo')}</span></button>
@@ -487,6 +488,47 @@ document.querySelector<HTMLButtonElement>('#mode-ensemble-btn')!.addEventListene
 // Playback sound, chosen per device (not synced -- each singer may prefer another).
 const SOUND_KEY = 'ai-capella-sound';
 let playbackSound: Sound = localStorage.getItem(SOUND_KEY) === 'voice' ? 'voice' : 'piano';
+// Light against sound, fine-adjusted per device (loudspeakers and Bluetooth differ): + = light later.
+const LIGHT_OFFSET_KEY = 'ai-capella-light-offset';
+let lightOffsetMs = (() => {
+  try {
+    return Number(localStorage.getItem(LIGHT_OFFSET_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+})();
+
+function openLightOffsetSheet(opener: HTMLElement | null) {
+  const body = document.createElement('div');
+  body.className = 'sheet-body offset-body';
+  body.innerHTML = `
+    <p class="ctl-note">${t('lightOffsetHint')}</p>
+    <div class="offset-row">
+      <span>${t('lightEarlier')}</span>
+      <input type="range" id="light-offset" min="-150" max="150" step="5" value="${lightOffsetMs}" aria-label="${t('lightOffset')}">
+      <span>${t('lightLater')}</span>
+    </div>
+    <p class="offset-value"><output for="light-offset">${lightOffsetLabel(lightOffsetMs)}</output></p>`;
+  const input = body.querySelector<HTMLInputElement>('#light-offset')!;
+  const out = body.querySelector('output')!;
+  input.addEventListener('input', () => {
+    lightOffsetMs = Number(input.value);
+    out.textContent = lightOffsetLabel(lightOffsetMs);
+    try {
+      if (lightOffsetMs) localStorage.setItem(LIGHT_OFFSET_KEY, String(lightOffsetMs));
+      else localStorage.removeItem(LIGHT_OFFSET_KEY);
+    } catch {
+      // storage unavailable: the setting lasts for this visit
+    }
+    audioEngine?.setLightOffsetMs(lightOffsetMs);
+  });
+  openSheet(t('lightOffset'), body, opener);
+}
+
+function lightOffsetLabel(ms: number): string {
+  return ms === 0 ? t('lightOffsetNone') : t(ms > 0 ? 'lightOffsetLater' : 'lightOffsetEarlier', { ms: Math.abs(ms) });
+}
+
 function soundItems() {
   const choose = (sound: Sound) => () => {
     playbackSound = sound;
@@ -995,6 +1037,7 @@ async function loadSongLocally(song: SongEntry) {
 
   audioEngine?.dispose();
   audioEngine = new AudioEngine(score, playbackSound);
+  audioEngine.setLightOffsetMs(lightOffsetMs);
   audioEngine.setDuckedVolume(duckVolume);
   const partColor = (partId: string) => colorForPart(score.parts.findIndex((p) => p.id === partId), score.parts.length);
   currentPartColor = partColor;
@@ -1183,11 +1226,19 @@ async function applyPlaybackState(state: PlaybackState) {
     return;
   }
 
-  recenterSmoothly();
+  // Where the screen is right now: after playback moves, the view starts from exactly there and
+  // travels to the new position (recenterSmoothly), never jumping first.
+  const shownBefore = displayBeat();
+  const travel = () => {
+    viewGlide = null;
+    viewOffsetBeats = shownBefore - engineBeat();
+    recenterSmoothly();
+  };
   if (!state.playing) {
     audioEngine.stop();
     audioEngine.setPausedBeat(state.originBeat);
     customStartBeat = state.originBeat > 0 ? state.originBeat : null;
+    travel();
     syncPlayButtons(false);
     stopRenderLoop();
     renderNow();
@@ -1197,6 +1248,7 @@ async function applyPlaybackState(state: PlaybackState) {
   // no shared instant to translate, so AudioEngine.play() falls back to its own "now" default.
   const startAtEpochMs = state.originServerTimeMs > 0 ? state.originServerTimeMs - sync.getServerTimeOffsetMs() : undefined;
   audioEngine.play(state.originBeat, state.bpm, state.transpose, startAtEpochMs, state.countInBeats, state.countInPulseBeats, state.startTones);
+  travel();
   syncPlayButtons(true);
   startRenderLoop();
 }
@@ -1825,7 +1877,7 @@ document.addEventListener('keydown', (e) => {
 function jumpToMeasure(n: number) {
   if (!currentScore) return;
   const measure = currentScore.measures.find((m) => m.number === n);
-  if (measure) seekToBeat(measure.startBeat, { recenterView: true });
+  if (measure) seekToBeat(measure.startBeat);
 }
 
 /** One bar back/forward from the bar under the playhead -- snapping to the bar start first when mid-bar going back. */
@@ -1837,7 +1889,7 @@ function stepMeasure(delta: number) {
   let targetIdx = idx + delta;
   if (delta < 0 && beat - measures[idx].startBeat > 0.25) targetIdx = idx;
   targetIdx = Math.min(Math.max(targetIdx, 0), measures.length - 1);
-  seekToBeat(measures[targetIdx].startBeat, { recenterView: true });
+  seekToBeat(measures[targetIdx].startBeat);
 }
 
 // Press-and-hold acceleration for previous/next bar: a tap moves one bar, holding repeats and
@@ -1960,7 +2012,7 @@ function openSectionMenu(anchor: HTMLElement) {
   const index = Number(anchor.dataset.index);
   const section = effectiveSections()[index];
   if (!section) return;
-  const items: Parameters<typeof openMenu>[1] = [{ label: t('jumpToSection', { label: section.label }), icon: 'flag', onSelect: () => seekToBeat(section.beat, { recenterView: true }) }];
+  const items: Parameters<typeof openMenu>[1] = [{ label: t('jumpToSection', { label: section.label }), icon: 'flag', onSelect: () => seekToBeat(section.beat) }];
   if (sectionsEditable()) {
     items.push({ label: t('removeSection', { label: section.label }), icon: 'trash', danger: true, onSelect: () => removeSection(index) });
     if (manualSections.length > 1) items.push({ label: t('removeAllSections'), icon: 'trash', danger: true, onSelect: () => void removeAllSections() });
@@ -2038,7 +2090,7 @@ function openPlayerMenu(anchor: HTMLElement) {
     if (sectionsEditable() && manualSections.length) items.push({ label: t('removeAllSections'), icon: 'flag', onSelect: () => void removeAllSections() });
   }
   if (activeView === 'roll') items.push({ label: t('followMusic'), icon: 'fitHeight', checked: followPref, onSelect: () => setFollow(!followPref) });
-  items.push(...soundItems(), ...languageItems());
+  items.push(...soundItems(), { label: t('lightOffset'), icon: 'metronome', onSelect: () => openLightOffsetSheet(anchor) }, ...languageItems());
   openMenu(anchor, items, t('menu'));
 }
 
@@ -2149,7 +2201,7 @@ document.addEventListener('click', (e) => {
     }
     case 'section-jump': {
       const section = effectiveSections()[Number(el.dataset.index)];
-      if (section) seekToBeat(section.beat, { recenterView: true });
+      if (section) seekToBeat(section.beat);
       closeOverlay();
       break;
     }
@@ -2225,7 +2277,7 @@ function recenterSmoothly() {
     viewGlide = null;
     return;
   }
-  viewGlide = { from, t0: performance.now(), ms: Math.min(950, 300 + 22 * Math.sqrt(px)) };
+  viewGlide = { from, t0: performance.now(), ms: Math.min(1250, 480 + 26 * Math.sqrt(px)) };
   scheduleRender();
 }
 
@@ -2256,26 +2308,20 @@ function panByBeats(deltaBeats: number) {
 }
 
 /**
- * Sets where the next Play (or an already-playing transport) should be. `recenterView`, when true
- * (bar jumps, sections), snaps the view to the new position -- "take me there." When false
- * (default; ruler taps), the view stays exactly where it was so the screen doesn't jump for someone
- * who's just marking a start point while reading elsewhere.
+ * Sets where the next Play (or an already-playing transport) should be. The view then travels
+ * there from wherever it is (see applyPlaybackState).
  */
-function seekToBeat(beat: number, opts?: { recenterView?: boolean }) {
+function seekToBeat(beat: number) {
   if (!audioEngine || !currentScore) return;
   const clamped = Math.max(0, Math.min(currentScore.totalBeats, beat));
-  const oldEngineBeat = engineBeat();
   if (audioEngine.isPlaying()) {
     // See the BPM handler's comment: explicitly zeroed so a stale count-in never reattaches.
     void publishPlayingAt(clamped, { countInBeats: 0, countInPulseBeats: 1 });
   } else {
     pushState({ playing: false, originBeat: clamped, originServerTimeMs: 0, freshStart: true });
   }
-  // The view stays where it was for this instant (purely local, independent of the authoritative
-  // position change published above), then travels to the new position rather than jumping.
-  viewOffsetBeats += oldEngineBeat - clamped;
-  if (opts?.recenterView) recenterSmoothly();
-  clampViewOffset();
+  // The view travels to the new position once playback is actually there (applyPlaybackState);
+  // the position may change a moment later (a synced start), so nothing moves here yet.
   renderNow();
 }
 
@@ -2559,7 +2605,7 @@ overviewCanvas.addEventListener('pointerup', (e) => {
   }
   const snapped = measureAtBeat(currentScore, beat)?.startBeat ?? beat;
   if (!p.moved) clearLoopRegion();
-  seekToBeat(snapped, { recenterView: true });
+  seekToBeat(snapped);
 });
 overviewCanvas.addEventListener('pointercancel', () => {
   overviewPointer = null;
@@ -2931,9 +2977,9 @@ renderSongList();
 refreshBindings();
 requestAnimationFrame(drawMarks);
 // Draft title screen: the name written in ink, floating over the paper.
-if (START_DRAFT) inkWordmark(document.querySelector<HTMLElement>('.landing-name')!);
-// Gold-ink markings (draft, ?zeichen=stich|feder): draw again once their typefaces are in.
-void loadMarkFonts().then(() => renderNow());
+if (START_DRAFT) lightScoreName(document.querySelector<HTMLElement>('.landing-name')!);
+// The pen script of the gold-ink markings: draw again once it is in.
+void loadScriptFont().then(() => renderNow());
 window.addEventListener('online', renderSongList);
 window.addEventListener('offline', renderSongList);
 

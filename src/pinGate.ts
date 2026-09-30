@@ -20,7 +20,7 @@ export function ensureAccess(): Promise<void> {
     overlay.innerHTML = `
       <canvas class="ribbons" aria-hidden="true"></canvas>
       <form id="pin-gate-form" class="pin-card">
-        <p class="wordmark">AI-Capella</p>
+        <p class="wordmark" aria-label="LightScore"><span class="ls-l">Light</span>Score</p>
         <h1></h1>
         <p class="pin-hint"></p>
         <input id="pin-gate-input" class="field pin-input" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN" autofocus />

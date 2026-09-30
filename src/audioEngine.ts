@@ -18,9 +18,8 @@ const LOOKAHEAD_REFILL_SEC = 3; // top up once the scheduled horizon is within t
 // audible click/pop. This just needs to be short enough that an early Stop/Pause/reschedule
 // doesn't feel laggy.
 const FADE_SEC = 0.01;
-// Each DynamicsCompressorNode holds the signal back by a fixed look-ahead (6 ms in Chrome and
-// Safari); the bus has two of them in a row.
-const COMPRESSOR_DELAY_SEC = 0.012;
+// The DynamicsCompressorNode holds the signal back by a fixed look-ahead (6 ms in Chrome and Safari).
+const COMPRESSOR_DELAY_SEC = 0.006;
 // Starting tones ("Anfangstöne"): each voice's tone one after another ("du du du"), one beat
 // apart at the current tempo, then all of them together as the chord they make (two beats), then
 // half a beat's breath before the count-in/music. Kept within sensible limits at extreme tempos.
@@ -866,12 +865,21 @@ export class AudioEngine {
     return Math.max(this.playStartBeat, this.playStartBeat + (ctxTime - this.playStartCtxTime) / this.secPerBeat);
   }
 
-  /** How long audio takes from the context's clock to the air, in seconds. */
+  /**
+   * How long audio takes from the context's clock to the air, in seconds: the device's reported
+   * output latency (where the browser reports none, its processing latency), plus the device's own
+   * fine adjustment (setLightOffsetMs).
+   */
   outputDelay(): number {
     const c = this.ctx as AudioContext & { outputLatency?: number };
-    const out = Number.isFinite(c.outputLatency) ? c.outputLatency! : 0;
-    const base = Number.isFinite(c.baseLatency) ? c.baseLatency : 0;
-    return Math.min(0.6, Math.max(0, out + base) + COMPRESSOR_DELAY_SEC);
+    const out = Number.isFinite(c.outputLatency) && c.outputLatency! > 0 ? c.outputLatency! : Number.isFinite(c.baseLatency) ? c.baseLatency : 0;
+    return Math.min(0.6, Math.max(0, out + COMPRESSOR_DELAY_SEC + this.lightOffsetSec));
+  }
+
+  private lightOffsetSec = 0;
+  /** This device's fine adjustment of light against sound: positive lets the light come later. */
+  setLightOffsetMs(ms: number) {
+    this.lightOffsetSec = (Number.isFinite(ms) ? ms : 0) / 1000;
   }
 
   private heardTime(): number {

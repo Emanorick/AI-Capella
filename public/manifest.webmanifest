@@ -1,6 +1,6 @@
 {
-  "name": "AI-Capella",
-  "short_name": "AI-Capella",
+  "name": "LightScore",
+  "short_name": "LightScore",
   "description": "Rehearsal companion for a cappella groups",
   "start_url": "./",
   "scope": "./",
