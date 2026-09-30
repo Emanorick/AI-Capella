@@ -693,6 +693,17 @@ strip" report, rather than trusting the incremental rebuild-margin heuristic bli
 viewport size changes — address bar show/hide, dynamic toolbars — that don't fire a `resize`
 event but do change the canvas's actual laid-out box.
 
+**Gold-ink markings (draft, `goldInk.ts`).** Behind a device switch (`?zeichen=stich|feder`,
+`?zeichen=aus` to hide; off by default): dynamics, hairpins, tempo and printed words from
+`Score.marks`, written over the score in dark gold ink. *stich* uses Bravura's engraved dynamics
+and Bodoni italic, *feder* a narrow pen script (Italianno, bundled via Fontsource and loaded only
+when switched on). To keep the page calm: tempo marks, and dynamics every voice shares, sit once in
+a lane along the top of the piano roll; a voice's own marks stand just above the note they start
+at, one after another when several fall on the same spot; words repeated bar after bar are written
+once. The sheet view writes them above each staff, as a choral score prints them, shared words only
+over the top staff. The gold is still until the reading line passes: a sheen travels across the
+letters and a few specks sparkle near the line.
+
 ### 4.4 Audio (`audioEngine.ts`)
 
 Two playback sounds, chosen per device in the player ⋯ menu (`ai-capella-sound`, not synced):

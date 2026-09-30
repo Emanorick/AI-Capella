@@ -65,9 +65,9 @@ export function drawRulerSignature(ctx: CanvasRenderingContext2D, change: Signat
       // A little staircase, as the accidentals of a key signature climb and fall on the staff.
       const lift = (fifths >= 0 ? [4, 1, 5, 2, -1, 3, 0][i] : [0, 3, -1, 2, -2, 1, -3][i]) * 1.2;
       ctx.fillText(glyph, at, 19 - lift);
-      at += 6.2;
+      at += 6.6;
     }
-    at += 5;
+    at += 8;
   }
   if (change.time) {
     ctx.font = `21px ${FONT_MUSIC}`;

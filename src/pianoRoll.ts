@@ -4,6 +4,7 @@ import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPap
 import { Lantern, type Flare } from './lantern';
 import { deviceChoice, PAPER_DESIGN } from './design';
 import { drawRulerSignature, signatureChanges, transposeFifths, type SignatureChange } from './signatures';
+import { drawInkMark, layoutMarks, MARK_STYLE, noteAt, type MarkLayout } from './goldInk';
 
 export const BASE_PIXELS_PER_BEAT = 70;
 // The only place a click/drag sets the playback start point or defines a loop region -- clicks in
@@ -121,6 +122,7 @@ export class PianoRoll {
   private loopRegion: LoopRegion | null = null;
   private beatMarkers: ReturnType<typeof getBeatMarkers>;
   private signatureAt: Map<number, SignatureChange>; // by bar start beat
+  private marks: MarkLayout | null; // dynamics and tempo in gold ink (goldInk.ts), when switched on
   private notesByPart: Map<string, NoteEvent[]>;
   private slursByPart: Map<string, SlurArc[]>;
   private dpr = 1;
@@ -176,6 +178,7 @@ export class PianoRoll {
     this.ctx2d = ctx;
     this.beatMarkers = getBeatMarkers(score);
     this.signatureAt = new Map(signatureChanges(score.measures).map((c) => [c.beat, c]));
+    this.marks = MARK_STYLE ? layoutMarks(score) : null;
 
     this.notesByPart = new Map();
     for (const note of score.notes) {
@@ -724,6 +727,7 @@ export class PianoRoll {
     // In front of the paper: the lamp's glow and the light spilling from its holes.
     if (lit) this.lantern!.over(ctx);
     this.drawSoundingNotes(ctx, sounding, rowHeight, scale);
+    this.drawMarks(ctx, beatToX, rowHeight, scale, width, playheadXPos);
 
     // Preview note label: set by a click on a note (see hitTestNote); shows its pitch name at the
     // start of that note. Drawn fresh each frame since it's transient UI state, not score content.
@@ -761,6 +765,60 @@ export class PianoRoll {
       ctx.lineTo(playheadXPos, 8);
       ctx.closePath();
       ctx.fill();
+    }
+  }
+
+  /**
+   * Dynamics, hairpins and tempo in gold ink: the shared ones in a lane along the top, a voice's
+   * own just above its note. Drawn fresh each frame (they are few), since they glint as the
+   * reading line passes.
+   */
+  private drawMarks(ctx: CanvasRenderingContext2D, beatToX: (b: number) => number, rowHeight: number, scale: number, width: number, playheadX: number) {
+    if (!this.marks) return;
+    const now = performance.now() / 1000;
+    const past = (x: number) => (x < playheadX - 24 ? 0.5 : 1);
+    // The lane: two rows, a mark moving to the second when the first is still taken.
+    const rowEnd = [-Infinity, -Infinity];
+    for (const m of this.marks.lane) {
+      const x = beatToX(m.beat);
+      if (x > width + 10) break;
+      const place = { x, y: 0, x2: m.endBeat !== undefined ? beatToX(m.endBeat) : undefined, scale: 1.08 };
+      const w = drawInkMark(ctx, m, place, playheadX, now, true);
+      const row = rowEnd[0] < x - 14 ? 0 : rowEnd[1] < x - 14 ? 1 : -1;
+      if (row < 0) continue;
+      rowEnd[row] = x + w;
+      if (x + w < -10) continue;
+      place.y = (m.kind === 'wedge' ? 16 : 22) + row * 24;
+      drawInkMark(ctx, m, { ...place, alpha: past(x + w) }, playheadX, now);
+    }
+    const lead = BAR_PAD_PX + 3;
+    for (const [partId, marks] of this.marks.byPart) {
+      if (this.hiddenParts.has(partId)) continue;
+      const notes = this.notesByPart.get(partId) ?? [];
+      const dim = this.dimmedParts.has(partId) ? 0.35 : 1;
+      let lastEnd = -Infinity; // marks at the same spot are written one after the other
+      for (const m of marks) {
+        const x = Math.max(beatToX(m.beat), lastEnd + 9);
+        const x2 = m.endBeat !== undefined ? beatToX(m.endBeat) : x;
+        if (x > width + 10 || Math.max(x, x2) < -300) continue;
+        let top: number | null = null;
+        if (m.kind === 'wedge') {
+          // Over the highest note it spans.
+          for (const n of notes) {
+            if (n.startBeat >= m.endBeat!) break;
+            if (n.startBeat + n.durationBeats <= m.beat) continue;
+            const y = this.rowY(n.midi + this.transpose) - rowHeight;
+            top = top === null ? y : Math.min(top, y);
+          }
+        } else {
+          const n = noteAt(notes, m.beat);
+          if (n) top = this.rowY(n.midi + this.transpose) - rowHeight;
+        }
+        if (top === null) continue;
+        const y = (top - this.scrollY) * scale + lead - (m.kind === 'wedge' ? 7 : 4);
+        lastEnd = Math.max(x, x2) + (m.kind === 'wedge' ? 0 : drawInkMark(ctx, m, { x, y }, playheadX, now, true));
+        drawInkMark(ctx, m, { x: m.kind === 'dynamic' ? x - 3 : x, y, x2, alpha: dim * past(Math.max(x, x2)) }, playheadX, now);
+      }
     }
   }
 

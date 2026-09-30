@@ -24,6 +24,7 @@ import { initScan, openScanSheet, scanAvailable, scanStatusLine } from './scan';
 import { WaveBackdrop } from './backdrop';
 import { START_DRAFT } from './design';
 import { inkWordmark } from './inkWordmark';
+import { loadMarkFonts } from './goldInk';
 import { closeOverlay, confirmDialog, isNarrow, openMenu, openPopover, openSheet, promptDialog, toast } from './ui';
 import * as sync from './sync';
 import type { PlaybackState } from './sync';
@@ -2931,6 +2932,8 @@ refreshBindings();
 requestAnimationFrame(drawMarks);
 // Draft title screen: the name written in ink, floating over the paper.
 if (START_DRAFT) inkWordmark(document.querySelector<HTMLElement>('.landing-name')!);
+// Gold-ink markings (draft, ?zeichen=stich|feder): draw again once their typefaces are in.
+void loadMarkFonts().then(() => renderNow());
 window.addEventListener('online', renderSongList);
 window.addEventListener('offline', renderSongList);
 

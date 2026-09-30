@@ -3,6 +3,7 @@ import type { PartMixState } from './audioEngine';
 import { FONT_DISPLAY, FONT_MONO, FONT_MUSIC, FONT_TEXT, INK1, PAPER, paper, stageFill, playheadBeam, readingStrip, paperGrain } from './theme';
 import { PAPER_DESIGN } from './design';
 import { drawRulerSignature, signatureChanges, type SignatureChange } from './signatures';
+import { drawInkMark, layoutMarks, MARK_STYLE, type MarkLayout } from './goldInk';
 
 export const BASE_PIXELS_PER_BEAT = 70;
 export const STAFF_RULER_HEIGHT_PX = 28; // matches PianoRoll's ruler height, for a consistent look when toggling views
@@ -451,6 +452,7 @@ export class StaffView {
   private dimmedParts = new Set<string>();
   private measureByNumber: Map<number, MeasureInfo>;
   private signatureAt: Map<number, SignatureChange>; // by bar start beat
+  private marks: MarkLayout | null; // dynamics and tempo in gold ink (goldInk.ts), when switched on
   private restsByPart: Map<string, { startBeat: number; durationBeats: number }[]>;
   private transpose = 0;
   private gutterPx = 80;
@@ -472,6 +474,7 @@ export class StaffView {
 
     this.measureByNumber = new Map(score.measures.map((m) => [m.number, m]));
     this.signatureAt = new Map(signatureChanges(score.measures).map((c) => [c.beat, c]));
+    this.marks = MARK_STYLE ? layoutMarks(score) : null;
 
     this.notesByPart = new Map();
     for (const note of score.notes) {
@@ -695,6 +698,7 @@ export class StaffView {
     ctx.translate(0, STAFF_RULER_HEIGHT_PX - this.scrollY);
     this.drawBarlines(ctx, layouts, displayBeat, startBeat, endBeat);
     for (const layout of layouts) this.drawStaff(ctx, layout, displayBeat, playheadBeat, startBeat, endBeat);
+    this.drawMarks(ctx, layouts, displayBeat, playheadBeat, startBeat, endBeat);
     ctx.restore();
 
     // Played music steps back, as in the piano roll.
@@ -923,6 +927,41 @@ export class StaffView {
       this.drawRestGap(ctx, gap, bottomLineY, displayBeat, color);
     }
     ctx.globalAlpha = 1;
+  }
+
+  /**
+   * Dynamics, hairpins and words in gold ink above each staff, as printed in a choral score (so
+   * here a dynamic every voice shares stands on every staff); tempo marks above the top staff.
+   */
+  private drawMarks(ctx: CanvasRenderingContext2D, layouts: PartLayout[], displayBeat: number, playheadBeat: number, startBeat: number, endBeat: number) {
+    if (!this.marks || !layouts.length) return;
+    const now = performance.now() / 1000;
+    const lampX = this.beatToX(playheadBeat, displayBeat);
+    const inView = (m: { beat: number; endBeat?: number }) => (m.endBeat ?? m.beat) >= startBeat - 8 && m.beat <= endBeat;
+    let rowEnd = -Infinity;
+    for (const m of this.marks.lane) {
+      if (m.kind !== 'tempo' || !inView(m)) continue;
+      const x = this.beatToX(m.beat, displayBeat) + NOTE_X_OFFSET_PX - 4;
+      if (x < rowEnd + 12) continue;
+      rowEnd = x + drawInkMark(ctx, m, { x, y: layouts[0].topY - 26, scale: 1.05 }, lampX, now);
+    }
+    // Shared dynamics and hairpins stand on every staff; shared words once, over the top one.
+    const shared = this.marks.lane.filter((m) => m.kind === 'dynamic' || m.kind === 'wedge');
+    const sharedWords = this.marks.lane.filter((m) => m.kind === 'words');
+    for (const layout of layouts) {
+      const own = [...shared, ...(layout === layouts[0] ? sharedWords : []), ...(this.marks.byPart.get(layout.partId) ?? [])];
+      const alpha = this.dimmedParts.has(layout.partId) ? 0.35 : 1;
+      own.sort((a, b) => a.beat - b.beat);
+      let lastEnd = -Infinity; // marks at the same spot are written one after the other
+      for (const m of own) {
+        if (!inView(m)) continue;
+        const x = Math.max(lastEnd + 9, this.beatToX(m.beat, displayBeat) + (m.kind === 'wedge' ? NOTE_X_OFFSET_PX : NOTE_X_OFFSET_PX - 6));
+        const x2 = m.endBeat !== undefined ? Math.max(x + 12, this.beatToX(m.endBeat, displayBeat) + NOTE_X_OFFSET_PX) : undefined;
+        const y = layout.topY - (m.kind === 'wedge' ? 12 : 8);
+        const w = drawInkMark(ctx, m, { x, y, x2, alpha, scale: 0.9 }, lampX, now);
+        lastEnd = x + w;
+      }
+    }
   }
 
   /** Splits one silent gap into notated segments and draws each as a rest glyph. */
