@@ -24,7 +24,7 @@ import { canvasFontsReady } from './theme';
 import { initScan, openScanSheet, scanAvailable, scanStatusLine } from './scan';
 import { WaveBackdrop } from './backdrop';
 import { START_DRAFT } from './design';
-import { lightScoreName } from './lightName';
+import { lightScoreName, type TitleName } from './lightName';
 import { loadScriptFont } from './goldInk';
 import { closeOverlay, confirmDialog, isNarrow, openMenu, openPopover, openSheet, promptDialog, toast } from './ui';
 import * as sync from './sync';
@@ -231,7 +231,7 @@ let duckVolume = 0.25;
 let transpose = 0;
 let zoom = 1;
 let viewOffsetBeats = 0;
-let landingPenStarts: Promise<void> | null = null;
+let titleName: TitleName | null = null;
 // A view on its way back to the playback position: how far off it started, when, for how long --
 // the screen travels there with a gentle start and landing instead of jumping (recenterSmoothly).
 let viewGlide: { from: number; t0: number; ms: number } | null = null;
@@ -314,9 +314,18 @@ function setViewMode(mode: 'landing' | 'library' | 'player') {
         w < 700
           ? { voices: 5, x0: -0.1 * w, x1: 1.1 * w, cy: h * 0.5, gap: 14, amp: 22, line: 2.2, halo: 12 }
           : { voices: 5, x0: -0.04 * w, x1: 1.04 * w, cy: h * 0.5, gap: Math.min(26, h * 0.032), amp: Math.min(40, h * 0.048), line: 2.6, halo: 16, bead: 3.6 },
-      // The voice lines come in as the pen starts writing the name (lightName.ts), slow and calm.
-      landingPenStarts ?? undefined,
-      0.72,
+      // With the name: the lines come in as a swarm when "Score" appears, and push it aside as they
+      // reach it (lightName.ts). Slow and calm.
+      titleName
+        ? {
+            after: titleName.shown,
+            pace: 0.72,
+            swarm: true,
+            onFront: (x) => {
+              if (x >= titleName!.scoreLeft()) titleName!.push();
+            },
+          }
+        : {},
     );
   } else if (mode !== 'landing' && stopLandingRibbons) {
     stopLandingRibbons();
@@ -2967,7 +2976,7 @@ async function runBootstrap() {
 // Ensemble choice comes after it (the last choice is marked). The one exception is the reload right
 // after switching modes from inside the app, which goes straight on in the new mode.
 // The title screen's name, written before anything else moves there (the voice lines wait for it).
-if (START_DRAFT) landingPenStarts = lightScoreName(document.querySelector<HTMLElement>('.landing-name')!);
+if (START_DRAFT) titleName = lightScoreName(document.querySelector<HTMLElement>('.landing-name')!);
 const storedMode = localStorage.getItem(MODE_STORAGE_KEY);
 const switchedMode = sessionStorage.getItem(MODE_SWITCH_KEY);
 sessionStorage.removeItem(MODE_SWITCH_KEY);

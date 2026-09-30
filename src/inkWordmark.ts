@@ -8,6 +8,9 @@
 import { FONT_DISPLAY } from './theme';
 
 const INK: [number, number, number] = [239, 230, 216];
+const GOLD_DEEP = [140, 106, 46]; // the markings' gold (goldInk.ts)
+const GOLD = [196, 158, 84];
+const GOLD_LIGHT = [246, 222, 160];
 
 function rng(seed: number) {
   let s = seed >>> 0 || 1;
@@ -77,7 +80,7 @@ export interface InkMetrics {
  * Traces `text` in simulated ink into `canvas` at `size` px (`weight` of the app's Bodoni) and
  * sizes the canvas to fit; the canvas extends `pad` px beyond the letters on every side.
  */
-export function renderInk(canvas: HTMLCanvasElement, text: string, size: number, weight = 500): InkMetrics {
+export function renderInk(canvas: HTMLCanvasElement, text: string, size: number, weight = 500, tone: 'ink' | 'gold' = 'ink'): InkMetrics {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const font = `${weight} ${size}px ${FONT_DISPLAY}`;
   const measure = document.createElement('canvas').getContext('2d')!;
@@ -124,6 +127,12 @@ export function renderInk(canvas: HTMLCanvasElement, text: string, size: number,
   const fibres = fibreNoise(W, H, Math.round(16 * dpr), Math.max(1, Math.round(2.2 * dpr)), 11);
   const grain = fibreNoise(W, H, Math.max(1, Math.round(3 * dpr)), Math.max(1, Math.round(1.2 * dpr)), 23);
   const out = m.createImageData(W, H);
+  // Gold, as the markings' (goldInk.ts): deeper at the top and foot of the letters, brightest a
+  // little above the middle; pressed into the paper -- lit along its upper edges, shaded along its
+  // lower ones (from the slope of the blurred letter).
+  const bevel = Math.max(1, Math.round(1.4 * dpr));
+  const top = (baseline - size * 0.72) * dpr;
+  const foot = baseline * dpr;
   for (let i = 0; i < alpha.length; i++) {
     const b = soft[i];
     if (b < 0.02) continue;
@@ -133,11 +142,23 @@ export function renderInk(canvas: HTMLCanvasElement, text: string, size: number,
     if (cover <= 0) continue;
     const rim = cover * (1 - smooth(0.6, 0.97, b));
     const density = Math.min(1, 0.84 + 0.16 * rim + (grain[i] - 0.5) * 0.14);
+    out.data[i * 4 + 3] = 255 * cover * density;
+    if (tone === 'gold') {
+      const y = (i / W) | 0;
+      const u = Math.min(1, Math.max(0, (y - top) / (foot - top)));
+      const g = u < 0.45 ? u / 0.45 : 1 - (u - 0.45) / 0.55;
+      const up = y >= bevel && y < H - bevel ? soft[i + bevel * W] - soft[i - bevel * W] : 0;
+      const light = Math.max(-0.5, Math.min(0.6, up * 1.6 + 0.12 * rim + (grain[i] - 0.5) * 0.1));
+      for (let c = 0; c < 3; c++) {
+        const base = GOLD_DEEP[c] + (GOLD[c] - GOLD_DEEP[c]) * g;
+        out.data[i * 4 + c] = light > 0 ? base + (GOLD_LIGHT[c] - base) * light : base * (1 + light * 0.7);
+      }
+      continue;
+    }
     const lift = 0.3 * rim; // pooled ink catches a little more light
     out.data[i * 4] = INK[0] + (255 - INK[0]) * lift;
     out.data[i * 4 + 1] = INK[1] + (252 - INK[1]) * lift;
     out.data[i * 4 + 2] = INK[2] + (246 - INK[2]) * lift;
-    out.data[i * 4 + 3] = 255 * cover * density;
   }
   canvas.width = W;
   canvas.height = H;

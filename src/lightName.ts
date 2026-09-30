@@ -1,10 +1,10 @@
-// The title screen's name, LightScore: "Light" moves, "Score" holds. "Score" stands in the middle,
-// in ink; as it glides aside to its place, "Light" is written with light by a pen, stroke by stroke
-// as a hand writes it (lightStrokes.ts): the L; the i up into the g's corner, round its bowl and
-// down into its loop; the dot; the h into the t; the t's bar -- at a writing hand's pace, slower
-// through the curves, easing in and out of every stroke, with a short lift between them. A bright
-// point marks the nib; what it has written glows. The voice lines of light come in together with
-// the pen (lightScoreName's promise; main.ts).
+// The title screen's name, LightScore: "Light" moves, "Score" holds. "Score" appears in the middle,
+// in embossed gold; the voice lines of light come in with it, a loose swarm, and as their tips reach
+// its S they push it aside to its place (push(), called from main.ts). Meanwhile "Light" is written
+// with light by a pen, stroke by stroke as a hand writes it (lightStrokes.ts): the L; the i up into
+// the g's corner, round its bowl and down into its loop; the dot; the h into the t; the t's bar --
+// at a writing hand's pace, slower through the curves, easing in and out of every stroke, with a
+// short lift between them. A bright point marks the nib; what it has written glows.
 
 import { FONT_SCRIPT, loadScriptFont } from './goldInk';
 import { renderInk } from './inkWordmark';
@@ -19,7 +19,7 @@ const EASE_EM = 0.07; // stroke start and end: the pen gathers and loses speed o
 const LIFT_SEC = 0.1; // the pen lifted between two strokes (plus its way over to the next)
 const DOT_SEC = 0.08; // setting down the i's dot
 const FINISH_SEC = 0.35; // the nib's light fading once the word is written
-const SCORE_HOLD_SEC = 0.7; // "Score" standing in the middle (fading in, style.css) before it glides aside
+const PUSH_FALLBACK_SEC = 4; // should nothing push "Score" aside, it goes on its own after this
 
 const smoothstep = (v: number) => {
   const t = Math.min(1, Math.max(0, v));
@@ -135,11 +135,14 @@ function penPath(art: LightArt): PenPoint[] {
   return out;
 }
 
-/**
- * Replaces `host`'s text with the name (it stays readable for screen readers as a label). Resolves
- * when the pen starts writing "Light" -- the cue for the voice lines.
- */
-export function lightScoreName(host: HTMLElement): Promise<void> {
+export interface TitleName {
+  shown: Promise<void>; // "Score" is up, in the middle
+  scoreLeft(): number; // where its S begins, viewport px
+  push(): void; // glide "Score" aside, and set the pen to "Light"
+}
+
+/** Replaces `host`'s text with the name (it stays readable for screen readers as a label). */
+export function lightScoreName(host: HTMLElement): TitleName {
   host.textContent = '';
   host.setAttribute('aria-label', 'LightScore');
   const wrap = document.createElement('span');
@@ -163,12 +166,22 @@ export function lightScoreName(host: HTMLElement): Promise<void> {
   let done = false;
   let glided = false;
   let scoreShift = 0; // px "Score" stands left of its place while it is in the middle
-  let cue!: () => void;
-  const penStarts = new Promise<void>((resolve) => (cue = resolve));
+  let inkPad = 0;
+  let leftCache: number | null = null;
+  let shownNow!: () => void;
+  const shown = new Promise<void>((resolve) => (shownNow = resolve));
+
+  const push = () => {
+    if (glided || !art) return;
+    glided = true;
+    wrap.classList.add('score-aside');
+    score.style.transform = '';
+    started = performance.now();
+    raf = requestAnimationFrame(frame);
+  };
 
   const finish = () => {
     done = true;
-    cue();
     wrap.classList.add('light-written');
     wrap.classList.add('light-settled');
     const ctx = light.getContext('2d')!;
@@ -255,7 +268,9 @@ export function lightScoreName(host: HTMLElement): Promise<void> {
     const fit = Math.min(1, (window.innerWidth * 0.9) / (lightW + base * (GAP + 2.95)));
     const size = base * fit;
 
-    const ink = renderInk(score, 'Score', size, 600);
+    const ink = renderInk(score, 'Score', size, 600, 'gold');
+    inkPad = ink.pad;
+    leftCache = null;
     art = renderLight(size * LIGHT_SCALE, dpr);
     path = penPath(art);
     light.width = art.core.width;
@@ -294,18 +309,11 @@ export function lightScoreName(host: HTMLElement): Promise<void> {
       return;
     }
     wrap.classList.add('score-in');
-    window.setTimeout(() => {
-      // "Score" glides aside; the pen sets down, the voice lines come in.
-      glided = true;
-      wrap.classList.add('score-aside');
-      score.style.transform = '';
-      started = performance.now();
-      raf = requestAnimationFrame(frame);
-      cue();
-    }, SCORE_HOLD_SEC * 1000);
+    shownNow();
+    window.setTimeout(push, PUSH_FALLBACK_SEC * 1000);
   });
   // Should the typefaces never arrive, the voice lines needn't wait for ever.
-  window.setTimeout(cue, 6000);
+  window.setTimeout(shownNow, 6000);
   let timer = 0;
   window.addEventListener('resize', () => {
     clearTimeout(timer);
@@ -315,5 +323,9 @@ export function lightScoreName(host: HTMLElement): Promise<void> {
       else if (!raf && started) raf = requestAnimationFrame(frame);
     }, 120);
   });
-  return penStarts;
+  return {
+    shown,
+    scoreLeft: () => (leftCache ??= score.getBoundingClientRect().left + inkPad),
+    push,
+  };
 }

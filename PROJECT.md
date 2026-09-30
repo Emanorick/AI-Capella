@@ -376,20 +376,22 @@ layer (strength between "subtle" and "balanced" of its design draft):
   samples, full frame rate). A click or tap draws the lines toward it for a moment with a small
   flare of light (`RibbonField`). (Plucking the lines like strings was tried and dropped: it made
   them strings instead of lines of music.) The name, **LightScore** (`lightName.ts`): "Light" moves,
-  "Score" holds. The title opens with "Score" standing in the middle of the screen in
-  ink (the Bodoni traced by `inkWordmark.ts` -- `renderInk`: each letter set down by hand, a pen's
-  minimum line width, the ink feathered into the paper's fibres and pooled along the edges). As it
-  glides aside to its place, a pen writes "Light" with light in a pen script (Italianno), stroke by
-  stroke in the order a hand writes it (the L; the i up into the g's corner, counter-clockwise round
-  its bowl back into the corner and down into the swing of its loop; the dot; the h into the t; the
-  t's bar), at a writing hand's pace: about 5.6 em per second on the straight, slower through the
-  curves, easing in and out of each stroke, a short lift between strokes, a little over two seconds
-  in all; and with the pen the voice lines of light come in -- five, like the lines of a staff,
-  written and swaying at 0.72 of their former pace (`animateRibbons(…, after, pace)`). The strokes (`lightStrokes.ts`) were traced from the rendered glyphs: their skeleton (thinned),
+  "Score" holds. The title opens with "Score" appearing in the middle of the screen in
+  the markings' gold, embossed (the Bodoni traced by `inkWordmark.ts` -- `renderInk(…, 'gold')`:
+  each letter set down by hand, a pen's minimum line width, feathered into the paper's fibres, lit
+  along its upper edges and shaded along its lower ones). With it the voice lines of light come in
+  -- five, like the lines of a staff, as a loosely staggered swarm (`RibbonTiming.swarm`), written
+  and swaying at 0.72 of the former pace -- and as their foremost tip reaches the S
+  (`RibbonTiming.onFront`) they push "Score" aside to its place (`TitleName.push()`). Meanwhile a
+  pen writes "Light" with light in a pen script (Italianno), stroke by stroke in the order a hand
+  writes it (the L; the i up into the g's corner, counter-clockwise round its bowl back into the
+  corner and down into the swing of its loop; the dot; the h into the t; the t's bar), at a writing
+  hand's pace: about 5.6 em per second on the straight, slower through the curves, easing in and
+  out of each stroke, a short lift between strokes, a little over two seconds in all. The strokes (`lightStrokes.ts`) were traced from the rendered glyphs: their skeleton (thinned),
   routed between hand-placed waypoints, with the stroke's half-width at each point, so the nib's
   reveal (circles along the way, into a mask) follows the real letters. A bright point marks the
   nib; what is written glows, and breathes softly once done. The name floats over the paper. In the
-  header and on the PIN screen the same pairing is set in type (`.ls-l`). The two choices are paper tabs embossed
+  header and on the PIN screen the same pairing is set in type (`.ls-l`, "Score" in gold). The two choices are paper tabs embossed
   out of the sheet.
 - **Piano roll as a lit paper roll ("lantern").** `NOTE_STYLE` in `pianoRoll.ts`: part of the
   paper design (Samt & Glas uses the gel notes); any device can also pick it with `?roll=lantern`

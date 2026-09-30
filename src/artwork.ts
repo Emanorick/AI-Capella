@@ -334,7 +334,19 @@ function drawPenCover(ctx: CanvasRenderingContext2D, w: number, h: number, data:
  * Draws a single still frame for people who ask for reduced motion, and skips frames while the
  * tab is hidden.
  */
-export function animateRibbons(canvas: HTMLCanvasElement, layout: (w: number, h: number) => RibbonOptions, after?: Promise<void>, pace = 1): () => void {
+export interface RibbonTiming {
+  after?: Promise<void>; // start writing the lines once this resolves
+  pace?: number; // below 1: written, and swaying, more slowly and calmly
+  swarm?: boolean; // all lines set off almost together, loosely staggered, instead of one by one
+  onFront?: (x: number) => void; // each frame while writing: how far the foremost tip has come (canvas px)
+}
+
+// The swarm's stagger per line, in seconds of writing time.
+const SWARM_DELAY = [0, 0.1, 0.04, 0.15, 0.07, 0.12, 0.02];
+const SWARM_DUR = 2.4;
+
+export function animateRibbons(canvas: HTMLCanvasElement, layout: (w: number, h: number) => RibbonOptions, timing: RibbonTiming = {}): () => void {
+  const { after, pace = 1, swarm = false, onFront } = timing;
   // (In the paper design the lines are first written by a pen -- see drawPenRibbons.)
   const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   let raf = 0;
@@ -356,7 +368,8 @@ export function animateRibbons(canvas: HTMLCanvasElement, layout: (w: number, h:
     const sec = still ? 99 : Math.max(0, (now - start) / 1000) * pace;
     const o = layout(prepared.w, prepared.h);
     if (START_DRAFT) {
-      const { progress, done } = writing(LOGO_DRAFT, o.voices, sec);
+      const { progress, done } = swarm ? swarmWriting(o.voices, sec) : writing(LOGO_DRAFT, o.voices, sec);
+      if (onFront && sec > 0 && sec < done) onFront(o.x0 + Math.max(...progress) * (o.x1 - o.x0));
       const lit = Math.min(1, Math.max(0, (sec - done) / 1.4));
       drawLightRibbons(prepared.ctx, prepared.w, prepared.h, 12 + sec, o, progress, lit * lit * (3 - 2 * lit), field, now / 1000);
     } else if (PAPER_DESIGN) {
@@ -375,6 +388,14 @@ export function animateRibbons(canvas: HTMLCanvasElement, layout: (w: number, h:
     window.removeEventListener('resize', onResize);
     field?.dispose();
   };
+}
+
+/** Lines written almost together, loosely staggered (see RibbonTiming.swarm). */
+function swarmWriting(voices: number, sec: number): { progress: number[]; done: number } {
+  const ease = (u: number) => 0.35 * u * u * (3 - 2 * u) + 0.65 * u;
+  const delay = (i: number) => SWARM_DELAY[i % SWARM_DELAY.length];
+  const progress = Array.from({ length: voices }, (_, i) => ease(Math.min(1, Math.max(0, (sec - delay(i)) / SWARM_DUR))));
+  return { progress, done: Math.max(...Array.from({ length: voices }, (_, i) => delay(i))) + SWARM_DUR };
 }
 
 /** Sizes a canvas's backing store to its laid-out CSS size × devicePixelRatio (capped) and returns a ready context. */
