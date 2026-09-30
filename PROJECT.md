@@ -376,16 +376,16 @@ layer (strength between "subtle" and "balanced" of its design draft):
   samples, full frame rate). A click or tap draws the lines toward it for a moment with a small
   flare of light (`RibbonField`). (Plucking the lines like strings was tried and dropped: it made
   them strings instead of lines of music.) The name, **LightScore** (`lightName.ts`): "Light" moves,
-  "Score" holds. The title opens in four steps: "Score" is written in, in ink, in the middle of the
-  screen (the Bodoni traced by `inkWordmark.ts` -- `renderInk`: each letter set down by hand, a
-  pen's minimum line width, the ink feathered into the paper's fibres and pooled along the edges);
-  it glides aside to its place; then "Light" is written with light in a pen script (Italianno),
-  stroke by stroke in the order a hand writes it (the L; the i up to the g's top, back round its
-  bowl and down through its loop; the dot; the h into the t; the t's bar), at a writing hand's
-  pace: about 5.6 em per second on the straight, slower through the curves, easing in and out of
-  each stroke, a short lift between strokes, a little over two seconds in all; and only then are
-  the voice lines of light written across the whole width (`animateRibbons(…, after)`). The
-  strokes (`lightStrokes.ts`) were traced from the rendered glyphs: their skeleton (thinned),
+  "Score" holds. The title opens with "Score" standing in the middle of the screen in
+  ink (the Bodoni traced by `inkWordmark.ts` -- `renderInk`: each letter set down by hand, a pen's
+  minimum line width, the ink feathered into the paper's fibres and pooled along the edges). As it
+  glides aside to its place, a pen writes "Light" with light in a pen script (Italianno), stroke by
+  stroke in the order a hand writes it (the L; the i up into the g's corner, counter-clockwise round
+  its bowl back into the corner and down into the swing of its loop; the dot; the h into the t; the
+  t's bar), at a writing hand's pace: about 5.6 em per second on the straight, slower through the
+  curves, easing in and out of each stroke, a short lift between strokes, a little over two seconds
+  in all; and with the pen the voice lines of light come in -- five, like the lines of a staff,
+  written and swaying at 0.72 of their former pace (`animateRibbons(…, after, pace)`). strokes (`lightStrokes.ts`) were traced from the rendered glyphs: their skeleton (thinned),
   routed between hand-placed waypoints, with the stroke's half-width at each point, so the nib's
   reveal (circles along the way, into a mask) follows the real letters. A bright point marks the
   nib; what is written glows, and breathes softly once done. The name floats over the paper. In the
