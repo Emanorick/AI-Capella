@@ -402,62 +402,6 @@ button:disabled {
   }
 }
 
-/* ---- PIN screen --------------------------------------------------------------------- */
-
-#pin-gate {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: var(--ink-0);
-}
-
-.pin-card {
-  position: relative;
-  width: min(360px, 100%);
-  display: grid;
-  gap: 12px;
-  padding: 28px 24px 22px;
-  border-radius: var(--r-lg);
-  background: rgba(27, 25, 41, 0.9);
-  border: 1px solid var(--hair-2);
-  backdrop-filter: blur(10px);
-  text-align: center;
-}
-
-.pin-card .wordmark {
-  margin: 0 0 6px;
-  font-size: 19px;
-  color: var(--paper-dim);
-}
-
-.pin-card h1 {
-  margin: 0;
-  font: 500 32px/1.1 var(--f-display);
-}
-
-.pin-hint {
-  margin: 0 0 6px;
-  color: var(--paper-dim);
-  font-size: 15px;
-}
-
-.pin-input {
-  height: 52px;
-  text-align: center;
-  font: 600 22px var(--f-mono);
-  letter-spacing: 0.35em;
-}
-
-#pin-gate-error {
-  min-height: 20px;
-  margin: 0;
-  color: var(--danger);
-  font-size: 14px;
-}
-
 /* ---- Repertoire --------------------------------------------------------------------- */
 
 #library {
@@ -2832,16 +2776,6 @@ body:has(#app.mode-landing)::after {
   background: var(--fibre);
 }
 
-:root[data-design='papier'] #pin-gate {
-  background: var(--fibre), #1b1621;
-}
-
-:root[data-design='papier'] .pin-card {
-  background: var(--glass-bg-strong);
-  -webkit-backdrop-filter: var(--glass-filter-strong);
-  backdrop-filter: var(--glass-filter-strong);
-}
-
 /* The score's stage is the paper itself (the sheet view's canvas stays clear over it). */
 :root[data-design='papier'] .stage {
   background: var(--fibre), #1b1621;
@@ -3139,14 +3073,11 @@ body:has(#app.mode-landing)::after {
   }
 }
 
-/* ---- Ensembles (?ensembles=an, ensembles.ts) ----------------------------------------------------
+/* ---- Ensembles (ensembles.ts) ----------------------------------------------------
    The code is written on one ruled line; the ensemble's name follows under the app's like a
    dedication on a score, in the gold of the markings, written in by the pen. The device's other
    ensembles stand beside it in pencil. */
 .landing-choice {
-  display: contents;
-}
-:root[data-ensembles] .landing-choice {
   position: relative;
   display: flex;
   flex-direction: column;

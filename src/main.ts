@@ -16,7 +16,6 @@ import { colorForPart } from './palette';
 import { measureAtBeat, type Score } from './score';
 import { deleteImportedSong, fileUnfiledSongs, readScoreFile, saveImportedSong, saveSongConfig, saveSongSections, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong, type VoiceClef } from './library';
 import { ensureSignedIn, isFirebaseConfigured } from './firebase';
-import { ensureAccess } from './pinGate';
 import { animateRibbons, coverDataFromScore, drawCover, drawMark, prepareCanvas, type CoverData } from './artwork';
 import { icon } from './icons';
 import { countLabel, keyName, lang, setLang, t } from './i18n';
@@ -38,7 +37,6 @@ import {
   MIN_CODE_LENGTH,
   ensembleName,
   ENSEMBLES,
-  ENSEMBLES_ON,
   FIRST_ENSEMBLE_ID,
   PUBLIC_ID,
   refreshEnsembleNames,
@@ -88,21 +86,19 @@ const PREVIEW_NOTE_LABEL_MS = 1200;
 const SEARCH_THRESHOLD = 8; // the search field only appears once the library is long enough to need it
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
-/** The two playback modes; with ensembles, "Ensemble" names the choir, so the modes are Alone / Together. */
+/** The two playback modes: "Ensemble" names the choir (ensembles.ts), so the modes are Alone / Together. */
 function modeName(mode: 'solo' | 'ensemble'): string {
-  if (ENSEMBLES_ON) return t(mode === 'solo' ? 'alone' : 'together');
-  return t(mode === 'solo' ? 'solo' : 'ensemble');
+  return t(mode === 'solo' ? 'alone' : 'together');
 }
-if (ENSEMBLES_ON) document.documentElement.dataset.ensembles = 'an';
 // The ensemble whose folder is open (ensembles.ts). Chosen on the title screen and fixed once it is
 // left: switching to another ensemble reloads, like switching modes.
-let currentEnsemble: string = (ENSEMBLES_ON && activeEnsemble()) || PUBLIC_ID;
+let currentEnsemble: string = activeEnsemble() || PUBLIC_ID;
 function inPublicFolder(): boolean {
-  return ENSEMBLES_ON && currentEnsemble === PUBLIC_ID;
+  return currentEnsemble === PUBLIC_ID;
 }
-/** The ensemble a new song is added to (without ensembles switched on: the first, which has everything). */
+/** The ensemble a new song is added to: the open one. */
 function importEnsemble(): string {
-  return ENSEMBLES_ON ? currentEnsemble : FIRST_ENSEMBLE_ID;
+  return currentEnsemble;
 }
 const backdrop = new WaveBackdrop();
 app.innerHTML = `
@@ -516,7 +512,7 @@ async function requestModeSwitch(mode: 'solo' | 'ensemble') {
 const MODE_SWITCH_KEY = 'ai-capella-mode-switch';
 modeBadge.addEventListener('click', () => {
   if (sessionMode === 'solo') {
-    openMenu(modeBadge, [{ label: ENSEMBLES_ON ? t('rehearseTogether') : t('switchToEnsembleItem'), icon: 'users', onSelect: () => void requestModeSwitch('ensemble') }], t('mode'));
+    openMenu(modeBadge, [{ label: t('rehearseTogether'), icon: 'users', onSelect: () => void requestModeSwitch('ensemble') }], t('mode'));
     return;
   }
   const items: Parameters<typeof openMenu>[1] = [];
@@ -528,7 +524,7 @@ modeBadge.addEventListener('click', () => {
       ? { label: t('singAlongView'), icon: 'users', onSelect: () => setFullView(false) }
       : { label: t('fullView'), icon: 'mixer', onSelect: () => setFullView(true) });
   }
-  items.push({ label: ENSEMBLES_ON ? t('practiseAlone') : t('switchToSoloItem'), icon: 'user', onSelect: () => void requestModeSwitch('solo') });
+  items.push({ label: t('practiseAlone'), icon: 'user', onSelect: () => void requestModeSwitch('solo') });
   openMenu(modeBadge, items, modeName('ensemble'));
 });
 
@@ -656,9 +652,8 @@ enterCodeBtn.addEventListener('click', () => {
   renderLanding(true);
 });
 
-/** The repertoire's heading: the open ensemble's name, a menu to switch (with ensembles on). */
+/** The repertoire's heading: the open ensemble's name, a menu to switch. */
 function renderLibraryHead() {
-  if (!ENSEMBLES_ON) return;
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'ens-switch';
@@ -766,7 +761,7 @@ async function fileOldSongs() {
 
 /** A library song's menu: move it into another of this device's ensembles. */
 function moveItems(song: SongEntry): Parameters<typeof openMenu>[1] {
-  if (!ENSEMBLES_ON || !song.imported) return [];
+  if (!song.imported) return [];
   return unlockedEnsembles()
     .filter((id) => id !== currentEnsemble)
     .map((id) => ({
@@ -861,7 +856,7 @@ function drawMarks() {
 
 function allSongs(): SongEntry[] {
   // The bundled samples belong to the public folder and to the first ensemble (which has everything).
-  const builtins = !ENSEMBLES_ON || currentEnsemble === PUBLIC_ID || currentEnsemble === FIRST_ENSEMBLE_ID ? BUILTIN_SONGS : [];
+  const builtins = currentEnsemble === PUBLIC_ID || currentEnsemble === FIRST_ENSEMBLE_ID ? BUILTIN_SONGS : [];
   return [...builtins, ...importedSongs];
 }
 
@@ -3223,18 +3218,15 @@ async function runBootstrap() {
     void ensureSignedIn().then(refreshEnsembleNames).then(renderLibraryHead).catch(() => {});
     return;
   }
-  const ensemble = ENSEMBLES_ON ? ensembleById(currentEnsemble) : undefined;
+  const ensemble = ensembleById(currentEnsemble);
   if (ensemble?.channel) sync.setSessionChannel(ensemble.channel);
 
   try {
-    // Sign in first: verifyPin (inside ensureAccess) reads Firestore, and the security rules
-    // require request.auth != null, so an unsigned-in read would just hang/get rejected.
+    // Sign in first: the security rules require request.auth != null (and a membership of the
+    // ensemble, joined with its code on the title screen).
     await ensureSignedIn();
-    // PIN gate; resolves immediately if already granted on this device. With ensembles, the code
-    // was asked on the title screen.
-    if (ENSEMBLES_ON) void refreshEnsembleNames().then(renderLibraryHead).catch(() => {});
-    else await ensureAccess();
-    if (ENSEMBLES_ON && currentEnsemble === FIRST_ENSEMBLE_ID) await fileOldSongs();
+    void refreshEnsembleNames().then(renderLibraryHead).catch(() => {});
+    if (currentEnsemble === FIRST_ENSEMBLE_ID) await fileOldSongs();
     initScan({ onImport: importScannedScore, onStatusChange: renderScanChip });
     subscribeToSongs(
       (songs, fromCache) => {
@@ -3265,7 +3257,7 @@ async function runBootstrap() {
       },
       (err) => {
         // Refused by the rules: this device isn't in the ensemble (any more) -- ask for its code.
-        if (ENSEMBLES_ON && (err as { code?: string }).code === 'permission-denied') {
+        if ((err as { code?: string }).code === 'permission-denied') {
           forgetEnsemble(currentEnsemble);
           libraryState = 'locked';
         } else libraryState = 'offline';
@@ -3302,19 +3294,17 @@ const switchedMode = sessionStorage.getItem(MODE_SWITCH_KEY);
 sessionStorage.removeItem(MODE_SWITCH_KEY);
 if (storedMode === 'solo' || storedMode === 'ensemble') sessionMode = storedMode;
 if (inPublicFolder()) sessionMode = 'solo';
-if (isFirebaseConfigured && (switchedMode === 'solo' || switchedMode === 'ensemble') && (!ENSEMBLES_ON || activeEnsemble())) {
+if (isFirebaseConfigured && (switchedMode === 'solo' || switchedMode === 'ensemble') && activeEnsemble()) {
   chooseMode(switchedMode);
 } else if (isFirebaseConfigured) {
-  if (ENSEMBLES_ON) {
-    renderLanding();
-    // Ensembles opened on this device before the codes were checked in Firestore are dropped.
-    void ensureSignedIn()
-      .then(syncMemberships)
-      .then((changed) => {
-        if (changed && app.classList.contains('mode-landing') && !askingCode) renderLanding();
-      })
-      .catch(() => {});
-  }
+  renderLanding();
+  // Ensembles opened on this device before the codes were checked in Firestore are dropped.
+  void ensureSignedIn()
+    .then(syncMemberships)
+    .then((changed) => {
+      if (changed && app.classList.contains('mode-landing') && !askingCode) renderLanding();
+    })
+    .catch(() => {});
   document.querySelector(storedMode === 'ensemble' ? '#mode-ensemble-btn' : '#mode-solo-btn')?.classList.toggle('last-used', storedMode === 'solo' || storedMode === 'ensemble');
   setViewMode('landing');
 } else {

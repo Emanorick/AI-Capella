@@ -54,7 +54,7 @@ shared song library itself is always available — Solo only opts out of shared 
 shared *songs*. See §4.7. The storage key is versioned (`ai-capella-mode-v2`) so it can be bumped
 again if every device should see the choice once more.
 
-### Ensembles (behind a flag: `?ensembles=an`, `?ensembles=aus` turns it off again)
+### Ensembles
 Each choir gets its own repertoire and its own rehearsal session, opened with its **code**
 (`ensembles.ts`), and kept apart by the **Firestore rules** (`firestore.rules`), not only in the
 app. The ensembles are listed in `ENSEMBLES`: **Öffentlich** (public: the bundled sample songs,
@@ -94,12 +94,11 @@ samples) and **Relativ männlich** (`rm`).
 - **Moving over** from the shared library: the first time a device opens n.n.b. it files every
   song without `ensemble` into it (`fileUnfiledSongs` -- possible only while the old rules still
   let a device list all songs). New songs get `ensemble` even with the flag off.
-- **Order of setup** (the rules must come last, or an unguarded n.n.b. could be claimed by
-  anyone): with `?ensembles=an`, *Ohne Code weiter* → heading → *Code für Ensemble n.n.b.
-  festlegen* (files the old songs), then *Code für Relativ männlich festlegen*, and move Der
-  Affe; then ensembles on for every device; then publish `firestore.rules` (Firebase console →
-  Firestore → Rules). After that, the app without ensembles (the PIN, the whole library) no
-  longer works.
+- **Set up** on 1 October 2026: the codes were set from the app (*Ohne Code weiter* → heading →
+  *Code für … festlegen*), the old songs filed into n.n.b., Der Affe moved, and then the rules
+  published -- in that order, since an ensemble nobody guards could otherwise be claimed by
+  anyone. The PIN screen (`pinGate.ts`) is gone; the app before ensembles no longer works
+  against these rules.
 - **Checking the rules:** `rules-test/` runs them against the Firestore emulator (`npm install &&
   npm test`, needs Java). In development, `?emulator=1` points the app itself at local
   emulators (Firestore on 8085, Auth on 9099) instead of the choir's database.

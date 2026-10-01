@@ -1,6 +1,5 @@
 import { deleteDoc, doc, getDoc, getDocFromServer, serverTimestamp, setDoc } from 'firebase/firestore';
 import { currentUid, db } from './firebase';
-import { deviceChoice } from './design';
 import { t } from './i18n';
 
 /**
@@ -12,9 +11,7 @@ import { t } from './i18n';
  * Guarded by the Firestore rules (firestore.rules, see below): a device reads an ensemble's songs
  * only after joining it with its code.
  *
- * Behind a flag while it's being tried out (?ensembles=an; ?ensembles=aus turns it off again).
  */
-export const ENSEMBLES_ON = deviceChoice('ensembles', 'ai-capella-ensembles', ['an', 'aus'] as const, 'aus') === 'an';
 
 export interface Ensemble {
   id: string;

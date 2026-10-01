@@ -5,7 +5,6 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDoc,
   getDocs,
   onSnapshot,
   orderBy,
@@ -54,7 +53,6 @@ export interface StoredSong {
 export type VoiceClef = 'treble' | 'treble8' | 'bass';
 
 const SONGS_COLLECTION = 'songs';
-const ACCESS_DOC_PATH = ['config', 'access'] as const;
 
 function parseSongDoc(id: string, data: Record<string, unknown>): StoredSong {
   // xmlGz (gzip-compressed bytes) is the current format; xml (raw string) is a fallback for
@@ -207,25 +205,6 @@ export async function saveSongConfig(id: string, config: { transpose: number; bp
 export async function saveSongSections(id: string, sections: { label: string; beat: number }[]): Promise<void> {
   if (!db) throw new Error('Firebase is not configured');
   await updateDoc(doc(db, SONGS_COLLECTION, id), { 'savedConfig.sections': sections });
-}
-
-async function sha256Hex(text: string): Promise<string> {
-  const bytes = new TextEncoder().encode(text);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(hashBuffer))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-/** Checks a PIN against the hash stored in Firestore. This is a soft UI gate, not a real
- *  security boundary -- see the setup notes for why that's an acceptable trade-off here. */
-export async function verifyPin(pin: string): Promise<boolean> {
-  if (!db) throw new Error('Firebase is not configured');
-  const snap = await getDoc(doc(db, ...ACCESS_DOC_PATH));
-  if (!snap.exists()) throw new Error('No PIN has been set up yet (missing config/access document)');
-  const expectedHash = snap.data().pinHash as string | undefined;
-  if (!expectedHash) throw new Error('config/access document is missing a pinHash field');
-  return (await sha256Hex(pin)) === expectedHash;
 }
 
 /** Reads a .musicxml/.xml file as-is, or unzips a compressed .mxl (MuseScore's default export format). */
