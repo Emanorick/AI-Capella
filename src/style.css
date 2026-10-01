@@ -3216,3 +3216,114 @@ body:has(#app.mode-landing)::after {
   opacity: 0.9;
   transform: translateY(2px);
 }
+
+/* ---- Draft title "Die Bühne" (?start=buehne, titleStage.ts) ----------------------------------
+   Black paper; "Score" alone in the dark, "Light" a shadow of itself until the spotlight comes on
+   and it lights up -- a lamp's flicker, then a steady glow. The choices come once the stage is lit;
+   the one used last is the lit one, in gold. */
+:root[data-title='buehne'] body:has(#app.mode-landing),
+:root[data-title='buehne'] #landing {
+  background: #0c0a0e;
+}
+:root[data-title='buehne'] #landing {
+  gap: clamp(96px, 16vh, 170px);
+  padding-bottom: calc(6vh + var(--safe-b));
+}
+:root[data-title='buehne'] .landing-name,
+:root[data-title='buehne'] .ls-name {
+  animation: none;
+}
+:root[data-title='buehne'] .landing-name .ls-score {
+  opacity: 0;
+  filter: brightness(0.62) drop-shadow(0 -1px 1px rgb(0 0 0 / 0.6));
+  transition: filter 1.6s ease-out;
+}
+:root[data-title='buehne'] .landing-name .ls-name.score-in .ls-score {
+  animation: ls-appear 1.4s ease-out 0.2s both;
+}
+:root[data-title='buehne'] .landing-name .ls-name.lit .ls-score {
+  filter: brightness(1.06) drop-shadow(0 0 22px rgb(255 200 120 / 0.16)) drop-shadow(0 -1px 1px rgb(0 0 0 / 0.5));
+}
+:root[data-title='buehne'] .ls-name .ls-light,
+:root[data-title='buehne'] .ls-name.light-settled .ls-light {
+  opacity: 0.07;
+  filter: grayscale(1) brightness(0.5);
+  animation: none;
+}
+:root[data-title='buehne'] .ls-name.lit .ls-light {
+  opacity: 1;
+  filter: none;
+  animation:
+    stage-ignite 1.2s linear both,
+    ls-breathe 6s ease-in-out 1.2s infinite;
+}
+@keyframes stage-ignite {
+  0% {
+    opacity: 0.07;
+    filter: grayscale(1) brightness(0.5);
+  }
+  4% {
+    opacity: 0.6;
+    filter: brightness(1.3);
+  }
+  9% {
+    opacity: 0.15;
+    filter: brightness(0.8);
+  }
+  14% {
+    opacity: 0.75;
+    filter: brightness(1.4);
+  }
+  19% {
+    opacity: 0.4;
+    filter: brightness(1);
+  }
+  26% {
+    opacity: 1;
+    filter: brightness(1.7) drop-shadow(0 0 24px rgb(255 210 150 / 0.8));
+  }
+  100% {
+    opacity: 1;
+    filter: brightness(1) drop-shadow(0 0 0 rgb(255 210 150 / 0));
+  }
+}
+:root[data-title='buehne'] .landing-modes {
+  animation-delay: 3.5s;
+}
+:root[data-title='buehne'] .landing-dedication {
+  --ded-wait: 3.1s;
+}
+:root[data-title='buehne'] .landing-code {
+  --ded-wait: 3.3s;
+}
+:root[data-title='buehne'] #landing-enter-code {
+  animation-delay: 3.9s;
+}
+:root[data-title='buehne'] .mode-btn.last-used {
+  background: linear-gradient(180deg, #e6c98a, #c9a05a 55%, #b48a48);
+  color: #2a2016;
+  text-shadow: 0 1px 0 rgb(255 240 210 / 0.35);
+  box-shadow:
+    inset 0 1px 0 rgb(255 246 222 / 0.6),
+    inset 0 -1px 0 rgb(90 60 20 / 0.4),
+    0 0 26px -4px rgb(255 200 120 / 0.45),
+    0 12px 24px -14px rgb(0 0 0 / 0.9);
+}
+:root[data-title='buehne'] .mode-btn.last-used .ic {
+  filter: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-title='buehne'] .landing-name .ls-score {
+    opacity: 1;
+  }
+}
+/* The stage's light, drawn once and faded (titleStage.ts): added onto the dark paper. */
+.stage-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0;
+  will-change: opacity;
+}

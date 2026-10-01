@@ -36,7 +36,7 @@ export const LOGO_DRAFT: LogoDraft = deviceChoice('logo', 'ai-capella-logo', ['1
  * voice lines as figures of light drawn toward a click, the name written in ink floating over the
  * paper, the choices embossed paper tabs.
  */
-const START_CHOICE = PAPER_DESIGN ? deviceChoice('start', 'ai-capella-start', ['neu', 'heute', 'zeile'] as const, 'neu') : 'heute';
+const START_CHOICE = PAPER_DESIGN ? deviceChoice('start', 'ai-capella-start', ['neu', 'heute', 'zeile', 'buehne'] as const, 'neu') : 'heute';
 export const START_DRAFT = START_CHOICE !== 'heute';
 /**
  * Draft (?start=zeile): "Die erste Zeile" -- instead of the swaying voice lines, a staff ruled across
@@ -44,7 +44,14 @@ export const START_DRAFT = START_CHOICE !== 'heute';
  * line following, the five lines taking on the voices' colours (titleStaff.ts).
  */
 export const START_STAFF = START_CHOICE === 'zeile';
+/**
+ * Draft (?start=buehne): "Die Bühne" -- black paper, "Score" alone in the dark until a spotlight
+ * comes on and "Light" lights up in it, dust in the beam, the staff and the voices lit after
+ * (titleStage.ts).
+ */
+export const START_STAGE = START_CHOICE === 'buehne';
 
 document.documentElement.dataset.design = DESIGN;
 if (START_DRAFT) document.documentElement.dataset.start = 'neu';
 if (START_STAFF) document.documentElement.dataset.title = 'zeile';
+if (START_STAGE) document.documentElement.dataset.title = 'buehne';

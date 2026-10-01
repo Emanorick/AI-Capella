@@ -143,17 +143,23 @@ export interface TitleName {
   /** "Score"'s baseline and cap height, and the name's extent -- viewport px (the staff's frame). */
   geometry(): { baseline: number; capTop: number; left: number; right: number; lightRight: number; scoreLeft: number } | null;
   nib(): { x: number; y: number } | null; // where the pen of light is right now, viewport px
+  ignite(): void; // stage: the light comes on -- "Light", a shadow in the dark until now, lights up
 }
 
+/** How the name comes in: with the swarm of voice lines (the default title), on the ruled staff
+ *  (titleStaff.ts), or on the dark stage (titleStage.ts: "Light" there whole but unlit, no pen). */
+export type TitleMode = 'swarm' | 'staff' | 'stage';
+
 /**
- * Replaces `host`'s text with the name (it stays readable for screen readers as a label). With
- * `staff` (titleStaff.ts) "Score" appears in its place rather than in the middle, and holds still.
+ * Replaces `host`'s text with the name (it stays readable for screen readers as a label). On the
+ * staff and the stage "Score" appears in its place rather than in the middle, and holds still.
  */
-export function lightScoreName(host: HTMLElement, staff = false): TitleName {
+export function lightScoreName(host: HTMLElement, mode: TitleMode = 'swarm'): TitleName {
+  const staff = mode !== 'swarm';
   host.textContent = '';
   host.setAttribute('aria-label', 'LightScore');
   const wrap = document.createElement('span');
-  wrap.className = staff ? 'ls-name staff' : 'ls-name';
+  wrap.className = mode === 'staff' ? 'ls-name staff' : mode === 'stage' ? 'ls-name on-stage' : 'ls-name';
   wrap.setAttribute('aria-hidden', 'true');
   const light = document.createElement('canvas');
   light.className = 'ls-light';
@@ -286,7 +292,7 @@ export function lightScoreName(host: HTMLElement, staff = false): TitleName {
     probe.font = `400 ${base * LIGHT_SCALE}px ${FONT_SCRIPT}`;
     const lightW = probe.measureText('Light').width;
     // On a phone's staff the name starts the line and leaves its end to the voices (titleStaff.ts).
-    const narrowStaff = staff && window.innerWidth < 700;
+    const narrowStaff = mode === 'staff' && window.innerWidth < 700;
     const fit = Math.min(1, (window.innerWidth * (narrowStaff ? 0.62 : 0.9)) / (lightW + base * (GAP + 2.95)));
     wrap.style.marginLeft = narrowStaff ? '6px' : '';
     host.style.alignSelf = narrowStaff ? 'stretch' : '';
@@ -330,10 +336,14 @@ export function lightScoreName(host: HTMLElement, staff = false): TitleName {
   const fonts = Promise.all([loadScriptFont(), document.fonts.load(`600 100px ${FONT_DISPLAY}`).catch(() => undefined)]);
   void fonts.then(() => {
     layout();
-    if (reduce) {
+    if (reduce || mode === 'stage') {
       glided = true;
       score.style.transform = '';
       finish();
+      if (mode === 'stage') {
+        wrap.classList.add('score-in');
+        shownNow();
+      }
       return;
     }
     wrap.classList.add('score-in');
@@ -370,6 +380,7 @@ export function lightScoreName(host: HTMLElement, staff = false): TitleName {
         scoreLeft: r.score.left + inkPad,
       };
     },
+    ignite: () => wrap.classList.add('lit'),
     nib: () => (nibAt ? { x: measured().light.left + nibAt.x, y: measured().light.top + nibAt.y } : null),
   };
 }

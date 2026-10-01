@@ -459,8 +459,20 @@ layer (strength between "subtle" and "balanced" of its design draft):
   staff: the colours belong to the notes, as everywhere in the app (a first draft coloured the lines
   themselves; they read as voices then, not as a staff). On a phone the name starts the line and
   leaves its end to the voices. A tap sends a pulse along the staff.
-  `lightScoreName(host, true)` keeps "Score" in place and reports the name's geometry
+  `lightScoreName(host, 'staff')` keeps "Score" in place and reports the name's geometry
   (`TitleName.geometry()`) for the staff to be drawn to.
+- **Draft title "Die Bühne" (`?start=buehne`, `titleStage.ts`).** Black paper and a stage before
+  the light comes on: "Score" alone in its gold (dimmed), "Light" a shadow of itself, the five
+  lines barely there -- in from the left through the name, then sweeping up to the right and
+  opening out, the voices waiting on them as unlit notes. After 1.5 s a spotlight from the upper
+  left flickers on like a lamp and settles on the name, and "Light" lights up with it
+  (`TitleName.ignite()`, `.ls-name.lit`, `@keyframes stage-ignite`); in its cone the paper's grain
+  shows, dust drifts and glints (a tap stirs it), rays shimmer. Then the staff takes the light and
+  the voices are lit one after another, lowest first; the choices follow, the one used last in
+  gold. Built for speed: the cone with its grain, the two ray layers, the dark and the lit staff
+  and each lit note are drawn once into their own layers (`.stage-layer`) and only faded; per
+  frame only the dust is drawn. The cone is one radial and one conic gradient -- many faint
+  layers added together round off differently per colour channel and tint it.
 - **Piano roll as a lit paper roll ("lantern").** `NOTE_STYLE` in `pianoRoll.ts`: part of the
   paper design (Samt & Glas uses the gel notes); any device can also pick it with `?roll=lantern`
   / `?roll=gel`. The roll is dark paper (with fibres, `theme.ts paperGrain`) with a round hole per
