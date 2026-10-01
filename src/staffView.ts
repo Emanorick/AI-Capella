@@ -919,38 +919,63 @@ export class StaffView {
     const accidentalMap = new Map<string, number>();
     const notes = this.notesByPart.get(layout.partId) ?? [];
     const notesStartIdx = effectiveMeasure ? firstIndexAtOrAfter(notes, effectiveMeasure.startBeat) : 0;
-    // Notes of one voice sounding together for the same length (divisi) are a chord: one stem for
-    // all of them, in the direction the note furthest from the middle line asks for.
-    const chords = new Map<NoteEvent, ChordPlace>();
+    // The noteheads struck together in this part -- a note's own head, or a tied note's head carried
+    // on past a bar line -- are grouped by when they sound and for how long. Heads of the same length
+    // are a chord: one stem for all of them, in the direction the note furthest from the middle line
+    // asks for. Heads of different lengths at once are two voices on one staff: the upper one's stems
+    // go up, the lower one's down, as engraved -- rather than two stems over each other.
     const placeOf = (n: NoteEvent) => {
       const sp = this.effectiveSpelling(n);
       return diatonicIndex(sp.step, sp.octave) - (CLEF_BOTTOM_LINE[layout.clef] - layout.octaveShift * 7);
     };
+    const chords = new Map<NoteEvent, (ChordPlace | undefined)[]>();
+    const segmentsOf = new Map<NoteEvent, { startBeat: number; durationBeats: number }[]>();
+    const heads = new Map<number, { n: NoteEvent; k: number; dur: number; pos: number }[]>();
+    for (let i = notesStartIdx; i < notes.length && notes[i].startBeat <= endBeat; i++) {
+      const n = notes[i];
+      const segs = n.tieSegments ? segmentsFromTieLengths(n.startBeat, n.tieSegments) : splitIntoNotatedSegments(n.startBeat, n.durationBeats, this.score.measures);
+      segmentsOf.set(n, segs);
+      const pos = placeOf(n);
+      segs.forEach((seg, k) => {
+        const at = Math.round(seg.startBeat * 1e4);
+        if (!heads.has(at)) heads.set(at, []);
+        heads.get(at)!.push({ n, k, dur: seg.durationBeats, pos });
+      });
+    }
+    for (const struck of heads.values()) {
+      if (struck.length < 2) continue;
+      const byLength = new Map<number, typeof struck>();
+      for (const h of struck) {
+        const len = Math.round(h.dur * 1e4);
+        if (!byLength.has(len)) byLength.set(len, []);
+        byLength.get(len)!.push(h);
+      }
+      const voices = [...byLength.values()].sort((a, b) => Math.max(...b.map((h) => h.pos)) - Math.max(...a.map((h) => h.pos)));
+      const twoVoices = voices.length > 1;
+      voices.forEach((group, v) => {
+        if (group.length < 2 && !twoVoices) return;
+        const placed = [...group].sort((a, b) => a.pos - b.pos);
+        const low = placed[0].pos;
+        const high = placed[placed.length - 1].pos;
+        const stemUp = twoVoices ? v === 0 : high - 4 < 4 - low;
+        const owner = stemUp ? placed[0] : placed[placed.length - 1];
+        const far = stemUp ? high : low;
+        // Walked from the stem's end of the chord: a second's two heads can't share a column, so
+        // the one further along moves to the other side of the stem, as engravers do.
+        const walk = stemUp ? placed : [...placed].reverse();
+        let lastDisplaced = false;
+        walk.forEach((h, k) => {
+          const before = walk[k - 1];
+          const displaced = !!before && Math.abs(before.pos - h.pos) === 1 && !lastDisplaced;
+          lastDisplaced = displaced;
+          if (!chords.has(h.n)) chords.set(h.n, []);
+          chords.get(h.n)![h.k] = { stemUp, stemTo: h === owner ? far : null, dx: displaced ? (stemUp ? 1 : -1) * (HEAD_W - STEM_THICKNESS) : 0 };
+        });
+      });
+    }
     for (let i = notesStartIdx; i < notes.length; i++) {
       const note = notes[i];
       if (note.startBeat > endBeat) break;
-      if (!chords.has(note)) {
-        const group = [note];
-        for (let j = i + 1; j < notes.length && Math.abs(notes[j].startBeat - note.startBeat) < 1e-6; j++) {
-          if (Math.abs(notes[j].durationBeats - note.durationBeats) < 1e-6) group.push(notes[j]);
-        }
-        if (group.length > 1) {
-          const placed = group.map((n) => ({ n, pos: placeOf(n) })).sort((a, b) => a.pos - b.pos);
-          const low = placed[0].pos;
-          const high = placed[placed.length - 1].pos;
-          const stemUp = high - 4 < 4 - low;
-          const owner = stemUp ? placed[0] : placed[placed.length - 1];
-          const far = stemUp ? high : low;
-          // Walked from the stem's end of the chord: a second's two heads can't share a column, so
-          // the one further along moves to the other side of the stem, as engravers do.
-          const walk = stemUp ? placed : [...placed].reverse();
-          walk.forEach(({ n, pos }, k) => {
-            const before = walk[k - 1];
-            const displaced = !!before && Math.abs(before.pos - pos) === 1 && !chords.get(before.n)?.dx;
-            chords.set(n, { stemUp, stemTo: n === owner.n ? far : null, dx: displaced ? (stemUp ? 1 : -1) * (HEAD_W - STEM_THICKNESS) : 0 });
-          });
-        }
-      }
       if (note.measureNumber !== currentMeasureNumber) {
         currentMeasureNumber = note.measureNumber;
         accidentalMap.clear();
@@ -963,7 +988,7 @@ export class StaffView {
       accidentalMap.set(key, spelling.alter);
 
       if (note.startBeat + note.durationBeats < startBeat - 2) continue;
-      this.drawNote(ctx, note, bottomLineIndex, bottomLineY, displayBeat, playheadBeat, color, dimmed, showAccidental, chords.get(note));
+      this.drawNote(ctx, note, bottomLineIndex, bottomLineY, displayBeat, playheadBeat, color, dimmed, showAccidental, segmentsOf.get(note), chords.get(note));
     }
 
     const rests = this.restsByPart.get(layout.partId) ?? [];
@@ -1059,7 +1084,8 @@ export class StaffView {
     color: string,
     dimmed: boolean,
     showAccidental: boolean,
-    chord?: ChordPlace,
+    segmentsGiven?: { startBeat: number; durationBeats: number }[],
+    chords?: (ChordPlace | undefined)[],
   ) {
     const firstX = this.beatToX(note.startBeat, displayBeat) + NOTE_X_OFFSET_PX;
     const lastX = this.beatToX(note.startBeat + note.durationBeats, displayBeat) + NOTE_X_OFFSET_PX;
@@ -1069,9 +1095,8 @@ export class StaffView {
     const staffPosition = diatonicIndex(spelling.step, spelling.octave) - bottomLineIndex;
     const y = bottomLineY - staffPosition * HALF_SPACE_PX;
     // Standard convention: stem up when the note is below the middle line, down at or above it; a
-    // chord's notes share their stem's direction.
-    const stemUp = chord ? chord.stemUp : staffPosition < 4;
-    const shift = chord?.dx ?? 0;
+    // chord's heads share their stem's direction, and of two voices the upper stems up (drawStaff).
+    const ownUp = staffPosition < 4;
     const sounding = !dimmed && this.soundAt(note.startBeat) <= playheadBeat && playheadBeat < this.soundAt(note.startBeat + note.durationBeats);
 
     ctx.fillStyle = color;
@@ -1089,9 +1114,14 @@ export class StaffView {
     // A tie-merged note is split back into individually-notatable segments, each with its own
     // notehead/stem/flag, joined by ties -- preferring the original tie boundaries from the source
     // file (tieSegments) over a mathematical split.
-    const segments = note.tieSegments ? segmentsFromTieLengths(note.startBeat, note.tieSegments) : splitIntoNotatedSegments(note.startBeat, note.durationBeats, this.score.measures);
+    const segments = segmentsGiven ?? (note.tieSegments ? segmentsFromTieLengths(note.startBeat, note.tieSegments) : splitIntoNotatedSegments(note.startBeat, note.durationBeats, this.score.measures));
     let prevSegX: number | null = null;
-    for (const seg of segments) {
+    // Ties curve away from the stems -- the first head's direction for the whole note.
+    const tieUp = chords?.[0]?.stemUp ?? ownUp;
+    for (const [k, seg] of segments.entries()) {
+      const chord = chords?.[k];
+      const stemUp = chord ? chord.stemUp : ownUp;
+      const shift = chord?.dx ?? 0;
       const segX = this.beatToX(seg.startBeat, displayBeat) + NOTE_X_OFFSET_PX;
       const onScreen = segX >= this.gutterPx - 20 && segX <= this.cssWidth + 20;
       const shape = classifyDuration(seg.durationBeats);
@@ -1141,7 +1171,7 @@ export class StaffView {
         }
       }
 
-      if (prevSegX != null) this.drawTie(ctx, prevSegX, segX, y, stemUp);
+      if (prevSegX != null) this.drawTie(ctx, prevSegX, segX, y, tieUp);
       prevSegX = segX;
     }
 
