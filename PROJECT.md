@@ -1210,10 +1210,13 @@ enharmonic spelling, only a reasonable one.
 formula (`octave*7 + letterIndex`), independent of accidental — the standard trick that makes
 adjacent-letter steps exactly half a line-spacing apart regardless of sharps/flats. Ledger lines
 are derived from the same position, drawn under each notehead (also each tied segment) in the
-paper tone. **Chords**: notes of one part starting together with the same length share one
-stem, as engraved — its direction set by the note furthest from the middle line, drawn from
-the note at the stem's far end through to the other, with a second displaced to the stem's other
-side. (Overlapping notes of different lengths are real second voices and keep their own stems.) **Clef per part** is a heuristic, since no clef is parsed
+paper tone. **Chords and two voices**: the noteheads of one part struck at the same moment --
+a note's own head, or a tied note's head carried on past a bar line -- are grouped by how long
+they last. Heads of one length are a chord with one stem, as engraved: its direction set by the
+note furthest from the middle line, drawn from the note at the stem's far end through to the
+other, a second's head displaced to the stem's other side. Heads of different lengths at once are
+two voices on one staff (a held bass note under a moving line): the upper voice stems up, the
+lower down, rather than two stems drawn over each other. **Clef per part** is a heuristic, since no clef is parsed
 anywhere in this app's pipeline: each part's average MIDI pitch decides treble vs. bass at
 construction time. **Note duration shape** (filled vs. hollow notehead, stem, flag count) is
 classified from the nearest standard duration to the note's continuous `durationBeats` value
