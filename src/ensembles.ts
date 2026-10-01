@@ -30,6 +30,7 @@ export const ENSEMBLES: readonly Ensemble[] = [
   // Its session is the one shared session there was before ensembles.
   { id: FIRST_ENSEMBLE_ID, defaultName: 'Ensemble n.n.b.', channel: 'live' },
   { id: 'rm', defaultName: 'Relativ männlich', channel: 'live-rm' },
+  { id: 'frederick', defaultName: 'Frederick', channel: 'live-frederick' }, // a personal workspace
 ];
 
 export function ensembleById(id: string): Ensemble | undefined {

@@ -60,7 +60,7 @@ Each choir gets its own repertoire and its own rehearsal session, opened with it
 app. The ensembles are listed in `ENSEMBLES`: **Öffentlich** (public: the bundled sample songs,
 to look at and listen to only: no adding, renaming, moving or deleting, and no rehearsing
 together), **Ensemble n.n.b.** (`nnb`: everything stored before ensembles existed, plus the
-samples) and **Relativ männlich** (`rm`).
+samples), **Relativ männlich** (`rm`) and **Frederick** (`frederick`, a personal workspace).
 - **Title screen.** Where the Solo / Ensemble choice was, a device without a code sees one ruled
   line, "Dein Code", and *Ohne Code weiter* (into the public folder). Once in, the ensemble's
   name is written under the app's in the markings' gold, like a dedication on a score ("für
