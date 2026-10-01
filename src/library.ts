@@ -48,6 +48,8 @@ export interface StoredSong {
   // Voices removed in the app (part ids). The stored score itself is never rewritten, so a removed
   // voice can be restored at any time; it is filtered out when the song loads.
   removedParts?: string[];
+  // Played with swing (swing.ts) instead of straight -- a choice for the song, for everyone.
+  swing?: boolean;
 }
 
 export type VoiceClef = 'treble' | 'treble8' | 'bass';
@@ -71,6 +73,7 @@ function parseSongDoc(id: string, data: Record<string, unknown>): StoredSong {
     savedConfig: data.savedConfig as StoredSong['savedConfig'],
     clefOverrides: data.clefOverrides as StoredSong['clefOverrides'],
     removedParts: Array.isArray(data.removedParts) ? (data.removedParts as string[]) : undefined,
+    swing: data.swing === true ? true : undefined,
   };
 }
 
@@ -172,12 +175,13 @@ export async function deleteImportedSong(id: string): Promise<void> {
  */
 export async function updateSongMetadata(
   id: string,
-  patch: { title?: string; ensemble?: string; partName?: { partId: string; name: string }; clef?: { partId: string; clef: VoiceClef }; removedParts?: string[] },
+  patch: { title?: string; ensemble?: string; swing?: boolean; partName?: { partId: string; name: string }; clef?: { partId: string; clef: VoiceClef }; removedParts?: string[] },
 ): Promise<void> {
   if (!db) throw new Error('Firebase is not configured');
   const fields: Record<string, unknown> = {};
   if (patch.title !== undefined) fields.title = patch.title;
-  if (patch.ensemble !== undefined) fields.ensemble = patch.ensemble; // moved to another ensemble's folder
+  if (patch.ensemble !== undefined) fields.ensemble = patch.ensemble;
+  if (patch.swing !== undefined) fields.swing = patch.swing; // moved to another ensemble's folder
   if (patch.partName) fields[`partNameOverrides.${patch.partName.partId}`] = patch.partName.name;
   // Dot-path for the same reason as partNameOverrides: only this one voice's entry changes.
   if (patch.clef) fields[`clefOverrides.${patch.clef.partId}`] = patch.clef.clef;

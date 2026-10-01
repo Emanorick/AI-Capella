@@ -26,6 +26,7 @@ import { START_DRAFT, START_STAFF, START_STAGE } from './design';
 import { lightScoreName, type TitleName } from './lightName';
 import { animateStaff } from './titleStaff';
 import { animateStage } from './titleStage';
+import { canSwing, swingMap, swingScore } from './swing';
 import { loadScriptFont } from './goldInk';
 import { closeOverlay, confirmDialog, isNarrow, openMenu, openPopover, openSheet, promptDialog, toast } from './ui';
 import * as sync from './sync';
@@ -60,6 +61,7 @@ interface SongEntry {
   savedConfig?: StoredSong['savedConfig'];
   clefOverrides?: StoredSong['clefOverrides'];
   removedParts?: string[];
+  swing?: boolean;
 }
 
 // import.meta.env.BASE_URL (not a bare "/...") since the app is served from a subpath on
@@ -1349,19 +1351,24 @@ async function loadSongLocally(song: SongEntry) {
   lastAppliedTiming = null;
   lastAppliedMetronomeOn = false;
 
+  // What is played (and shown in the roll): with swing, the rhythm as it sounds; the sheet view
+  // keeps the notation as written.
+  const swung = swingChosen(song) && canSwing(score);
+  const played = swung ? swingScore(score) : score;
   audioEngine?.dispose();
-  audioEngine = new AudioEngine(score, playbackSound);
+  audioEngine = new AudioEngine(played, playbackSound);
   audioEngine.setLightOffsetMs(lightOffsetMs);
   audioEngine.setDuckedVolume(duckVolume);
   const partColor = (partId: string) => colorForPart(score.parts.findIndex((p) => p.id === partId), score.parts.length);
   currentPartColor = partColor;
   // Shown first so the canvases have a real layout size when the views measure themselves.
   setViewMode('player');
-  pianoRoll = new PianoRoll(canvas, score, partColor);
+  pianoRoll = new PianoRoll(canvas, played, partColor);
   pianoRoll.setLoopRegion(null);
   pianoRoll.setAutoFit(followActive());
   staffView = new StaffView(staffCanvas, score, partColor);
-  overview = new OverviewStrip(overviewCanvas, score, partColor);
+  staffView.setSwing(swung ? swingMap(score) : null);
+  overview = new OverviewStrip(overviewCanvas, played, partColor);
   // MIDI imports have no real notated spelling -- only a heuristic chromatic fallback (see
   // staffView.ts) -- so the sheet-music view isn't offered for them at all. Force back to the
   // piano roll if the previous song was left showing the staff view.
@@ -1850,7 +1857,50 @@ function applyVoiceSetup(score: Score, song: SongEntry) {
 }
 
 function voiceSetupKey(song: SongEntry): string {
-  return JSON.stringify([song.removedParts ?? [], song.clefOverrides ?? {}]);
+  return JSON.stringify([song.removedParts ?? [], song.clefOverrides ?? {}, !!song.swing]);
+}
+
+// Swing (swing.ts): a library song's choice is stored with it, for everyone; the bundled samples
+// remember it on this device.
+const SWING_KEY = 'ai-capella-swing';
+function swingChosen(song: SongEntry): boolean {
+  if (song.imported) return !!song.swing;
+  try {
+    return (JSON.parse(localStorage.getItem(SWING_KEY) ?? '[]') as string[]).includes(song.id);
+  } catch {
+    return false;
+  }
+}
+
+async function setSwing(on: boolean) {
+  const song = currentSong;
+  if (!song) return;
+  stopPlayback();
+  if (!song.imported) {
+    try {
+      const list = (JSON.parse(localStorage.getItem(SWING_KEY) ?? '[]') as string[]).filter((id) => id !== song.id);
+      localStorage.setItem(SWING_KEY, JSON.stringify(on ? [...list, song.id] : list));
+    } catch {
+      /* not remembered */
+    }
+    await reloadCurrentSong();
+    toast(t(on ? 'swingOn' : 'swingOff'));
+    return;
+  }
+  const previous = song.swing;
+  const entry = importedSongs.find((s) => s.id === song.id);
+  song.swing = on;
+  if (entry) entry.swing = on;
+  await reloadCurrentSong();
+  toast(t(on ? 'swingOn' : 'swingOff'));
+  try {
+    await updateSongMetadata(song.id, { swing: on });
+  } catch (err) {
+    song.swing = previous;
+    if (entry) entry.swing = previous;
+    toast(t('changeFailed', { msg: errorText(err) }), 'error');
+    await reloadCurrentSong();
+  }
 }
 
 /** The clef a voice is shown with -- its chosen/notated clef, else the same pitch heuristic the sheet view uses. */
@@ -1946,6 +1996,7 @@ async function reloadCurrentSong() {
 function rebuildStaffView() {
   if (!currentScore || !currentPartColor) return;
   staffView = new StaffView(staffCanvas, currentScore, currentPartColor);
+  staffView.setSwing(currentSong && swingChosen(currentSong) && canSwing(currentScore) ? swingMap(currentScore) : null);
   staffView.setTranspose(transpose);
   staffView.setZoom(zoomOf.staff);
   staffView.setPartMix(partMix);
@@ -2404,7 +2455,14 @@ function openPlayerMenu(anchor: HTMLElement) {
     if (sectionsEditable() && manualSections.length) items.push({ label: t('removeAllSections'), icon: 'flag', onSelect: () => void removeAllSections() });
   }
   if (activeView === 'roll') items.push({ label: t('followMusic'), icon: 'fitHeight', checked: followPref, onSelect: () => setFollow(!followPref) });
-  items.push(...soundItems(), { label: t('lightOffset'), icon: 'metronome', onSelect: () => openLightOffsetSheet(anchor) }, ...languageItems());
+  items.push(...soundItems());
+  // Swing or straight, for this song (not in 6/8 and the like). In a rehearsal only the leader -- or
+  // anyone, while nobody leads -- changes it for everyone.
+  if (currentSong && currentScore && canSwing(currentScore) && (currentSong.imported ? !isFollower() : true)) {
+    const on = swingChosen(currentSong);
+    items.push({ label: t('swingItem'), icon: 'quarter', checked: on, onSelect: () => void setSwing(!on) });
+  }
+  items.push({ label: t('lightOffset'), icon: 'metronome', onSelect: () => openLightOffsetSheet(anchor) }, ...languageItems());
   openMenu(anchor, items, t('menu'));
 }
 
@@ -3246,6 +3304,7 @@ async function runBootstrap() {
           savedConfig: s.savedConfig,
           clefOverrides: s.clefOverrides,
           removedParts: s.removedParts,
+          swing: s.swing,
         }));
         renderSongList();
         // Clef changes and removed voices from another device apply to the open song too (once

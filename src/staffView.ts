@@ -450,6 +450,9 @@ interface PartLayout {
 export class StaffView {
   private canvas: HTMLCanvasElement;
   private score: Score;
+  // Where a written beat sounds: with swing (swing.ts) the notation stays as written, but each note
+  // is lit when it is heard.
+  private soundAt: (beat: number) => number = (beat) => beat;
   private partColor: (partId: string) => string;
   private ctx2d: CanvasRenderingContext2D;
   private dpr = 1;
@@ -562,6 +565,11 @@ export class StaffView {
       this.cssHeight = saved.h;
       this.pixelsPerBeat = saved.ppb;
     }
+  }
+
+  /** Lights the notes when they sound with swing (or straight again: null). */
+  setSwing(soundAt: ((beat: number) => number) | null) {
+    this.soundAt = soundAt ?? ((beat) => beat);
   }
 
   setZoom(factor: number) {
@@ -1064,7 +1072,7 @@ export class StaffView {
     // chord's notes share their stem's direction.
     const stemUp = chord ? chord.stemUp : staffPosition < 4;
     const shift = chord?.dx ?? 0;
-    const sounding = !dimmed && note.startBeat <= playheadBeat && playheadBeat < note.startBeat + note.durationBeats;
+    const sounding = !dimmed && this.soundAt(note.startBeat) <= playheadBeat && playheadBeat < this.soundAt(note.startBeat + note.durationBeats);
 
     ctx.fillStyle = color;
     ctx.font = MUSIC_FONT;
@@ -1100,7 +1108,7 @@ export class StaffView {
           for (const pos of ledgers) ctx.fillRect(hx - LEDGER_EXTENSION, Math.round(bottomLineY - pos * HALF_SPACE_PX), headW + LEDGER_EXTENSION * 2, 1.2);
           ctx.fillStyle = color;
         }
-        const lit = sounding && seg.startBeat <= playheadBeat && playheadBeat < seg.startBeat + seg.durationBeats;
+        const lit = sounding && this.soundAt(seg.startBeat) <= playheadBeat && playheadBeat < this.soundAt(seg.startBeat + seg.durationBeats);
         if (lit) {
           ctx.save();
           ctx.shadowColor = color;

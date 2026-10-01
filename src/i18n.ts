@@ -5,6 +5,9 @@ const LANG_KEY = 'ai-capella-lang';
 
 const en = {
   publicEnsemble: 'Public',
+  swingItem: 'Swing (eighths long–short)',
+  swingOn: 'Plays with swing',
+  swingOff: 'Plays straight',
   dedicationFor: 'for',
   codePlaceholder: 'Your code',
   codeOpen: 'Open',
@@ -235,6 +238,9 @@ const en = {
 
 const de: Record<keyof typeof en, string> = {
   publicEnsemble: 'Öffentlich',
+  swingItem: 'Swing (Achtel lang–kurz)',
+  swingOn: 'Spielt mit Swing',
+  swingOff: 'Spielt gerade',
   dedicationFor: 'für',
   codePlaceholder: 'Dein Code',
   codeOpen: 'Öffnen',

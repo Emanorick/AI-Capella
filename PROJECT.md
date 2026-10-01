@@ -268,6 +268,18 @@ score, with a mixer button that opens the same rows in a sheet.
 - **Clicking or tapping a voice's name** (sidebar name or phone chip) toggles *only this voice*:
   mutes and hides every other voice entirely; again restores everyone. **Reset** clears the mix.
 
+### Swing or straight
+The player's ⋯ menu has **Swing (Achtel lang–kurz)** for songs whose beat is a quarter or half note
+(not 6/8, 12/8, 3/8). With swing each beat's eighths are played long-short, 2:1 -- the triplet feel
+(`swing.ts`): every position within a beat is mapped piecewise-linearly so the half-beat falls at
+two thirds; on-beat positions and triplet positions (thirds) stay where they are; beats are counted
+from each bar's start, an upbeat bar's from its end (an upbeat eighth is the "and" before the
+bar). Playback, the piano roll and the overview use the swung score (`swingScore`); the sheet view
+keeps the notation as written and lights each note when it is heard (`StaffView.setSwing`). The
+choice belongs to the song, for everyone: stored on its document (`swing`) for library songs --
+another device reloads the song when it changes -- and on the device for the bundled samples. In a
+rehearsal only the leader, or anyone while nobody leads, changes it.
+
 ### Voice menu: clef and removing voices
 Each voice's ⋯ button (sidebar on a laptop, mixer sheet on a phone; library songs only) opens a
 menu with Rename, the **clef** (treble, tenor = treble with a small 8, bass — MusicXML songs only,
