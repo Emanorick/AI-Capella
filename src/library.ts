@@ -74,8 +74,14 @@ function parseSongDoc(id: string, data: Record<string, unknown>): StoredSong {
   };
 }
 
-/** Live-subscribes to the shared song library; the callback fires immediately and again on every change from any device. */
-export function subscribeToSongs(callback: (songs: StoredSong[], fromCache: boolean) => void, onError: (err: unknown) => void): Unsubscribe {
+/** Live-subscribes to the shared song library; the callback fires immediately and again on every change from any device.
+ *  With an ensemble, only that ensemble's songs (a song stored before ensembles existed belongs to
+ *  the first one); the others are passed over before they're decompressed. */
+export function subscribeToSongs(
+  callback: (songs: StoredSong[], fromCache: boolean) => void,
+  onError: (err: unknown) => void,
+  ensemble?: { id: string; isDefault: boolean },
+): Unsubscribe {
   if (!db) {
     onError(new Error('Firebase is not configured'));
     return () => {};
@@ -90,6 +96,11 @@ export function subscribeToSongs(callback: (songs: StoredSong[], fromCache: bool
   // docChanges() says exactly which docs were added/modified/removed since the last snapshot, so
   // a per-doc cache lets every unchanged song's already-decompressed StoredSong be reused as-is.
   const cache = new Map<string, StoredSong>();
+  const belongs = (data: Record<string, unknown>) => {
+    if (!ensemble) return true;
+    const own = data.ensemble as string | undefined;
+    return own ? own === ensemble.id : ensemble.isDefault;
+  };
   return onSnapshot(
     q,
     // Metadata changes too, so the app learns when the list switches between the offline copy and
@@ -97,7 +108,7 @@ export function subscribeToSongs(callback: (songs: StoredSong[], fromCache: bool
     { includeMetadataChanges: true },
     (snapshot) => {
       for (const change of snapshot.docChanges()) {
-        if (change.type === 'removed') cache.delete(change.doc.id);
+        if (change.type === 'removed' || !belongs(change.doc.data())) cache.delete(change.doc.id);
         else cache.set(change.doc.id, parseSongDoc(change.doc.id, change.doc.data()));
       }
       const songs = snapshot.docs.map((d) => cache.get(d.id)).filter((s): s is StoredSong => s != null);
@@ -108,7 +119,7 @@ export function subscribeToSongs(callback: (songs: StoredSong[], fromCache: bool
 }
 
 /** Returns the new song's id (available immediately from Firestore's optimistic local write). */
-export async function saveImportedSong(song: { title: string; xml: string; format: SongFormat }): Promise<string> {
+export async function saveImportedSong(song: { title: string; xml: string; format: SongFormat; ensemble?: string }): Promise<string> {
   if (!db) throw new Error('Firebase is not configured');
   const compressed = gzipSync(strToU8(song.xml));
   if (compressed.byteLength > MAX_COMPRESSED_XML_BYTES) {
@@ -122,6 +133,7 @@ export async function saveImportedSong(song: { title: string; xml: string; forma
     format: song.format,
     importedAt: Date.now(),
     createdAt: serverTimestamp(),
+    ...(song.ensemble ? { ensemble: song.ensemble } : {}),
   });
   return docRef.id;
 }
@@ -145,11 +157,12 @@ export async function deleteImportedSong(id: string): Promise<void> {
  */
 export async function updateSongMetadata(
   id: string,
-  patch: { title?: string; partName?: { partId: string; name: string }; clef?: { partId: string; clef: VoiceClef }; removedParts?: string[] },
+  patch: { title?: string; ensemble?: string; partName?: { partId: string; name: string }; clef?: { partId: string; clef: VoiceClef }; removedParts?: string[] },
 ): Promise<void> {
   if (!db) throw new Error('Firebase is not configured');
   const fields: Record<string, unknown> = {};
   if (patch.title !== undefined) fields.title = patch.title;
+  if (patch.ensemble !== undefined) fields.ensemble = patch.ensemble; // moved to another ensemble's folder
   if (patch.partName) fields[`partNameOverrides.${patch.partName.partId}`] = patch.partName.name;
   // Dot-path for the same reason as partNameOverrides: only this one voice's entry changes.
   if (patch.clef) fields[`clefOverrides.${patch.clef.partId}`] = patch.clef.clef;

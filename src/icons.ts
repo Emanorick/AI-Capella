@@ -39,6 +39,8 @@ const PATHS = {
   save: `<g ${S} stroke-width="1.8"><path d="M5 4.5h11l3.5 3.5v11a1.5 1.5 0 0 1-1.5 1.5H6a1.5 1.5 0 0 1-1.5-1.5V6A1.5 1.5 0 0 1 6 4.5z"/><path d="M8 4.5v4.5h7V4.5M8 20v-5.5h8V20"/></g>`,
   flag: `<g ${S} stroke-width="1.8"><path d="M6 20.5V4.5M6 5h11l-2.5 4 2.5 4H6"/></g>`,
   swap: `<g ${S} stroke-width="1.8"><path d="M4.5 8.5h14M15 5l3.5 3.5L15 12M19.5 15.5h-14M9 12l-3.5 3.5L9 19"/></g>`,
+  chevronDown: `<path d="M5.5 9L12 15.5 18.5 9" ${S} stroke-width="2"/>`,
+  key: `<g ${S} stroke-width="1.8"><circle cx="8" cy="15.5" r="4"/><path d="M10.9 12.6L19 4.5M15.5 8l2.5 2.5M13.3 10.2l2 2"/></g>`,
   globe: `<g ${S} stroke-width="1.7"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5c-2.4-2.3-3.6-5.1-3.6-8.5S9.6 5.8 12 3.5z"/></g>`,
 } as const;
 

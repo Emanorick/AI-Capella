@@ -13,7 +13,12 @@ const PLAY_SYNC_BUFFER_MS = 750;
 const CALIBRATION_INTERVAL_MS = 5 * 60_000;
 const DEVICE_ID_STORAGE_KEY = 'ai-capella-device-id';
 
-const SESSION_DOC_PATH = ['sessions', 'live'] as const;
+// The rehearsal session: one per ensemble (see ensembles.ts); 'live' is the first one's.
+let sessionDocId = 'live';
+/** Chooses the ensemble's session; set once at startup, before subscribing. */
+export function setSessionChannel(id: string) {
+  sessionDocId = id;
+}
 
 // Deliberately not part of the synced state: mute/solo/true-solo. Each device chooses which
 // voices it personally hears -- e.g. a soprano wants to hear only their own part while everyone
@@ -159,7 +164,7 @@ export function subscribePlaybackState(callback: (state: PlaybackState | null) =
     return () => {};
   }
   return onSnapshot(
-    doc(db, ...SESSION_DOC_PATH),
+    doc(db, 'sessions', sessionDocId),
     (snap) => {
       if (!snap.exists()) {
         callback(null);
@@ -191,5 +196,5 @@ export function subscribePlaybackState(callback: (state: PlaybackState | null) =
 /** Merges the given fields into the shared playback session doc, creating it if it doesn't exist yet. */
 export async function publishPlaybackState(patch: Partial<PlaybackState>): Promise<void> {
   if (!db) throw new Error('Firebase is not configured');
-  await setDoc(doc(db, ...SESSION_DOC_PATH), { ...patch, updatedAt: serverTimestamp() }, { merge: true });
+  await setDoc(doc(db, 'sessions', sessionDocId), { ...patch, updatedAt: serverTimestamp() }, { merge: true });
 }

@@ -54,6 +54,35 @@ shared song library itself is always available — Solo only opts out of shared 
 shared *songs*. See §4.7. The storage key is versioned (`ai-capella-mode-v2`) so it can be bumped
 again if every device should see the choice once more.
 
+### Ensembles (behind a flag: `?ensembles=an`, `?ensembles=aus` turns it off again)
+Each choir gets its own repertoire and its own rehearsal session, opened with its **code**
+(`ensembles.ts`). The ensembles are listed in `ENSEMBLES`: **Öffentlich** (public: the bundled
+sample songs, to look at and listen to only: no adding, renaming, moving or deleting, and no
+rehearsing together), **Ensemble n.n.b.** (`nnb`: everything stored before ensembles existed,
+plus the samples) and **Relativ männlich** (`rm`).
+- **Title screen.** Where the Solo / Ensemble choice was, a device without a code sees one ruled
+  line, "Dein Code", and *Ohne Code weiter* (into the public folder). Once in, the ensemble's
+  name is written under the app's in the markings' gold, like a dedication on a score ("für
+  Ensemble n.n.b."); the device's other ensembles stand beside it in pencil, a tap away. Below
+  come the two modes, now **Allein üben / Gemeinsam proben** (the switch reads *Allein |
+  Gemeinsam*, since "Ensemble" now names the choir), and *Code eingeben* for another one.
+- **Repertoire.** Its heading is the open ensemble's name; tapping it switches ensemble (by a
+  reload straight into the repertoire, like a mode switch), enters another code, renames the
+  ensemble, changes its code, and gives an ensemble nobody has a code for yet its first one.
+  A song added here belongs to this ensemble only; a song's ⋯ menu moves it to another of the
+  device's ensembles.
+- **Codes** are stored only as SHA-256 hashes in `config/access` (`pinHash` is n.n.b.'s, so the
+  old PIN opens it, and devices let in by it are in n.n.b. already; `codeHashes.<id>` for the
+  others; `names.<id>` for renamed ensembles). One code opens one ensemble. The device remembers
+  every ensemble it was let into (`ai-capella-ensembles-unlocked`) and the one open last
+  (`ai-capella-ensemble`).
+- **Songs** carry an `ensemble` field (none: n.n.b.); `subscribeToSongs` passes over other
+  ensembles' songs before decompressing them. **Rehearsing together** has one session document
+  per ensemble (`sessions/live` for n.n.b., as before; `sessions/live-rm`).
+- This is a **soft** separation, like the PIN before it: the codes are checked on the device and
+  the Firestore rules still let every signed-in device read every song. Real separation would
+  need the code checked by a function and rules per ensemble.
+
 ### Repertoire / player split
 The app opens on the **repertoire**: every song as a card with a **cover drawn from its own voice
 lines** (each voice's pitch contour, sampled and smoothed, in the voice colours — `artwork.ts`

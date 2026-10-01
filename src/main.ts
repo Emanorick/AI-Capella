@@ -29,6 +29,23 @@ import { animateStaff } from './titleStaff';
 import { loadScriptFont } from './goldInk';
 import { closeOverlay, confirmDialog, isNarrow, openMenu, openPopover, openSheet, promptDialog, toast } from './ui';
 import * as sync from './sync';
+import {
+  activeEnsemble,
+  ensembleById,
+  ensembleForCode,
+  ensembleHasCode,
+  ensembleName,
+  ENSEMBLES,
+  ENSEMBLES_ON,
+  FIRST_ENSEMBLE_ID,
+  PUBLIC_ID,
+  refreshEnsembleNames,
+  renameEnsemble,
+  setActiveEnsemble,
+  setEnsembleCode,
+  unlockedEnsembles,
+  unlockEnsemble,
+} from './ensembles';
 import type { PlaybackState } from './sync';
 
 interface SongEntry {
@@ -69,14 +86,40 @@ const PREVIEW_NOTE_LABEL_MS = 1200;
 const SEARCH_THRESHOLD = 8; // the search field only appears once the library is long enough to need it
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
+/** The two playback modes; with ensembles, "Ensemble" names the choir, so the modes are Alone / Together. */
+function modeName(mode: 'solo' | 'ensemble'): string {
+  if (ENSEMBLES_ON) return t(mode === 'solo' ? 'alone' : 'together');
+  return t(mode === 'solo' ? 'solo' : 'ensemble');
+}
+if (ENSEMBLES_ON) document.documentElement.dataset.ensembles = 'an';
+// The ensemble whose folder is open (ensembles.ts). Chosen on the title screen and fixed once it is
+// left: switching to another ensemble reloads, like switching modes.
+let currentEnsemble: string = (ENSEMBLES_ON && activeEnsemble()) || PUBLIC_ID;
+function inPublicFolder(): boolean {
+  return ENSEMBLES_ON && currentEnsemble === PUBLIC_ID;
+}
+/** The ensemble a new song is added to (none without ensembles: it then belongs to the first). */
+function importEnsemble(): string | undefined {
+  return ENSEMBLES_ON ? currentEnsemble : undefined;
+}
 const backdrop = new WaveBackdrop();
 app.innerHTML = `
   <section id="landing" class="view" aria-label="LightScore">
     <canvas class="ribbons" id="landing-ribbons" aria-hidden="true"></canvas>
     <h1 class="landing-name" aria-label="LightScore"><span class="ls-l">Light</span>Score</h1>
-    <div class="landing-modes">
-      <button type="button" class="mode-btn" id="mode-solo-btn">${icon('user')}<span>${t('practiseAlone')}</span></button>
-      <button type="button" class="mode-btn" id="mode-ensemble-btn">${icon('users')}<span>${t('rehearseTogether')}</span></button>
+    <div class="landing-choice">
+      <p class="landing-dedication" id="landing-dedication" hidden></p>
+      <form class="landing-code" id="landing-code" hidden>
+        <input id="landing-code-input" class="code-line" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${t('codePlaceholder')}" aria-label="${t('codePlaceholder')}" />
+        <button type="submit" class="mode-btn code-open">${icon('key')}<span>${t('codeOpen')}</span></button>
+        <p class="landing-code-error" id="landing-code-error" role="alert"></p>
+        <button type="button" class="link-btn landing-aside" id="landing-code-aside"></button>
+      </form>
+      <div class="landing-modes">
+        <button type="button" class="mode-btn" id="mode-solo-btn">${icon('user')}<span>${t('practiseAlone')}</span></button>
+        <button type="button" class="mode-btn" id="mode-ensemble-btn">${icon('users')}<span>${t('rehearseTogether')}</span></button>
+      </div>
+      <button type="button" class="link-btn landing-aside" id="landing-enter-code" hidden>${t('enterCode')}</button>
     </div>
   </section>
 
@@ -85,8 +128,8 @@ app.innerHTML = `
       <span class="brand"><canvas class="mark" aria-hidden="true"></canvas><span class="wordmark" aria-label="LightScore"><span class="ls-l">Light</span>Score</span></span>
       <div class="lib-top-r">
         <div class="seg mode-seg" id="mode-seg" role="group" aria-label="${t('mode')}">
-          <button type="button" data-action="mode" data-mode="solo">${icon('user')}<span>${t('solo')}</span></button>
-          <button type="button" data-action="mode" data-mode="ensemble">${icon('users')}<span>${t('ensemble')}</span><i class="live-dot" aria-hidden="true"></i></button>
+          <button type="button" data-action="mode" data-mode="solo">${icon('user')}<span>${modeName('solo')}</span></button>
+          <button type="button" data-action="mode" data-mode="ensemble">${icon('users')}<span>${modeName('ensemble')}</span><i class="live-dot" aria-hidden="true"></i></button>
         </div>
         <button type="button" class="icon-btn" id="lib-menu-btn" aria-label="${t('menu')}">${icon('more')}</button>
       </div>
@@ -94,7 +137,7 @@ app.innerHTML = `
     <div class="lib-scroll">
       <div class="lib-head">
         <div>
-          <h1>${t('repertoire')}</h1>
+          <h1 id="lib-title">${t('repertoire')}</h1>
           <p id="lib-count"></p>
         </div>
         <div class="lib-tools">
@@ -379,17 +422,17 @@ function renderModeControls() {
   document.querySelectorAll<HTMLButtonElement>('#mode-seg [data-mode]').forEach((b) => {
     b.setAttribute('aria-pressed', String(b.dataset.mode === sessionMode));
   });
-  document.querySelector<HTMLElement>('#mode-seg')!.hidden = !isFirebaseConfigured;
+  document.querySelector<HTMLElement>('#mode-seg')!.hidden = !isFirebaseConfigured || inPublicFolder();
   const leading = syncEnabled() && leaderId === myDeviceId;
   const following = isFollower();
-  if (sessionMode === 'solo') modeBadge.innerHTML = `${icon('user')}<span>${t('solo')}</span>`;
+  if (sessionMode === 'solo') modeBadge.innerHTML = `${icon('user')}<span>${modeName('solo')}</span>`;
   else if (leading) modeBadge.innerHTML = `${icon('crown')}<span>${t('leading')}</span><i class="live-dot" aria-hidden="true"></i>`;
   else if (following && isSingAlong()) modeBadge.innerHTML = `${icon('crown')}<span>${t('led')}</span><b class="follow-pos" data-bind="pos-bar"></b><i class="live-dot" aria-hidden="true"></i>`;
   else if (following) modeBadge.innerHTML = `${icon('users')}<span>${t('following')}</span><i class="live-dot" aria-hidden="true"></i>`;
-  else modeBadge.innerHTML = `${icon('users')}<span>${t('ensemble')}</span><i class="live-dot" aria-hidden="true"></i>`;
+  else modeBadge.innerHTML = `${icon('users')}<span>${modeName('ensemble')}</span><i class="live-dot" aria-hidden="true"></i>`;
   modeBadge.classList.toggle('is-leading', leading);
   modeBadge.title = following ? t('followingHint') : '';
-  modeBadge.hidden = !isFirebaseConfigured;
+  modeBadge.hidden = !isFirebaseConfigured || inPublicFolder();
   fillBindings(modeBadge);
   app.classList.toggle('following', following);
   const singAlong = isSingAlong();
@@ -454,7 +497,7 @@ function zoomRowsByHand(factor: number, y: number) {
 
 async function requestModeSwitch(mode: 'solo' | 'ensemble') {
   if (mode === sessionMode) return;
-  const name = mode === 'solo' ? t('solo') : t('ensemble');
+  const name = modeName(mode);
   const ok = await confirmDialog({
     title: t('switchToTitle', { mode: name }),
     body: mode === 'solo' ? t('switchToSolo') : t('switchToEnsemble'),
@@ -471,7 +514,7 @@ async function requestModeSwitch(mode: 'solo' | 'ensemble') {
 const MODE_SWITCH_KEY = 'ai-capella-mode-switch';
 modeBadge.addEventListener('click', () => {
   if (sessionMode === 'solo') {
-    openMenu(modeBadge, [{ label: t('switchToEnsembleItem'), icon: 'users', onSelect: () => void requestModeSwitch('ensemble') }], t('mode'));
+    openMenu(modeBadge, [{ label: ENSEMBLES_ON ? t('rehearseTogether') : t('switchToEnsembleItem'), icon: 'users', onSelect: () => void requestModeSwitch('ensemble') }], t('mode'));
     return;
   }
   const items: Parameters<typeof openMenu>[1] = [];
@@ -483,8 +526,8 @@ modeBadge.addEventListener('click', () => {
       ? { label: t('singAlongView'), icon: 'users', onSelect: () => setFullView(false) }
       : { label: t('fullView'), icon: 'mixer', onSelect: () => setFullView(true) });
   }
-  items.push({ label: t('switchToSoloItem'), icon: 'user', onSelect: () => void requestModeSwitch('solo') });
-  openMenu(modeBadge, items, t('ensemble'));
+  items.push({ label: ENSEMBLES_ON ? t('practiseAlone') : t('switchToSoloItem'), icon: 'user', onSelect: () => void requestModeSwitch('solo') });
+  openMenu(modeBadge, items, modeName('ensemble'));
 });
 
 function takeLead() {
@@ -498,14 +541,225 @@ async function takeOverLead() {
 }
 
 function chooseMode(mode: 'solo' | 'ensemble') {
+  // The public folder is for looking and listening only: no rehearsing together there (and the
+  // choice made for an ensemble stays as it was).
+  if (inPublicFolder()) mode = 'solo';
+  else localStorage.setItem(MODE_STORAGE_KEY, mode);
   sessionMode = mode;
-  localStorage.setItem(MODE_STORAGE_KEY, mode);
   renderModeControls();
   setViewMode('library');
   void runBootstrap();
 }
 document.querySelector<HTMLButtonElement>('#mode-solo-btn')!.addEventListener('click', () => chooseMode('solo'));
 document.querySelector<HTMLButtonElement>('#mode-ensemble-btn')!.addEventListener('click', () => chooseMode('ensemble'));
+
+// ---------------------------------------------------------------------------------------------
+// Ensembles (ensembles.ts): the code on the title screen, the ensemble's name written under the
+// app's like a dedication, and the switch between ensembles in the repertoire's heading.
+// ---------------------------------------------------------------------------------------------
+
+const dedicationEl = document.querySelector<HTMLParagraphElement>('#landing-dedication')!;
+const codeForm = document.querySelector<HTMLFormElement>('#landing-code')!;
+const codeInput = document.querySelector<HTMLInputElement>('#landing-code-input')!;
+const codeError = document.querySelector<HTMLParagraphElement>('#landing-code-error')!;
+const codeAside = document.querySelector<HTMLButtonElement>('#landing-code-aside')!;
+const enterCodeBtn = document.querySelector<HTMLButtonElement>('#landing-enter-code')!;
+const landingModesEl = document.querySelector<HTMLDivElement>('.landing-modes')!;
+const libTitleEl = document.querySelector<HTMLHeadingElement>('#lib-title')!;
+let askingCode = false;
+
+/** The title screen's choice: the code (no ensemble chosen yet, or another code asked for), or the
+ *  dedication and the two modes. `now`: written at once (a choice made here), not after the title. */
+function renderLanding(now = false) {
+  const chosen = activeEnsemble();
+  const asking = askingCode || !chosen;
+  codeForm.hidden = !asking;
+  landingModesEl.hidden = asking;
+  enterCodeBtn.hidden = asking;
+  dedicationEl.hidden = asking || !chosen;
+  codeAside.textContent = chosen ? t('cancel') : t('codeWithout');
+  dedicationEl.style.setProperty('--ded-delay', now ? '0s' : '');
+  if (asking) {
+    // Not on the first start, where the keyboard would cover the title as it's written.
+    if (askingCode) requestAnimationFrame(() => codeInput.focus({ preventScroll: true }));
+    return;
+  }
+  currentEnsemble = chosen!;
+  document.querySelector<HTMLElement>('#mode-ensemble-btn')!.hidden = inPublicFolder();
+  // "für <name>" in gold, the device's other ensembles beside it in pencil, a tap away.
+  const others = unlockedEnsembles().filter((id) => id !== currentEnsemble);
+  const name = document.createElement('span');
+  name.className = 'ded-name';
+  name.textContent = ensembleName(currentEnsemble);
+  const parts: Node[] = [];
+  if (!inPublicFolder()) {
+    const pre = document.createElement('span');
+    pre.className = 'ded-for';
+    pre.textContent = t('dedicationFor');
+    parts.push(pre, document.createTextNode(' '));
+  }
+  parts.push(name);
+  for (const id of others) {
+    const other = document.createElement('button');
+    other.type = 'button';
+    other.className = 'ded-other';
+    other.textContent = ensembleName(id);
+    other.addEventListener('click', () => {
+      setActiveEnsemble(id);
+      renderLanding(true);
+    });
+    parts.push(other);
+  }
+  dedicationEl.replaceChildren(...parts);
+  // Written in again each time it changes.
+  dedicationEl.classList.remove('written');
+  void dedicationEl.offsetWidth;
+  dedicationEl.classList.add('written');
+  renderModeControls();
+}
+
+codeForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const code = codeInput.value.trim();
+  if (!code) return;
+  codeError.textContent = '';
+  const submit = codeForm.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  submit.disabled = true;
+  try {
+    await ensureSignedIn();
+    const id = await ensembleForCode(code);
+    if (!id) {
+      codeError.textContent = t('codeWrong');
+      codeInput.select();
+      return;
+    }
+    unlockEnsemble(id);
+    setActiveEnsemble(id);
+    codeInput.value = '';
+    askingCode = false;
+    renderLanding(true);
+  } catch (err) {
+    codeError.textContent = t('codeFailed', { msg: errorText(err) });
+  } finally {
+    submit.disabled = false;
+  }
+});
+codeAside.addEventListener('click', () => {
+  if (!activeEnsemble()) setActiveEnsemble(PUBLIC_ID);
+  askingCode = false;
+  codeError.textContent = '';
+  renderLanding(true);
+});
+enterCodeBtn.addEventListener('click', () => {
+  askingCode = true;
+  renderLanding(true);
+});
+
+/** The repertoire's heading: the open ensemble's name, a menu to switch (with ensembles on). */
+function renderLibraryHead() {
+  if (!ENSEMBLES_ON) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ens-switch';
+  btn.setAttribute('aria-label', `${t('ensembleLabel')}: ${ensembleName(currentEnsemble)}`);
+  const name = document.createElement('span');
+  name.textContent = ensembleName(currentEnsemble);
+  btn.append(name);
+  btn.insertAdjacentHTML('beforeend', icon('chevronDown'));
+  btn.addEventListener('click', () => void openEnsembleMenu(btn));
+  libTitleEl.replaceChildren(btn);
+  libTitleEl.classList.add('ens-title');
+  importBtn.hidden = inPublicFolder();
+  document.querySelector<HTMLElement>('.lib-tip')!.hidden = inPublicFolder();
+}
+
+async function openEnsembleMenu(anchor: HTMLElement) {
+  const items: Parameters<typeof openMenu>[1] = [];
+  for (const id of [...unlockedEnsembles(), PUBLIC_ID]) {
+    items.push({ label: ensembleName(id), icon: id === PUBLIC_ID ? 'globe' : 'users', checked: id === currentEnsemble, onSelect: () => switchEnsemble(id) });
+  }
+  items.push({ label: t('enterCode'), icon: 'key', onSelect: () => void enterCodeInApp() });
+  if (!inPublicFolder()) {
+    items.push({ label: t('renameEnsemble'), icon: 'pencil', onSelect: () => void renameCurrentEnsemble() });
+    items.push({ label: t('changeCodeFor', { name: ensembleName(currentEnsemble) }), icon: 'key', onSelect: () => void setCodeFor(currentEnsemble) });
+    // An ensemble nobody has a code for yet gets its first one from inside another.
+    const locked = ENSEMBLES.filter((e) => e.id !== PUBLIC_ID && !unlockedEnsembles().includes(e.id));
+    const withoutCode = await Promise.all(locked.map(async (e) => ((await ensembleHasCode(e.id).catch(() => true)) ? null : e.id)));
+    for (const id of withoutCode) if (id) items.push({ label: t('setCodeFor', { name: ensembleName(id) }), icon: 'key', onSelect: () => void setCodeFor(id) });
+  }
+  openMenu(anchor, items, t('ensembleLabel'));
+}
+
+/** Opens another ensemble's folder: like a mode switch, by reloading straight into the repertoire. */
+async function switchEnsemble(id: string) {
+  if (id === currentEnsemble) return;
+  stopPlayback();
+  if (syncEnabled() && leaderId === myDeviceId) await sync.publishPlaybackState({ leaderId: null }).catch(() => {});
+  setActiveEnsemble(id);
+  sessionStorage.setItem(MODE_SWITCH_KEY, localStorage.getItem(MODE_STORAGE_KEY) === 'ensemble' ? 'ensemble' : 'solo');
+  location.reload();
+}
+
+async function enterCodeInApp() {
+  const code = await promptDialog(t('enterCode'), '', t('codeOpen'));
+  if (!code) return;
+  try {
+    const id = await ensembleForCode(code);
+    if (!id) {
+      toast(t('codeWrong'), 'error');
+      return;
+    }
+    unlockEnsemble(id);
+    toast(t('codeWelcome', { name: ensembleName(id) }));
+    await switchEnsemble(id);
+  } catch (err) {
+    toast(t('codeFailed', { msg: errorText(err) }), 'error');
+  }
+}
+
+async function setCodeFor(id: string) {
+  const code = await promptDialog(t(unlockedEnsembles().includes(id) ? 'changeCodeFor' : 'setCodeFor', { name: ensembleName(id) }), '', t('save'));
+  if (!code) return;
+  try {
+    if ((await setEnsembleCode(id, code)) === 'taken') {
+      toast(t('codeTaken'), 'error');
+      return;
+    }
+    unlockEnsemble(id); // whoever sets the code knows it
+    toast(t('codeSaved'));
+  } catch (err) {
+    toast(t('codeSaveFailed', { msg: errorText(err) }), 'error');
+  }
+}
+
+async function renameCurrentEnsemble() {
+  const id = currentEnsemble;
+  const value = await promptDialog(t('renameEnsemble'), ensembleName(id), t('save'));
+  if (!value) return;
+  try {
+    await renameEnsemble(id, value);
+    renderLibraryHead();
+  } catch (err) {
+    toast(t('renameEnsembleFailed', { msg: errorText(err) }), 'error');
+  }
+}
+
+/** A library song's menu: move it into another of this device's ensembles. */
+function moveItems(song: SongEntry): Parameters<typeof openMenu>[1] {
+  if (!ENSEMBLES_ON || !song.imported) return [];
+  return unlockedEnsembles()
+    .filter((id) => id !== currentEnsemble)
+    .map((id) => ({
+      label: t('moveTo', { name: ensembleName(id) }),
+      icon: 'swap' as const,
+      onSelect: () => {
+        // The live list drops it once the write lands (it no longer belongs here).
+        updateSongMetadata(song.id, { ensemble: id })
+          .then(() => toast(t('movedTo', { name: ensembleName(id) })))
+          .catch((err) => toast(t('moveFailed', { msg: errorText(err) }), 'error'));
+      },
+    }));
+}
 
 // Playback sound, chosen per device (not synced -- each singer may prefer another).
 const SOUND_KEY = 'ai-capella-sound';
@@ -586,7 +840,9 @@ function drawMarks() {
 // ---------------------------------------------------------------------------------------------
 
 function allSongs(): SongEntry[] {
-  return [...BUILTIN_SONGS, ...importedSongs];
+  // The bundled samples belong to the public folder and to the first ensemble (which has everything).
+  const builtins = !ENSEMBLES_ON || currentEnsemble === PUBLIC_ID || currentEnsemble === FIRST_ENSEMBLE_ID ? BUILTIN_SONGS : [];
+  return [...builtins, ...importedSongs];
 }
 
 interface SongMeta {
@@ -763,7 +1019,7 @@ function renderSongList() {
   coverCanvases.clear();
   songGridEl.replaceChildren(...items);
   const count = countLabel(songs.length, 'arrangementsOne', 'arrangementsMany');
-  libCountEl.textContent = libraryState === 'ready' ? t('sharedWithChoir', { count }) : t('onThisDevice', { count });
+  libCountEl.textContent = inPublicFolder() ? t('publicCount', { count }) : libraryState === 'ready' ? t('sharedWithChoir', { count }) : t('onThisDevice', { count });
   renderLibraryBanner();
 }
 
@@ -811,6 +1067,7 @@ songGridEl.addEventListener('click', (e) => {
       more,
       [
         { label: t('rename'), icon: 'pencil', onSelect: () => void renameSong(song) },
+        ...moveItems(song),
         { label: t('delete'), icon: 'trash', danger: true, onSelect: () => void confirmDelete(song) },
       ],
       song.title,
@@ -871,6 +1128,7 @@ async function importFiles(files: FileList | File[]) {
     toast(t('notConfigured'), 'error');
     return;
   }
+  if (inPublicFolder()) return; // look and listen only
   const list = Array.from(files).filter((f) => ACCEPTED_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext)));
   if (!list.length) {
     toast(t('wrongFileType'), 'error');
@@ -899,7 +1157,7 @@ async function importFiles(files: FileList | File[]) {
         title = score.title && score.title !== 'Untitled' ? score.title : file.name.replace(/\.(musicxml|xml|mxl)$/i, '');
         format = 'musicxml';
       }
-      const id = await saveImportedSong({ title, xml, format });
+      const id = await saveImportedSong({ title, xml, format, ensemble: importEnsemble() });
       lastImported = { id, title, xml, format, imported: true };
       toast(t('added', { title }));
     } catch (err) {
@@ -961,7 +1219,7 @@ function renderScanChip() {
 /** A checked scan goes into the repertoire like an imported MusicXML file. */
 async function importScannedScore(title: string, xml: string) {
   parseMusicXML(xml); // throws on anything the player couldn't open
-  const id = await saveImportedSong({ title, xml, format: 'musicxml' });
+  const id = await saveImportedSong({ title, xml, format: 'musicxml', ensemble: importEnsemble() });
   toast(t('added', { title }));
   void selectSong({ id, title, xml, format: 'musicxml', imported: true });
 }
@@ -972,7 +1230,7 @@ importInput.addEventListener('change', () => {
 // Files can be dropped anywhere on the repertoire page, not just on one small target.
 let dragDepth = 0;
 libraryEl.addEventListener('dragenter', (e) => {
-  if (!e.dataTransfer?.types.includes('Files')) return;
+  if (!e.dataTransfer?.types.includes('Files') || inPublicFolder()) return;
   dragDepth++;
   libraryEl.classList.add('drag-over');
 });
@@ -2922,12 +3180,26 @@ async function runBootstrap() {
     renderSongList();
     return;
   }
+  if (inPublicFolder()) {
+    // The bundled samples only: nothing to load, nothing to add, nobody to rehearse with.
+    importBtn.hidden = true;
+    libraryState = 'ready';
+    renderLibraryHead();
+    renderSongList();
+    void ensureSignedIn().then(refreshEnsembleNames).then(renderLibraryHead).catch(() => {});
+    return;
+  }
+  const ensemble = ENSEMBLES_ON ? ensembleById(currentEnsemble) : undefined;
+  if (ensemble?.channel) sync.setSessionChannel(ensemble.channel);
 
   try {
     // Sign in first: verifyPin (inside ensureAccess) reads Firestore, and the security rules
     // require request.auth != null, so an unsigned-in read would just hang/get rejected.
     await ensureSignedIn();
-    await ensureAccess(); // PIN gate; resolves immediately if already granted on this device
+    // PIN gate; resolves immediately if already granted on this device. With ensembles, the code
+    // was asked on the title screen.
+    if (ENSEMBLES_ON) void refreshEnsembleNames().then(renderLibraryHead).catch(() => {});
+    else await ensureAccess();
     initScan({ onImport: importScannedScore, onStatusChange: renderScanChip });
     subscribeToSongs(
       (songs, fromCache) => {
@@ -2961,6 +3233,7 @@ async function runBootstrap() {
         libraryError = errorText(err);
         renderSongList();
       },
+      ensemble ? { id: ensemble.id, isDefault: ensemble.id === FIRST_ENSEMBLE_ID } : undefined,
     );
     if (syncEnabled()) {
       sync.startPeriodicCalibration();
@@ -2989,9 +3262,11 @@ const storedMode = localStorage.getItem(MODE_STORAGE_KEY);
 const switchedMode = sessionStorage.getItem(MODE_SWITCH_KEY);
 sessionStorage.removeItem(MODE_SWITCH_KEY);
 if (storedMode === 'solo' || storedMode === 'ensemble') sessionMode = storedMode;
-if (isFirebaseConfigured && (switchedMode === 'solo' || switchedMode === 'ensemble')) {
+if (inPublicFolder()) sessionMode = 'solo';
+if (isFirebaseConfigured && (switchedMode === 'solo' || switchedMode === 'ensemble') && (!ENSEMBLES_ON || activeEnsemble())) {
   chooseMode(switchedMode);
 } else if (isFirebaseConfigured) {
+  if (ENSEMBLES_ON) renderLanding();
   document.querySelector(storedMode === 'ensemble' ? '#mode-ensemble-btn' : '#mode-solo-btn')?.classList.toggle('last-used', storedMode === 'solo' || storedMode === 'ensemble');
   setViewMode('landing');
 } else {
@@ -2999,6 +3274,7 @@ if (isFirebaseConfigured && (switchedMode === 'solo' || switchedMode === 'ensemb
   void runBootstrap();
 }
 renderModeControls();
+renderLibraryHead();
 renderSongList();
 refreshBindings();
 requestAnimationFrame(drawMarks);
