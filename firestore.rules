@@ -1,0 +1,75 @@
+rules_version = '2';
+
+// LightScore. Every device signs in anonymously; what it may read and change depends on the
+// ensembles it has joined with their codes (src/ensembles.ts):
+//
+//   ensembleCodes/{codeId}              { ensemble }          codeId = salted SHA-256 of the code
+//   members/{uid}/ensembles/{ensemble}  { code, joinedAt }    the ensembles a device has joined
+//   ensembles/{ensemble}                { name, codeId }      an ensemble's name and current code
+//   songs/{songId}                      { ensemble, ... }     each song belongs to one ensemble
+//   sessions/live, sessions/live-<id>   rehearsing together: the first ensemble's, then the others'
+//   sessions/clockPing_<device>         each device's clock calibration
+//
+// Anything not matched below (config/access, the old PIN's hash, among it) is closed.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function memberOf(ensemble) {
+      return signedIn() && ensemble is string
+        && exists(/databases/$(database)/documents/members/$(request.auth.uid)/ensembles/$(ensemble));
+    }
+
+    // An ensemble nobody guards yet (no code set): whoever sets it up gives it its first code.
+    function unclaimed(ensemble) {
+      return !exists(/databases/$(database)/documents/ensembles/$(ensemble))
+        || !('codeId' in get(/databases/$(database)/documents/ensembles/$(ensemble)).data);
+    }
+
+    // A code's document. Fetching it needs the code in hand (its id is derived from it); listing
+    // them never works, and an existing one can't be pointed at another ensemble.
+    match /ensembleCodes/{codeId} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['ensemble'])
+        && request.resource.data.ensemble is string
+        && (memberOf(request.resource.data.ensemble) || unclaimed(request.resource.data.ensemble));
+      allow update: if false;
+      allow delete: if memberOf(resource.data.ensemble);
+    }
+
+    // Joining: a device adds an ensemble to its own list by naming a code document that opens it.
+    match /members/{uid}/ensembles/{ensemble} {
+      allow read, delete: if signedIn() && request.auth.uid == uid;
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.code is string
+        && get(/databases/$(database)/documents/ensembleCodes/$(request.resource.data.code)).data.ensemble == ensemble;
+    }
+
+    // An ensemble's name and current code: for its members (and readable while it's unguarded,
+    // so the app can offer to set it up).
+    match /ensembles/{ensemble} {
+      allow read: if memberOf(ensemble) || (signedIn() && (resource == null || !('codeId' in resource.data)));
+      allow write: if memberOf(ensemble);
+    }
+
+    // The repertoire: only an ensemble's members see, add, change or delete its songs; moving a
+    // song needs membership of both ensembles.
+    match /songs/{songId} {
+      allow read: if memberOf(resource.data.ensemble);
+      allow create: if memberOf(request.resource.data.ensemble);
+      allow update: if memberOf(resource.data.ensemble) && memberOf(request.resource.data.ensemble);
+      allow delete: if memberOf(resource.data.ensemble);
+    }
+
+    match /sessions/{sessionId} {
+      allow read, write: if (sessionId == 'live' && memberOf('nnb'))
+        || (sessionId.matches('live-[a-z0-9]+') && memberOf(sessionId.split('-')[1]))
+        || (sessionId.matches('clockPing_.+') && signedIn());
+    }
+  }
+}

@@ -6,11 +6,13 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
   updateDoc,
+  where,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -75,18 +77,21 @@ function parseSongDoc(id: string, data: Record<string, unknown>): StoredSong {
 }
 
 /** Live-subscribes to the shared song library; the callback fires immediately and again on every change from any device.
- *  With an ensemble, only that ensemble's songs (a song stored before ensembles existed belongs to
- *  the first one); the others are passed over before they're decompressed. */
+ *  With an ensemble, only that ensemble's songs -- the only query the Firestore rules allow then. */
 export function subscribeToSongs(
   callback: (songs: StoredSong[], fromCache: boolean) => void,
   onError: (err: unknown) => void,
-  ensemble?: { id: string; isDefault: boolean },
+  ensemble?: string,
 ): Unsubscribe {
   if (!db) {
     onError(new Error('Firebase is not configured'));
     return () => {};
   }
-  const q = query(collection(db, SONGS_COLLECTION), orderBy('importedAt', 'asc'));
+  // Filtered by ensemble, sorted here: ordering by another field in the query would need a
+  // composite index set up in the Firebase console.
+  const q = ensemble
+    ? query(collection(db, SONGS_COLLECTION), where('ensemble', '==', ensemble))
+    : query(collection(db, SONGS_COLLECTION), orderBy('importedAt', 'asc'));
   // A collection onSnapshot fires (with the FULL current result set) on every change to ANY doc
   // in it -- one voice's rename, a new import, anything. Re-gunzipping and re-decoding every
   // song's XML from scratch on every single one of those events (as this used to do) means a
@@ -96,11 +101,6 @@ export function subscribeToSongs(
   // docChanges() says exactly which docs were added/modified/removed since the last snapshot, so
   // a per-doc cache lets every unchanged song's already-decompressed StoredSong be reused as-is.
   const cache = new Map<string, StoredSong>();
-  const belongs = (data: Record<string, unknown>) => {
-    if (!ensemble) return true;
-    const own = data.ensemble as string | undefined;
-    return own ? own === ensemble.id : ensemble.isDefault;
-  };
   return onSnapshot(
     q,
     // Metadata changes too, so the app learns when the list switches between the offline copy and
@@ -108,14 +108,31 @@ export function subscribeToSongs(
     { includeMetadataChanges: true },
     (snapshot) => {
       for (const change of snapshot.docChanges()) {
-        if (change.type === 'removed' || !belongs(change.doc.data())) cache.delete(change.doc.id);
+        if (change.type === 'removed') cache.delete(change.doc.id);
         else cache.set(change.doc.id, parseSongDoc(change.doc.id, change.doc.data()));
       }
       const songs = snapshot.docs.map((d) => cache.get(d.id)).filter((s): s is StoredSong => s != null);
+      songs.sort((a, b) => a.importedAt - b.importedAt);
       callback(songs, snapshot.metadata.fromCache);
     },
     onError,
   );
+}
+
+/**
+ * Files every song stored before ensembles existed (no `ensemble` field) into the given one, so
+ * it shows in that ensemble's (filtered) repertoire and the rules can tell whose it is. Works only
+ * while the rules still let a device list every song -- i.e. before the ensembles' rules are
+ * published; afterwards it is refused, and has nothing left to do.
+ */
+export async function fileUnfiledSongs(ensemble: string): Promise<number> {
+  if (!db) return 0;
+  const all = await getDocs(collection(db, SONGS_COLLECTION));
+  const unfiled = all.docs.filter((d) => !d.data().ensemble);
+  // Not awaited: the filtered repertoire shows them at once (Firestore applies its own writes
+  // locally first), and offline they go out once the connection is back.
+  for (const d of unfiled) void updateDoc(d.ref, { ensemble }).catch(() => {});
+  return unfiled.length;
 }
 
 /** Returns the new song's id (available immediately from Firestore's optimistic local write). */

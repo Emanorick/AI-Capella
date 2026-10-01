@@ -56,10 +56,11 @@ again if every device should see the choice once more.
 
 ### Ensembles (behind a flag: `?ensembles=an`, `?ensembles=aus` turns it off again)
 Each choir gets its own repertoire and its own rehearsal session, opened with its **code**
-(`ensembles.ts`). The ensembles are listed in `ENSEMBLES`: **Öffentlich** (public: the bundled
-sample songs, to look at and listen to only: no adding, renaming, moving or deleting, and no
-rehearsing together), **Ensemble n.n.b.** (`nnb`: everything stored before ensembles existed,
-plus the samples) and **Relativ männlich** (`rm`).
+(`ensembles.ts`), and kept apart by the **Firestore rules** (`firestore.rules`), not only in the
+app. The ensembles are listed in `ENSEMBLES`: **Öffentlich** (public: the bundled sample songs,
+to look at and listen to only: no adding, renaming, moving or deleting, and no rehearsing
+together), **Ensemble n.n.b.** (`nnb`: everything stored before ensembles existed, plus the
+samples) and **Relativ männlich** (`rm`).
 - **Title screen.** Where the Solo / Ensemble choice was, a device without a code sees one ruled
   line, "Dein Code", and *Ohne Code weiter* (into the public folder). Once in, the ensemble's
   name is written under the app's in the markings' gold, like a dedication on a score ("für
@@ -68,20 +69,40 @@ plus the samples) and **Relativ männlich** (`rm`).
   Gemeinsam*, since "Ensemble" now names the choir), and *Code eingeben* for another one.
 - **Repertoire.** Its heading is the open ensemble's name; tapping it switches ensemble (by a
   reload straight into the repertoire, like a mode switch), enters another code, renames the
-  ensemble, changes its code, and gives an ensemble nobody has a code for yet its first one.
-  A song added here belongs to this ensemble only; a song's ⋯ menu moves it to another of the
-  device's ensembles.
-- **Codes** are stored only as SHA-256 hashes in `config/access` (`pinHash` is n.n.b.'s, so the
-  old PIN opens it, and devices let in by it are in n.n.b. already; `codeHashes.<id>` for the
-  others; `names.<id>` for renamed ensembles). One code opens one ensemble. The device remembers
-  every ensemble it was let into (`ai-capella-ensembles-unlocked`) and the one open last
-  (`ai-capella-ensemble`).
-- **Songs** carry an `ensemble` field (none: n.n.b.); `subscribeToSongs` passes over other
-  ensembles' songs before decompressing them. **Rehearsing together** has one session document
-  per ensemble (`sessions/live` for n.n.b., as before; `sessions/live-rm`).
-- This is a **soft** separation, like the PIN before it: the codes are checked on the device and
-  the Firestore rules still let every signed-in device read every song. Real separation would
-  need the code checked by a function and rules per ensemble.
+  ensemble and changes its code; for an ensemble nobody guards yet it offers to set the first
+  code (from the public folder too, where the very first setup starts). A song added here
+  belongs to this ensemble only; a song's ⋯ menu moves it to another of the device's ensembles.
+- **In Firestore:**
+  `ensembleCodes/{codeId}` `{ ensemble }` -- `codeId` is the SHA-256 of the code with a fixed
+  salt (`lightscore-ensemble-code:`), so the id can only be found with the code in hand;
+  `members/{uid}/ensembles/{ensemble}` `{ code, joinedAt }` -- the ensembles this device's
+  anonymous user has joined; `ensembles/{ensemble}` `{ name, codeId }`; every song carries
+  `ensemble`. Rehearsing together has one session document per ensemble (`sessions/live` for
+  n.n.b., as before; `sessions/live-rm`).
+- **The rules** (all closed unless listed): a code document can be fetched by id but never
+  listed, created only by the ensemble's members (or for an ensemble nobody guards yet, i.e.
+  without `codeId`), never repointed; a device joins by writing its own membership naming a code
+  document that opens that ensemble; songs, sessions and the ensemble's document are for its
+  members only (moving a song needs both). The old `config/access` (the PIN's hash, which every
+  device could read) is closed -- which is why the code ids use a salt. Changing a code creates
+  the new code document and deletes the old one: new devices need the new code, devices already
+  in stay in. Codes need at least 8 characters (`MIN_CODE_LENGTH`): each guess is a request to
+  Firestore, so a 4-digit PIN could be found by trying.
+- **Joining** writes the membership; at startup the device checks its ensembles against its
+  memberships (`syncMemberships`) and forgets any it isn't in, and a refused song query (no
+  longer a member) asks for the code again.
+- **Moving over** from the shared library: the first time a device opens n.n.b. it files every
+  song without `ensemble` into it (`fileUnfiledSongs` -- possible only while the old rules still
+  let a device list all songs). New songs get `ensemble` even with the flag off.
+- **Order of setup** (the rules must come last, or an unguarded n.n.b. could be claimed by
+  anyone): with `?ensembles=an`, *Ohne Code weiter* → heading → *Code für Ensemble n.n.b.
+  festlegen* (files the old songs), then *Code für Relativ männlich festlegen*, and move Der
+  Affe; then ensembles on for every device; then publish `firestore.rules` (Firebase console →
+  Firestore → Rules). After that, the app without ensembles (the PIN, the whole library) no
+  longer works.
+- **Checking the rules:** `rules-test/` runs them against the Firestore emulator (`npm install &&
+  npm test`, needs Java). In development, `?emulator=1` points the app itself at local
+  emulators (Firestore on 8085, Auth on 9099) instead of the choir's database.
 
 ### Repertoire / player split
 The app opens on the **repertoire**: every song as a card with a **cover drawn from its own voice
@@ -1005,6 +1026,8 @@ Two playback sounds, chosen per device in the player ⋯ menu (`ai-capella-sound
   this is a *soft* gate against casual link-sharing, not a real security boundary — Firestore's
   actual access control is "authenticated (even anonymously) clients can read/write," which the
   PIN does nothing to restrict.
+  With ensembles (above), the PIN is replaced by per-ensemble codes that the Firestore rules
+  (`firestore.rules`) enforce.
 - **Renaming** (§2) writes through `updateSongMetadata(id, patch)`, an `updateDoc` on the song's
   existing document — the app's first update-in-place write; every other write was previously
   either a brand-new document (`saveImportedSong`) or a full delete. A song title is a plain

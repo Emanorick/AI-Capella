@@ -14,7 +14,7 @@ import { StaffView } from './staffView';
 import { OverviewStrip } from './overview';
 import { colorForPart } from './palette';
 import { measureAtBeat, type Score } from './score';
-import { deleteImportedSong, readScoreFile, saveImportedSong, saveSongConfig, saveSongSections, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong, type VoiceClef } from './library';
+import { deleteImportedSong, fileUnfiledSongs, readScoreFile, saveImportedSong, saveSongConfig, saveSongSections, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong, type VoiceClef } from './library';
 import { ensureSignedIn, isFirebaseConfigured } from './firebase';
 import { ensureAccess } from './pinGate';
 import { animateRibbons, coverDataFromScore, drawCover, drawMark, prepareCanvas, type CoverData } from './artwork';
@@ -32,8 +32,10 @@ import * as sync from './sync';
 import {
   activeEnsemble,
   ensembleById,
-  ensembleForCode,
-  ensembleHasCode,
+  ensembleNeedsCode,
+  forgetEnsemble,
+  joinWithCode,
+  MIN_CODE_LENGTH,
   ensembleName,
   ENSEMBLES,
   ENSEMBLES_ON,
@@ -43,8 +45,8 @@ import {
   renameEnsemble,
   setActiveEnsemble,
   setEnsembleCode,
+  syncMemberships,
   unlockedEnsembles,
-  unlockEnsemble,
 } from './ensembles';
 import type { PlaybackState } from './sync';
 
@@ -98,9 +100,9 @@ let currentEnsemble: string = (ENSEMBLES_ON && activeEnsemble()) || PUBLIC_ID;
 function inPublicFolder(): boolean {
   return ENSEMBLES_ON && currentEnsemble === PUBLIC_ID;
 }
-/** The ensemble a new song is added to (none without ensembles: it then belongs to the first). */
-function importEnsemble(): string | undefined {
-  return ENSEMBLES_ON ? currentEnsemble : undefined;
+/** The ensemble a new song is added to (without ensembles switched on: the first, which has everything). */
+function importEnsemble(): string {
+  return ENSEMBLES_ON ? currentEnsemble : FIRST_ENSEMBLE_ID;
 }
 const backdrop = new WaveBackdrop();
 app.innerHTML = `
@@ -324,7 +326,7 @@ let lastReceivedPlaybackState: PlaybackState | null = null;
 let lastAppliedTiming: { playing: boolean; originBeat: number; originServerTimeMs: number; bpm: number; transpose: number; countInBeats: number; countInPulseBeats: number; startTones: number[] } | null = null;
 let lastAppliedMetronomeOn = false;
 
-type LibraryState = 'loading' | 'ready' | 'offline' | 'unconfigured';
+type LibraryState = 'loading' | 'ready' | 'offline' | 'unconfigured' | 'locked';
 let libraryState: LibraryState = isFirebaseConfigured ? 'loading' : 'unconfigured';
 let libraryError = '';
 
@@ -627,13 +629,12 @@ codeForm.addEventListener('submit', async (e) => {
   submit.disabled = true;
   try {
     await ensureSignedIn();
-    const id = await ensembleForCode(code);
+    const id = await joinWithCode(code);
     if (!id) {
       codeError.textContent = t('codeWrong');
       codeInput.select();
       return;
     }
-    unlockEnsemble(id);
     setActiveEnsemble(id);
     codeInput.value = '';
     askingCode = false;
@@ -682,11 +683,12 @@ async function openEnsembleMenu(anchor: HTMLElement) {
   if (!inPublicFolder()) {
     items.push({ label: t('renameEnsemble'), icon: 'pencil', onSelect: () => void renameCurrentEnsemble() });
     items.push({ label: t('changeCodeFor', { name: ensembleName(currentEnsemble) }), icon: 'key', onSelect: () => void setCodeFor(currentEnsemble) });
-    // An ensemble nobody has a code for yet gets its first one from inside another.
-    const locked = ENSEMBLES.filter((e) => e.id !== PUBLIC_ID && !unlockedEnsembles().includes(e.id));
-    const withoutCode = await Promise.all(locked.map(async (e) => ((await ensembleHasCode(e.id).catch(() => true)) ? null : e.id)));
-    for (const id of withoutCode) if (id) items.push({ label: t('setCodeFor', { name: ensembleName(id) }), icon: 'key', onSelect: () => void setCodeFor(id) });
   }
+  // An ensemble nobody guards yet gets its first code here -- from the public folder too, which is
+  // where setting up the very first one starts.
+  const locked = ENSEMBLES.filter((e) => e.id !== PUBLIC_ID && !unlockedEnsembles().includes(e.id));
+  const withoutCode = await Promise.all(locked.map(async (e) => ((await ensureSignedIn().then(() => ensembleNeedsCode(e.id)).catch(() => false)) ? e.id : null)));
+  for (const id of withoutCode) if (id) items.push({ label: t('setCodeFor', { name: ensembleName(id) }), icon: 'key', onSelect: () => void setCodeFor(id) });
   openMenu(anchor, items, t('ensembleLabel'));
 }
 
@@ -704,12 +706,12 @@ async function enterCodeInApp() {
   const code = await promptDialog(t('enterCode'), '', t('codeOpen'));
   if (!code) return;
   try {
-    const id = await ensembleForCode(code);
+    await ensureSignedIn();
+    const id = await joinWithCode(code);
     if (!id) {
       toast(t('codeWrong'), 'error');
       return;
     }
-    unlockEnsemble(id);
     toast(t('codeWelcome', { name: ensembleName(id) }));
     await switchEnsemble(id);
   } catch (err) {
@@ -721,12 +723,14 @@ async function setCodeFor(id: string) {
   const code = await promptDialog(t(unlockedEnsembles().includes(id) ? 'changeCodeFor' : 'setCodeFor', { name: ensembleName(id) }), '', t('save'));
   if (!code) return;
   try {
-    if ((await setEnsembleCode(id, code)) === 'taken') {
-      toast(t('codeTaken'), 'error');
+    const result = await setEnsembleCode(id, code);
+    if (result !== 'ok') {
+      toast(result === 'short' ? t('codeShort', { n: MIN_CODE_LENGTH }) : t('codeTaken'), 'error');
       return;
     }
-    unlockEnsemble(id); // whoever sets the code knows it
     toast(t('codeSaved'));
+    // Set up from the public folder (the very first code): open it.
+    if (inPublicFolder()) await switchEnsemble(id);
   } catch (err) {
     toast(t('codeSaveFailed', { msg: errorText(err) }), 'error');
   }
@@ -741,6 +745,22 @@ async function renameCurrentEnsemble() {
     renderLibraryHead();
   } catch (err) {
     toast(t('renameEnsembleFailed', { msg: errorText(err) }), 'error');
+  }
+}
+
+/**
+ * Once, in the first ensemble: files the songs stored before ensembles existed into it (see
+ * fileUnfiledSongs; only possible until the ensembles' rules are published, refused after).
+ */
+const SONGS_FILED_KEY = 'ai-capella-songs-filed';
+async function fileOldSongs() {
+  if (localStorage.getItem(SONGS_FILED_KEY)) return;
+  try {
+    // Bounded: without a connection the full list may not come at all.
+    await Promise.race([fileUnfiledSongs(FIRST_ENSEMBLE_ID), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))]);
+    localStorage.setItem(SONGS_FILED_KEY, '1');
+  } catch (err) {
+    if ((err as { code?: string }).code === 'permission-denied') localStorage.setItem(SONGS_FILED_KEY, '1');
   }
 }
 
@@ -1033,8 +1053,22 @@ function renderLibraryBanner() {
     }
     return;
   }
-  libBannerEl.classList.toggle('muted', libraryState !== 'offline');
+  libBannerEl.classList.toggle('muted', libraryState !== 'offline' && libraryState !== 'locked');
   const text = document.createElement('div');
+  if (libraryState === 'locked') {
+    const b = document.createElement('b');
+    b.textContent = t('codeAgainTitle');
+    const p = document.createElement('span');
+    p.textContent = t('codeAgainBody', { name: ensembleName(currentEnsemble) });
+    text.append(b, p);
+    const again = document.createElement('button');
+    again.type = 'button';
+    again.className = 'btn';
+    again.textContent = t('enterCode');
+    again.addEventListener('click', () => void enterCodeInApp());
+    libBannerEl.append(text, again);
+    return;
+  }
   if (libraryState === 'loading') text.textContent = t('loadingLibrary');
   else if (libraryState === 'unconfigured') text.textContent = t('notConfigured');
   else {
@@ -3200,6 +3234,7 @@ async function runBootstrap() {
     // was asked on the title screen.
     if (ENSEMBLES_ON) void refreshEnsembleNames().then(renderLibraryHead).catch(() => {});
     else await ensureAccess();
+    if (ENSEMBLES_ON && currentEnsemble === FIRST_ENSEMBLE_ID) await fileOldSongs();
     initScan({ onImport: importScannedScore, onStatusChange: renderScanChip });
     subscribeToSongs(
       (songs, fromCache) => {
@@ -3229,11 +3264,15 @@ async function runBootstrap() {
         }
       },
       (err) => {
-        libraryState = 'offline';
+        // Refused by the rules: this device isn't in the ensemble (any more) -- ask for its code.
+        if (ENSEMBLES_ON && (err as { code?: string }).code === 'permission-denied') {
+          forgetEnsemble(currentEnsemble);
+          libraryState = 'locked';
+        } else libraryState = 'offline';
         libraryError = errorText(err);
         renderSongList();
       },
-      ensemble ? { id: ensemble.id, isDefault: ensemble.id === FIRST_ENSEMBLE_ID } : undefined,
+      ensemble?.id,
     );
     if (syncEnabled()) {
       sync.startPeriodicCalibration();
@@ -3266,7 +3305,16 @@ if (inPublicFolder()) sessionMode = 'solo';
 if (isFirebaseConfigured && (switchedMode === 'solo' || switchedMode === 'ensemble') && (!ENSEMBLES_ON || activeEnsemble())) {
   chooseMode(switchedMode);
 } else if (isFirebaseConfigured) {
-  if (ENSEMBLES_ON) renderLanding();
+  if (ENSEMBLES_ON) {
+    renderLanding();
+    // Ensembles opened on this device before the codes were checked in Firestore are dropped.
+    void ensureSignedIn()
+      .then(syncMemberships)
+      .then((changed) => {
+        if (changed && app.classList.contains('mode-landing') && !askingCode) renderLanding();
+      })
+      .catch(() => {});
+  }
   document.querySelector(storedMode === 'ensemble' ? '#mode-ensemble-btn' : '#mode-solo-btn')?.classList.toggle('last-used', storedMode === 'solo' || storedMode === 'ensemble');
   setViewMode('landing');
 } else {

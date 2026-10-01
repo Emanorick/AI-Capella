@@ -1,6 +1,6 @@
 import { initializeApp, type FirebaseApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, type Auth } from 'firebase/auth';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, type Firestore } from 'firebase/firestore';
+import { connectAuthEmulator, getAuth, signInAnonymously, onAuthStateChanged, type Auth } from 'firebase/auth';
+import { connectFirestoreEmulator, initializeFirestore, memoryLocalCache, persistentLocalCache, persistentMultipleTabManager, type Firestore } from 'firebase/firestore';
 import { firebaseConfig, isFirebaseConfigured } from './firebaseConfig';
 
 let app: FirebaseApp | null = null;
@@ -16,10 +16,17 @@ if (isFirebaseConfigured) {
   // A persistent (IndexedDB) copy of everything read, so the song library -- including every
   // song's score -- keeps working without a connection (rehearsal rooms without Wi-Fi); changes
   // made offline are sent once the connection is back. Shared between open tabs.
+  // Development only (?emulator=1): the local Firebase emulators instead of the choir's database,
+  // for trying out the security rules and everything that writes.
+  const emulated = import.meta.env.DEV && new URLSearchParams(location.search).has('emulator');
   db = initializeFirestore(app, {
     experimentalAutoDetectLongPolling: true,
-    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager(), cacheSizeBytes: 200 * 1024 * 1024 }),
+    localCache: emulated ? memoryLocalCache() : persistentLocalCache({ tabManager: persistentMultipleTabManager(), cacheSizeBytes: 200 * 1024 * 1024 }),
   });
+  if (emulated) {
+    connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+    connectFirestoreEmulator(db, '127.0.0.1', 8085);
+  }
 }
 
 export { db, isFirebaseConfigured };
@@ -49,6 +56,13 @@ export function ensureSignedIn(): Promise<void> {
       reject,
     );
   });
+}
+
+/** The signed-in (anonymous) user's id; only after ensureSignedIn(). */
+export function currentUid(): string {
+  const uid = auth?.currentUser?.uid;
+  if (!uid) throw new Error('Not signed in');
+  return uid;
 }
 
 /** The signed-in device's Firebase ID token, for the scan service to check who's asking. */

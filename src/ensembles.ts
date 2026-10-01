@@ -1,5 +1,5 @@
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
-import { db } from './firebase';
+import { deleteDoc, doc, getDoc, getDocFromServer, serverTimestamp, setDoc } from 'firebase/firestore';
+import { currentUid, db } from './firebase';
 import { deviceChoice } from './design';
 import { t } from './i18n';
 
@@ -9,10 +9,8 @@ import { t } from './i18n';
  * belong to two ensembles and switch between them. Without a code, the public folder holds the
  * bundled sample songs, to look at and listen to only.
  *
- * Like the PIN before it, this is a soft gate: the codes are checked on the device against their
- * hashes in Firestore (config/access), and the rules still let any signed-in device read every
- * song. It keeps the ensembles' repertoires apart in the app, not out of reach of someone who
- * reads the code.
+ * Guarded by the Firestore rules (firestore.rules, see below): a device reads an ensemble's songs
+ * only after joining it with its code.
  *
  * Behind a flag while it's being tried out (?ensembles=an; ?ensembles=aus turns it off again).
  */
@@ -20,20 +18,19 @@ export const ENSEMBLES_ON = deviceChoice('ensembles', 'ai-capella-ensembles', ['
 
 export interface Ensemble {
   id: string;
-  /** The name shown until one is saved in Firestore (config/access names.<id>). */
+  /** The name shown until one is saved in Firestore (ensembles/<id> name). */
   defaultName: string;
   /** The rehearsal session's document in the sessions collection; null: no rehearsing together. */
   channel: string | null;
 }
 
 export const PUBLIC_ID = 'public';
-/** The ensemble every song stored before ensembles existed (no `ensemble` field) belongs to. */
+/** The ensemble every song stored before ensembles existed belongs to (migrateUnfiledSongs). */
 export const FIRST_ENSEMBLE_ID = 'nnb';
 
 export const ENSEMBLES: readonly Ensemble[] = [
   { id: PUBLIC_ID, defaultName: 'Öffentlich', channel: null },
-  // Its code is the app's PIN from before (pinHash), and its session the one shared session there
-  // was, so the devices already in it carry on as they were.
+  // Its session is the one shared session there was before ensembles.
   { id: FIRST_ENSEMBLE_ID, defaultName: 'Ensemble n.n.b.', channel: 'live' },
   { id: 'rm', defaultName: 'Relativ männlich', channel: 'live-rm' },
 ];
@@ -45,7 +42,6 @@ export function ensembleById(id: string): Ensemble | undefined {
 const UNLOCKED_KEY = 'ai-capella-ensembles-unlocked';
 const ACTIVE_KEY = 'ai-capella-ensemble';
 const NAMES_KEY = 'ai-capella-ensemble-names';
-const LEGACY_ACCESS_KEY = 'ai-capella-access-granted';
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -63,11 +59,9 @@ function writeJson(key: string, value: unknown) {
   }
 }
 
-/** The ensembles whose code was entered on this device (a device let in by the old PIN is in the first). */
+/** The ensembles whose code was entered on this device (its memberships, as last known here). */
 export function unlockedEnsembles(): string[] {
-  const stored = readJson<string[]>(UNLOCKED_KEY, []).filter((id) => id !== PUBLIC_ID && ensembleById(id));
-  if (!stored.length && localStorage.getItem(LEGACY_ACCESS_KEY) === '1') return [FIRST_ENSEMBLE_ID];
-  return stored;
+  return readJson<string[]>(UNLOCKED_KEY, []).filter((id) => id !== PUBLIC_ID && ensembleById(id));
 }
 
 export function unlockEnsemble(id: string) {
@@ -99,30 +93,20 @@ export function ensembleName(id: string): string {
   return names[id] || ensembleById(id)?.defaultName || id;
 }
 
-const ACCESS_DOC = ['config', 'access'] as const;
+// ---- Firestore -------------------------------------------------------------------------------
+//
+//   ensembleCodes/{codeId}              { ensemble }          codeId = SHA-256 of the salted code
+//   members/{uid}/ensembles/{ensemble}  { code: codeId }      this device (anonymous user) is in
+//   ensembles/{ensemble}                { name, codeId }      the ensemble's name and current code
+//
+// The rules (firestore.rules) let a device fetch a code's document only by its id -- so only with
+// the code in hand -- and never list them; join an ensemble only by naming a code document that
+// opens it; and read or change an ensemble's songs, session and details only once it has joined.
+// The salt keeps the ids apart from the old PIN's hash, which every device could read.
 
-interface AccessDoc {
-  pinHash?: string;
-  codeHashes?: Record<string, string>;
-  names?: Record<string, string>;
-}
-
-async function readAccess(): Promise<AccessDoc> {
-  if (!db) throw new Error('Firebase is not configured');
-  const snap = await getDoc(doc(db, ...ACCESS_DOC));
-  return snap.exists() ? (snap.data() as AccessDoc) : {};
-}
-
-function codeHashOf(access: AccessDoc, id: string): string | undefined {
-  return id === FIRST_ENSEMBLE_ID ? access.pinHash : access.codeHashes?.[id];
-}
-
-/** Fetches the ensembles' names (renamed in the app) and remembers them for the next start. */
-export async function refreshEnsembleNames(): Promise<void> {
-  const access = await readAccess();
-  names = { ...(access.names ?? {}) };
-  writeJson(NAMES_KEY, names);
-}
+const CODE_SALT = 'lightscore-ensemble-code:';
+/** A code must be long enough not to be guessed by trying (each try is a request to Firestore). */
+export const MIN_CODE_LENGTH = 8;
 
 async function sha256Hex(text: string): Promise<string> {
   const bytes = new TextEncoder().encode(text);
@@ -132,37 +116,107 @@ async function sha256Hex(text: string): Promise<string> {
     .join('');
 }
 
-/** The ensemble a code opens, or null. Also refreshes the names. */
-export async function ensembleForCode(code: string): Promise<string | null> {
-  const access = await readAccess();
-  names = { ...(access.names ?? {}) };
-  writeJson(NAMES_KEY, names);
-  const hash = await sha256Hex(code.trim());
-  return ENSEMBLES.find((e) => e.id !== PUBLIC_ID && codeHashOf(access, e.id) === hash)?.id ?? null;
+function codeId(code: string): Promise<string> {
+  return sha256Hex(CODE_SALT + code.trim());
 }
 
-/** Whether an ensemble has a code yet. */
-export async function ensembleHasCode(id: string): Promise<boolean> {
-  return !!codeHashOf(await readAccess(), id);
+function firestore() {
+  if (!db) throw new Error('Firebase is not configured');
+  return db;
+}
+
+function memberRef(id: string) {
+  return doc(firestore(), 'members', currentUid(), 'ensembles', id);
+}
+
+/** Forgets an ensemble on this device (its membership is gone, or was never made). */
+export function forgetEnsemble(id: string) {
+  writeJson(UNLOCKED_KEY, unlockedEnsembles().filter((e) => e !== id));
+  if (localStorage.getItem(ACTIVE_KEY) === id) localStorage.removeItem(ACTIVE_KEY);
 }
 
 /**
- * Sets an ensemble's code (stored only as its hash). A code already opening another ensemble is
- * refused -- one code, one folder.
+ * Checks the device's ensembles against its memberships in Firestore, forgetting any it isn't in
+ * (opened before the codes were checked there). True if anything changed. Offline, nothing is
+ * forgotten.
  */
-export async function setEnsembleCode(id: string, code: string): Promise<'ok' | 'taken'> {
-  if (!db) throw new Error('Firebase is not configured');
-  const access = await readAccess();
-  const hash = await sha256Hex(code.trim());
-  if (ENSEMBLES.some((e) => e.id !== id && e.id !== PUBLIC_ID && codeHashOf(access, e.id) === hash)) return 'taken';
-  const field = id === FIRST_ENSEMBLE_ID ? 'pinHash' : `codeHashes.${id}`;
-  await updateDoc(doc(db, ...ACCESS_DOC), { [field]: hash });
+export async function syncMemberships(): Promise<boolean> {
+  let changed = false;
+  for (const id of unlockedEnsembles()) {
+    try {
+      const snap = await getDocFromServer(memberRef(id));
+      if (!snap.exists()) {
+        forgetEnsemble(id);
+        changed = true;
+      }
+    } catch {
+      /* offline or not answered: keep it */
+    }
+  }
+  return changed;
+}
+
+/** Fetches the device's ensembles' names (renamed in the app) and remembers them for the next start. */
+export async function refreshEnsembleNames(): Promise<void> {
+  const next = { ...names };
+  for (const id of unlockedEnsembles()) {
+    try {
+      const snap = await getDoc(doc(firestore(), 'ensembles', id));
+      const name = snap.data()?.name;
+      if (typeof name === 'string' && name) next[id] = name;
+    } catch {
+      /* not readable (yet): keep what we had */
+    }
+  }
+  names = next;
+  writeJson(NAMES_KEY, names);
+}
+
+/** Opens the ensemble a code belongs to: joins it in Firestore and remembers it here. Null: no such code. */
+export async function joinWithCode(code: string): Promise<string | null> {
+  const id = await codeId(code);
+  const snap = await getDoc(doc(firestore(), 'ensembleCodes', id));
+  const ensemble = snap.data()?.ensemble;
+  if (!snap.exists() || typeof ensemble !== 'string' || !ensembleById(ensemble)) return null;
+  await setDoc(memberRef(ensemble), { code: id, joinedAt: serverTimestamp() });
+  unlockEnsemble(ensemble);
+  void refreshEnsembleNames().catch(() => {});
+  return ensemble;
+}
+
+/** Whether an ensemble still waits for its first code -- readable only while nobody guards it yet. */
+export async function ensembleNeedsCode(id: string): Promise<boolean> {
+  try {
+    const snap = await getDoc(doc(firestore(), 'ensembles', id));
+    return !snap.data()?.codeId;
+  } catch {
+    return false; // not ours to read: it has members, and a code
+  }
+}
+
+/**
+ * Sets an ensemble's code: the new code opens it from now on and the old one no longer does
+ * (whoever is in stays in). Whoever sets it joins with it. Refused: a code that is too short, or
+ * one that already opens another ensemble.
+ */
+export async function setEnsembleCode(id: string, code: string): Promise<'ok' | 'short' | 'taken'> {
+  if (code.trim().length < MIN_CODE_LENGTH) return 'short';
+  const fs = firestore();
+  const newId = await codeId(code);
+  const existing = await getDoc(doc(fs, 'ensembleCodes', newId));
+  if (existing.exists() && existing.data()?.ensemble !== id) return 'taken';
+  const ensembleRef = doc(fs, 'ensembles', id);
+  const oldId = (await getDoc(ensembleRef)).data()?.codeId as string | undefined;
+  if (!existing.exists()) await setDoc(doc(fs, 'ensembleCodes', newId), { ensemble: id });
+  await setDoc(memberRef(id), { code: newId, joinedAt: serverTimestamp() });
+  await setDoc(ensembleRef, { codeId: newId }, { merge: true });
+  if (oldId && oldId !== newId) await deleteDoc(doc(fs, 'ensembleCodes', oldId));
+  unlockEnsemble(id);
   return 'ok';
 }
 
 export async function renameEnsemble(id: string, name: string): Promise<void> {
-  if (!db) throw new Error('Firebase is not configured');
-  await updateDoc(doc(db, ...ACCESS_DOC), { [`names.${id}`]: name });
+  await setDoc(doc(firestore(), 'ensembles', id), { name }, { merge: true });
   names = { ...names, [id]: name };
   writeJson(NAMES_KEY, names);
 }
