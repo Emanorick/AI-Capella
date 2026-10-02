@@ -831,6 +831,7 @@ export class PianoRoll {
         else hi = mid;
       }
       const color = this.partColor(part.id);
+      const first = out.length;
       for (let i = lo - 1; i >= Math.max(0, lo - 6); i--) {
         const note = notes[i];
         if (note.startBeat + note.durationBeats <= beat) continue;
@@ -840,12 +841,18 @@ export class PianoRoll {
         if (y + pillH < 0 || y > areaHeight) continue;
         out.push({ x: x + 1, y, w: Math.max(w - 3, 7), h: pillH, color, note });
       }
+      // In the part's own order, as the buffer drew them (drawSoundingNotes relies on it).
+      out.splice(first, out.length - first, ...out.slice(first).reverse());
     }
     return out;
   }
 
   /** Lights up the notes sounding at the playhead (the lantern lights their holes itself) and the syllables being sung. */
   private drawSoundingNotes(ctx: CanvasRenderingContext2D, sounding: Sounding[], rowHeight: number, scale: number) {
+    // As in the buffer: where two sounding notes share a row and their syllables would overlap (two
+    // voices on one pitch, singing different words), only the first one's is lit -- the one the
+    // buffer printed there.
+    const lane = new Map<number, [number, number][]>();
     for (const s of sounding) {
       if (!LANTERN) {
         // Lit gel, glowing in the voice's colour.
@@ -859,7 +866,14 @@ export class PianoRoll {
       if (s.note.lyric) {
         // Same size and weight as the buffer's copy underneath, so it covers it exactly.
         const bmp = this.getLyricBitmap(s.note.lyric, PAPER, lyricFontPx(rowHeight), 550);
-        ctx.drawImage(bmp.canvas, s.x + 1, s.y + s.h + scale, bmp.cssWidth * scale, bmp.cssHeight * scale);
+        const row = Math.round(s.y);
+        const used = lane.get(row) ?? [];
+        const x1 = s.x + 1;
+        const x2 = x1 + bmp.cssWidth * scale;
+        if (used.some(([a, b]) => x1 < b + 3 && a < x2 + 3)) continue;
+        used.push([x1, x2]);
+        lane.set(row, used);
+        ctx.drawImage(bmp.canvas, x1, s.y + s.h + scale, bmp.cssWidth * scale, bmp.cssHeight * scale);
       }
     }
   }

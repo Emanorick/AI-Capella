@@ -1360,7 +1360,15 @@ line), not following each note's own pitch, so a whole lyric line reads level in
 up and down with the melody. Accepted trade-off: an extreme low note (most likely after a large
 negative transpose) can sit below this fixed line, putting its lyric above/near its own notehead
 instead of under it — inherent to "one fixed height per staff" versus an unbounded ledger-line
-range, not fixable by tuning the constant.
+range, not fixable by tuning the constant. **A second lyric line** (`lyricLines`): where two
+voices on one staff sing different words at the same time (one holding "drop" while the other sings
+"Mind-less de-"), the later voice's words go on a line under the first, as an engraver sets them --
+within a phrase (that voice's notes up to a rest) from the first colliding word to the last, whole
+words, so the line doesn't hop in the middle; words around them stay on the first line, and a
+syllable both voices sing at the same moment is printed once. A staff that needs the second line
+anywhere gets the room for it throughout (`staffSpan`), so the staves don't shift while scrolling.
+The piano roll keeps one lane per row: where two voices share a pitch and sing different words, the
+first one's syllable is shown -- and lit -- there, the other's left out.
 
 **Accidental-awareness**: an accidental is only drawn on a note when its alter actually differs
 from what the key signature (or an earlier note of the same letter+octave earlier in the same

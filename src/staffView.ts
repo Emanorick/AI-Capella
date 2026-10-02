@@ -35,6 +35,9 @@ const NOTE_X_OFFSET_PX = 8;
 // reads at one height instead of bouncing with the melody. Accepted trade-off: an extreme low note
 // can sit below this line, putting its lyric near its own notehead.
 const LYRIC_BASELINE_OFFSET_PX = 24;
+// A second lyric line, for a second voice on the staff singing other words at the same time (see
+// lyricLines); the staff below moves down by as much.
+const LYRIC_LINE_STEP_PX = 16;
 // The staves grow to fill the view's height (up to these factors), and whatever height is left
 // spreads out between them -- instead of leaving the bottom of a tall phone screen empty. The
 // time axis grows only by the square root of that factor, so a phone still shows a few beats.
@@ -447,6 +450,71 @@ interface PartLayout {
   clef: ClefType;
   octaveShift: number; // whole octaves added to a note's diatonic index before staff positioning -- see resolveClef
   topY: number; // css px, y of the staff's top line within the content area (before scroll) -- recomputed for visible staves each frame
+  lyricLines: number; // 1, or 2 where two voices on the staff sing different words at once
+}
+
+/** A staff's height with the room under it: lines, lyrics, and the next voice's label. */
+function staffSpan(layout: PartLayout): number {
+  return STAFF_HEIGHT_PX + MIN_STAFF_GAP_PX + (layout.lyricLines - 1) * LYRIC_LINE_STEP_PX;
+}
+
+const voiceNumber = (n: NoteEvent) => Number(n.voice ?? 1) || 1;
+
+/**
+ * Which lyric line each syllable of a staff goes on. Two voices on one staff (tenor 1 and 2) can
+ * sing different words at the same time -- one holding "drop" while the other sings "Mind-less
+ * de-": printed on one line they run into each other. As an engraver does, the second voice's
+ * words then go on a second line under the first -- within a phrase (its notes up to a rest), all
+ * the words from the first that collides to the last, so a line of words doesn't hop between
+ * heights in the middle. Words that only alternate between the
+ * voices stay on one line; a syllable another voice sings with it at the same moment is printed
+ * once. Returns the line per syllable (-1: printed by the other voice) and how many lines there are.
+ */
+function lyricLines(notes: NoteEvent[]): { lines: number; lineOf: Map<NoteEvent, number> } {
+  const lineOf = new Map<NoteEvent, number>();
+  const sung = notes.filter((n) => n.lyric);
+  if (new Set(sung.map(voiceNumber)).size < 2) return { lines: 1, lineOf };
+  const EPS = 1e-6;
+  const end = (n: NoteEvent) => n.startBeat + n.durationBeats;
+  // A syllable of a later voice that meets one of an earlier voice: the same word at the same
+  // moment is a duplicate; other words sounding at the same time collide.
+  const colliding = new Set<NoteEvent>();
+  for (const n of sung) {
+    for (const m of sung) {
+      if (voiceNumber(m) >= voiceNumber(n) || m.startBeat >= end(n) - EPS || n.startBeat >= end(m) - EPS) continue;
+      if (Math.abs(m.startBeat - n.startBeat) < EPS && m.lyric === n.lyric) lineOf.set(n, -1);
+      else colliding.add(n);
+    }
+  }
+  // Phrases: each voice's notes, broken at its rests. A phrase with a collision moves down whole.
+  let lines = 1;
+  const byVoice = new Map<number, NoteEvent[]>();
+  for (const n of notes) byVoice.set(voiceNumber(n), [...(byVoice.get(voiceNumber(n)) ?? []), n]);
+  for (const voiceNotes of byVoice.values()) {
+    let phrase: NoteEvent[] = [];
+    let reach = -Infinity;
+    const close = () => {
+      // From the first colliding word to the last, whole words (syllables joined by hyphens) --
+      // the words around them, alone in the music, stay on the first line.
+      const words = phrase.filter((n) => n.lyric);
+      let first = words.findIndex((n) => colliding.has(n));
+      let last = words.length - 1 - [...words].reverse().findIndex((n) => colliding.has(n));
+      if (first >= 0) {
+        while (first > 0 && words[first - 1].lyricJoin) first--;
+        while (last < words.length - 1 && words[last].lyricJoin) last++;
+        lines = 2;
+        for (const n of words.slice(first, last + 1)) if (lineOf.get(n) !== -1) lineOf.set(n, 1);
+      }
+      phrase = [];
+    };
+    for (const n of voiceNotes) {
+      if (n.startBeat > reach + EPS) close();
+      phrase.push(n);
+      reach = Math.max(reach, end(n));
+    }
+    close();
+  }
+  return { lines, lineOf };
 }
 
 /**
@@ -480,6 +548,7 @@ export class StaffView {
   private scrollY = 0; // css px scrolled down, when the stacked staves don't all fit vertically
   private notesByPart: Map<string, NoteEvent[]>;
   private layouts: PartLayout[];
+  private lyricLineOf = new Map<NoteEvent, number>(); // see lyricLines; absent: the first line
   private hiddenParts = new Set<string>();
   private dimmedParts = new Set<string>();
   private measureByNumber: Map<number, MeasureInfo>;
@@ -530,7 +599,9 @@ export class StaffView {
       const notes = this.notesByPart.get(p.id) ?? [];
       const avgMidi = notes.length ? notes.reduce((sum, n) => sum + n.midi, 0) / notes.length : 60;
       const { clef, octaveShift } = resolveClef(p.clef, avgMidi);
-      return { partId: p.id, clef, octaveShift, topY: 0 };
+      const lyrics = lyricLines(notes);
+      for (const [note, line] of lyrics.lineOf) this.lyricLineOf.set(note, line);
+      return { partId: p.id, clef, octaveShift, topY: 0, lyricLines: lyrics.lines };
     });
     this.updateGutter();
   }
@@ -551,13 +622,14 @@ export class StaffView {
 
   /** Recomputes how far the staves grow to fill the height (see MAX_FILL_SCALE). */
   private updateFill() {
-    const count = this.layouts.filter((l) => !this.hiddenParts.has(l.partId)).length;
+    const shown = this.layouts.filter((l) => !this.hiddenParts.has(l.partId));
+    const count = shown.length;
     if (!count || this.cssHeight <= 0) {
       this.fill = 1;
       this.extraGap = 0;
       return;
     }
-    const natural = STAFF_RULER_HEIGHT_PX + FIRST_STAFF_TOP_PX + count * (STAFF_HEIGHT_PX + MIN_STAFF_GAP_PX) + FILL_BOTTOM_PX;
+    const natural = STAFF_RULER_HEIGHT_PX + FIRST_STAFF_TOP_PX + shown.reduce((sum, l) => sum + staffSpan(l), 0) + FILL_BOTTOM_PX;
     const maxFill = this.cssWidth < MOBILE_BREAKPOINT_PX ? MAX_FILL_SCALE_NARROW : MAX_FILL_SCALE;
     this.fill = clamp(this.cssHeight / natural, 1, maxFill);
     this.extraGap = Math.max(0, (this.cssHeight / this.fill - natural) / count);
@@ -655,14 +727,14 @@ export class StaffView {
       if (this.hiddenParts.has(layout.partId)) continue;
       layout.topY = y;
       out.push(layout);
-      y += STAFF_HEIGHT_PX + MIN_STAFF_GAP_PX + this.extraGap;
+      y += staffSpan(layout) + this.extraGap;
     }
     return out;
   }
 
   private contentHeightPx(): number {
-    const count = this.layouts.filter((l) => !this.hiddenParts.has(l.partId)).length;
-    return FIRST_STAFF_TOP_PX + count * (STAFF_HEIGHT_PX + MIN_STAFF_GAP_PX + this.extraGap);
+    const shown = this.layouts.filter((l) => !this.hiddenParts.has(l.partId));
+    return FIRST_STAFF_TOP_PX + shown.reduce((sum, l) => sum + staffSpan(l) + this.extraGap, 0);
   }
 
   /** Vertical pan, css px -- only does anything once the stacked staves overflow the viewport. */
@@ -1358,12 +1430,13 @@ export class StaffView {
 
     // Lyric, at a fixed height below the staff so a lyric line reads level; paper (not the voice
     // colour) so it stays legible against every voice colour. Skipped for dimmed (ducked) parts.
-    if (note.lyric && !dimmed) {
+    const lyricLine = this.lyricLineOf.get(note) ?? 0;
+    if (note.lyric && !dimmed && lyricLine >= 0) {
       ctx.font = `500 12px ${FONT_TEXT}`;
       ctx.fillStyle = paper(sounding ? 1 : 0.84);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      ctx.fillText(note.lyric, firstX, bottomLineY + LYRIC_BASELINE_OFFSET_PX);
+      ctx.fillText(note.lyric, firstX, bottomLineY + LYRIC_BASELINE_OFFSET_PX + lyricLine * LYRIC_LINE_STEP_PX);
       ctx.textAlign = 'start';
       ctx.textBaseline = 'alphabetic';
       ctx.fillStyle = color;
