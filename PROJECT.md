@@ -125,7 +125,15 @@ freeze the page. A search field appears once there are more than eight songs; fi
 dropped anywhere on the page or picked with **Add arrangement**; each library song's **⋯** menu
 offers Rename and Delete. While the shared library loads, skeleton cards show; if it can't be
 reached, a banner says so with a Retry button instead of silently showing only the sample. On
-phones the grid becomes a list with small covers. Picking a song switches to the **player**; the
+phones the grid becomes a list with small covers. **The order is set by hand** (`reorder.ts`): a
+long press on a card (on a laptop, the mouse button held, 420 ms) lifts it; it follows the pointer
+or finger, the others glide aside around an empty slot, the list scrolls along near its edges, and
+letting go puts it there -- for everyone in the ensemble: the song gets a `sortKey` halfway
+between its new neighbours' places (`songOrder`: `sortKey`, else `importedAt`), one write; only
+when there's no room left between them is the whole list numbered afresh (`saveSongOrder`, one
+batch). Moving the finger before the card lifts scrolls, as before; letting go of a lifted card
+doesn't open it. The bundled samples stay first and don't move; nothing moves in the public
+folder or while searching (the list is only part of the order then). Picking a song switches to the **player**; the
 back button always **stops playback** first — including, in Ensemble mode, for every other
 connected device — so nobody is left with music playing to an empty player.
 

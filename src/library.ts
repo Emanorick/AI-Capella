@@ -10,6 +10,7 @@ import {
   serverTimestamp,
   updateDoc,
   where,
+  writeBatch,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -30,6 +31,8 @@ export interface StoredSong {
   xml: string;
   format: SongFormat;
   importedAt: number;
+  // Where it stands in the repertoire, when someone moved it there by hand (else by importedAt).
+  sortKey?: number;
   // User-renamed voice/part names, keyed by part id -- a side-channel field rather than rewriting
   // the xml/xmlGz blob itself (far less invasive: no need to re-parse/re-serialize MusicXML or
   // mutate a JSON Score just to change a label). Applied client-side after parsing, before the
@@ -67,6 +70,7 @@ function parseSongDoc(id: string, data: Record<string, unknown>): StoredSong {
     // Documents written before MIDI import existed have no format field; they're always MusicXML.
     format: ((data.format as SongFormat | undefined) ?? 'musicxml') as SongFormat,
     importedAt: (data.importedAt as number) ?? 0,
+    sortKey: typeof data.sortKey === 'number' ? data.sortKey : undefined,
     partNameOverrides: data.partNameOverrides as Record<string, string> | undefined,
     savedConfig: data.savedConfig as StoredSong['savedConfig'],
     clefOverrides: data.clefOverrides as StoredSong['clefOverrides'],
@@ -109,11 +113,24 @@ export function subscribeToSongs(
         else cache.set(change.doc.id, parseSongDoc(change.doc.id, change.doc.data()));
       }
       const songs = snapshot.docs.map((d) => cache.get(d.id)).filter((s): s is StoredSong => s != null);
-      songs.sort((a, b) => a.importedAt - b.importedAt);
+      songs.sort((a, b) => songOrder(a) - songOrder(b));
       callback(songs, snapshot.metadata.fromCache);
     },
     onError,
   );
+}
+
+/** A song's place in the repertoire: where it was moved by hand, else when it was added. */
+export function songOrder(song: { importedAt: number; sortKey?: number }): number {
+  return song.sortKey ?? song.importedAt;
+}
+
+/** Moves songs in the repertoire (for everyone in the ensemble): their new places, in one write. */
+export async function saveSongOrder(places: { id: string; sortKey: number }[]): Promise<void> {
+  if (!db || !places.length) return;
+  const batch = writeBatch(db);
+  for (const { id, sortKey } of places) batch.update(doc(db, SONGS_COLLECTION, id), { sortKey });
+  await batch.commit();
 }
 
 /** Returns the new song's id (available immediately from Firestore's optimistic local write). */

@@ -14,7 +14,7 @@ import { StaffView } from './staffView';
 import { OverviewStrip } from './overview';
 import { colorForPart } from './palette';
 import { measureAtBeat, type Score } from './score';
-import { deleteImportedSong, readScoreFile, saveImportedSong, saveSongConfig, saveSongSections, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong, type VoiceClef } from './library';
+import { deleteImportedSong, readScoreFile, saveSongOrder, songOrder, saveImportedSong, saveSongConfig, saveSongSections, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong, type VoiceClef } from './library';
 import { ensureSignedIn, isFirebaseConfigured } from './firebase';
 import { animateRibbons, coverDataFromScore, drawCover, drawMark, prepareCanvas, type CoverData } from './artwork';
 import { icon } from './icons';
@@ -28,6 +28,7 @@ import { animateStaff } from './titleStaff';
 import { animateStage } from './titleStage';
 import { notePixelSizes, observePixelSize } from './pixels';
 import { createPowerHint } from './powerHint';
+import { attachReorder } from './reorder';
 import { INTRO_ON, introDue, introRunning, startIntro, stopIntro } from './intro';
 import { canSwing, swingMap, swingScore } from './swing';
 import { loadScriptFont } from './goldInk';
@@ -68,6 +69,7 @@ interface SongEntry {
   clefOverrides?: StoredSong['clefOverrides'];
   removedParts?: string[];
   swing?: boolean;
+  order?: number; // imported songs: their place in the repertoire (songOrder)
 }
 
 // import.meta.env.BASE_URL (not a bare "/...") since the app is served from a subpath on
@@ -1059,6 +1061,11 @@ function songCard(song: SongEntry): HTMLLIElement {
 }
 
 function renderSongList() {
+  // Not under a card being moved: once it's put down.
+  if (reorder.dragging()) {
+    songListStale = true;
+    return;
+  }
   const songs = allSongs();
   const q = searchInput.value.trim().toLowerCase();
   searchWrapEl.hidden = songs.length <= SEARCH_THRESHOLD && !q;
@@ -1245,11 +1252,44 @@ async function importFiles(files: FileList | File[]) {
   if (lastImported) void selectSong(lastImported);
 }
 
+// The repertoire's order, set by hand (reorder.ts): a long press lifts a card, letting go puts it
+// down -- for everyone in the ensemble. The bundled samples stay first; while searching, the list
+// is only part of the order, so nothing moves then.
+let songListStale = false;
+const reorder = attachReorder(songGridEl, document.querySelector<HTMLElement>('.lib-scroll')!, {
+  movable: (card) => !inPublicFolder() && libraryState === 'ready' && !searchInput.value.trim() && !!importedSongs.find((s) => s.id === card.dataset.id),
+  onDrop: (ids, movedId) => {
+    const at = (id: string | undefined) => importedSongs.find((s) => s.id === id)?.order ?? 0;
+    const i = ids.indexOf(movedId);
+    const prev = ids[i - 1];
+    const next = ids[i + 1];
+    let places: { id: string; sortKey: number }[];
+    const between = prev && next ? (at(prev) + at(next)) / 2 : prev ? at(prev) + 1000 : at(next) - 1000;
+    if (prev && next && !(at(prev) < between && between < at(next))) {
+      // No room left between them: number the whole list afresh.
+      const base = at(ids[0]);
+      places = ids.map((id, j) => ({ id, sortKey: base + j * 1000 }));
+    } else places = [{ id: movedId, sortKey: between }];
+    for (const { id, sortKey } of places) {
+      const song = importedSongs.find((s) => s.id === id);
+      if (song) song.order = sortKey;
+    }
+    importedSongs.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    saveSongOrder(places).catch((err) => toast(t('moveFailed', { msg: errorText(err) }), 'error'));
+  },
+  onEnd: () => {
+    if (songListStale) {
+      songListStale = false;
+      renderSongList();
+    }
+  },
+});
+
 // Repertoire cards tilt a little toward the pointer, with a spot of light following it -- only
 // with a real mouse (not touch) and not when the system asks for reduced motion.
 const tiltQuery = window.matchMedia('(hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference)');
 songGridEl.addEventListener('pointermove', (e) => {
-  if (!tiltQuery.matches) return;
+  if (!tiltQuery.matches || reorder.dragging()) return;
   const card = (e.target as HTMLElement).closest<HTMLElement>('.song-card:not(.skeleton)');
   if (!card) return;
   const r = card.getBoundingClientRect();
@@ -3400,6 +3440,7 @@ async function runBootstrap() {
           clefOverrides: s.clefOverrides,
           removedParts: s.removedParts,
           swing: s.swing,
+          order: songOrder(s),
         }));
         renderSongList();
         // Clef changes and removed voices from another device apply to the open song too (once
