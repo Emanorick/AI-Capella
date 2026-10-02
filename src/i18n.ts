@@ -5,6 +5,11 @@ const LANG_KEY = 'ai-capella-lang';
 
 const en = {
   publicEnsemble: 'Public',
+  powerHintTitle: 'Moving text hard to read?',
+  powerHintIos: 'Your device is showing only 30 frames a second right now – usually because Low Power Mode is on (Settings → Battery). Moving lyrics are then harder to read.',
+  powerHintOther: 'Your browser is showing only 30 frames a second right now – usually because of an energy saver (in the browser or the system, often on battery). Moving lyrics are then harder to read.',
+  powerHintOk: 'Got it',
+  powerHintNever: "Don't show again",
   swingItem: 'Swing (eighths long–short)',
   swingOn: 'Plays with swing',
   swingOff: 'Plays straight',
@@ -238,6 +243,11 @@ const en = {
 
 const de: Record<keyof typeof en, string> = {
   publicEnsemble: 'Öffentlich',
+  powerHintTitle: 'Bewegter Text schwer lesbar?',
+  powerHintIos: 'Dein Gerät zeigt gerade nur 30 Bilder pro Sekunde – meist, weil der Stromsparmodus an ist (Einstellungen → Batterie). Bewegter Text ist dann schwerer zu lesen.',
+  powerHintOther: 'Dein Browser zeigt gerade nur 30 Bilder pro Sekunde – meist wegen eines Energiesparmodus (im Browser oder im System, oft im Akkubetrieb). Bewegter Text ist dann schwerer zu lesen.',
+  powerHintOk: 'Verstanden',
+  powerHintNever: 'Nicht mehr zeigen',
   swingItem: 'Swing (Achtel lang–kurz)',
   swingOn: 'Spielt mit Swing',
   swingOff: 'Spielt gerade',

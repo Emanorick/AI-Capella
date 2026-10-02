@@ -3341,3 +3341,51 @@ body:has(#app.mode-landing)::after {
   font: 500 12px/1.3 ui-monospace, monospace;
   pointer-events: none;
 }
+
+/* The hint when an energy saver caps the frames at 30 a second (powerHint.ts): a note on paper,
+   where the toasts appear, that stays until it's answered. */
+.power-hint {
+  position: fixed;
+  left: 50%;
+  bottom: calc(96px + var(--safe-b));
+  z-index: 1100;
+  width: min(440px, calc(100vw - 32px));
+  padding: 14px 16px 10px;
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--ink-0);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, 16px);
+  opacity: 0;
+  transition: opacity var(--t-med), transform var(--t-med) var(--ease);
+}
+.power-hint.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.power-hint b {
+  display: block;
+  font-size: 15px;
+}
+.power-hint p {
+  margin: 4px 0 8px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.power-hint-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+.power-hint .link-btn {
+  color: rgb(20 18 28 / 0.6);
+}
+.power-hint .link-btn:hover {
+  color: var(--ink-0);
+}
+@media (max-width: 899px) {
+  .power-hint {
+    bottom: calc(150px + var(--safe-b));
+  }
+}

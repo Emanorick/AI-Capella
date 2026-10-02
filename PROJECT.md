@@ -778,6 +778,15 @@ caps pages at 30 frames per second).
 overview's canvases get exactly the device-pixel size they are shown at, so they aren't resampled
 to fit at a fractional pixel ratio (a browser zoomed to 90% on a Retina screen is 1.8x).
 
+**A hint when an energy saver caps the frames** (`powerHint.ts`). An iPhone in Low Power Mode, or
+a browser's energy saver on battery, caps pages at 30 frames a second -- measured on a MacBook in
+Brave: 30 on battery, 120 on the charger, drawing a frame taking about a millisecond either way --
+and moving lyrics smear. A page can't ask whether such a mode is on, but it sees the effect: while
+playing, frames steadily ~33 ms apart (median and lower quartile) while drawing one stays quick.
+After three seconds of that a note on paper says what is likely behind it (Low Power Mode on an
+iPhone or iPad, an energy saver elsewhere): once per visit, and never again after *Nicht mehr
+zeigen*.
+
 **Pixel-snapped blitting.** Even a nominally 1:1-scale `drawImage` blurs slightly if its
 destination lands on a fractional device pixel — which, mid-playback, it does essentially
 every frame, since the scroll offset follows continuous audio time rather than discrete pixel

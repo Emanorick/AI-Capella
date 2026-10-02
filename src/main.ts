@@ -27,6 +27,7 @@ import { lightScoreName, type TitleName } from './lightName';
 import { animateStaff } from './titleStaff';
 import { animateStage } from './titleStage';
 import { notePixelSizes, observePixelSize } from './pixels';
+import { createPowerHint } from './powerHint';
 import { canSwing, swingMap, swingScore } from './swing';
 import { loadScriptFont } from './goldInk';
 import { closeOverlay, confirmDialog, isNarrow, openMenu, openPopover, openSheet, promptDialog, toast } from './ui';
@@ -3148,6 +3149,9 @@ const fpsProbe = new URLSearchParams(location.search).has('fps')
     })()
   : null;
 
+// A hint when an energy saver caps the frames at 30 a second (powerHint.ts).
+const powerHint = createPowerHint();
+
 let frameLag = 0; // ms from a frame's timestamp to its drawing, smoothed
 function renderLoop(frameMs: number) {
   if (!audioEngine || !pianoRoll || !currentScore || !audioEngine.isPlaying()) {
@@ -3164,7 +3168,9 @@ function renderLoop(frameMs: number) {
   const t0 = performance.now();
   renderActiveView(shown, beat);
   updatePositionDisplay(shown);
-  fpsProbe?.(frameMs, performance.now() - t0);
+  const drawMs = performance.now() - t0;
+  fpsProbe?.(frameMs, drawMs);
+  powerHint(frameMs, drawMs);
   if (import.meta.env.DEV) frameLog?.push({ t: t0, beat: shown, ms: performance.now() - t0, heard: audioEngine.getCurrentBeat() + viewOffsetBeats + glideResidual(), ...(pianoRoll?.debugInfo() ?? {}) });
   rafId = requestAnimationFrame(renderLoop);
 }
