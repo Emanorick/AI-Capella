@@ -451,7 +451,13 @@ export class PianoRoll {
       const shown = current ? { hi: current.top, lo: current.top - area / current.row } : null;
       const fits = shown && range.lo >= shown.lo + 0.3 && range.hi + 1 <= shown.hi - 0.3;
       const tooWide = current && target.row > current.row * 1.35;
-      if (!current || !fits || tooWide) {
+      // A range wider than the screen holds even at the smallest rows never "fits": framed as well
+      // as it can be, it stays put while the range drifts a little -- rather than starting a new
+      // glide every frame, which never arrived (each restart eased in from where the last began),
+      // left the roll stretched and its text soft.
+      const overfull = range.hi - range.lo + 1 > area / target.row - 0.6;
+      const near = current && Math.abs(target.row - current.row) < 0.5 && Math.abs(target.top - current.top) < 2;
+      if (!current || ((!fits || tooWide) && !(overfull && near))) {
         if (!this.fitView) {
           this.fitView = target;
         } else {
@@ -487,8 +493,8 @@ export class PianoRoll {
   }
 
   /** For the development frame log: the blit's vertical scale and how often the buffer was repainted. */
-  debugInfo(): { scale: number; rebuilds: number; swaps: number; drops: number; next: string; bufW: number; bufH: number } {
-    return { scale: this.viewScale, rebuilds: this.rebuilds, swaps: this.swaps, drops: this.drops, next: this.next ? `${this.next.done}/${this.next.slices}` : '-', bufW: this.contentBuffer?.width ?? 0, bufH: this.contentBuffer?.height ?? 0 };
+  debugInfo(): { scale: number; row: number; fitRow?: number; rebuilds: number; swaps: number; drops: number; next: string; bufW: number; bufH: number } {
+    return { scale: this.viewScale, row: this.rowHeightPx, fitRow: this.fitView?.row, rebuilds: this.rebuilds, swaps: this.swaps, drops: this.drops, next: this.next ? `${this.next.done}/${this.next.slices}` : '-', bufW: this.contentBuffer?.width ?? 0, bufH: this.contentBuffer?.height ?? 0 };
   }
 
   setLoopRegion(region: LoopRegion | null) {
@@ -869,11 +875,12 @@ export class PianoRoll {
         const row = Math.round(s.y);
         const used = lane.get(row) ?? [];
         const x1 = s.x + 1;
-        const x2 = x1 + bmp.cssWidth * scale;
+        const x2 = x1 + bmp.cssWidth;
         if (used.some(([a, b]) => x1 < b + 3 && a < x2 + 3)) continue;
         used.push([x1, x2]);
         lane.set(row, used);
-        ctx.drawImage(bmp.canvas, x1, s.y + s.h + scale, bmp.cssWidth * scale, bmp.cssHeight * scale);
+        // Scaled as the buffer under it is: only in height (during a follow-the-music glide).
+        ctx.drawImage(bmp.canvas, x1, s.y + s.h + scale, bmp.cssWidth, bmp.cssHeight * scale);
       }
     }
   }

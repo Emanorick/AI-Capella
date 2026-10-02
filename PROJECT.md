@@ -135,7 +135,11 @@ connected device — so nobody is left with music playing to an empty player.
   than 11 rows or taller than 56 px, and glide (420 ms) to a new range only when the music leaves
   the current one or it has become much wider than needed. The content buffer is repainted once at
   the new row height and scaled during the glide, so a zoom change doesn't cost a repaint per
-  frame. Scrolling by hand takes over until the next Play. **Alt + wheel** (or Alt + trackpad
+  frame. A range wider than the screen holds even at the smallest rows is framed as well as it
+  can be and left there while it drifts a little (`overfull`): it used to start a new glide every
+  frame, which never arrived -- the roll stayed stretched (e.g. 1.34x in an SSAATTBB piece, 1.3x in
+  Space Oddity) and its text soft. The lit syllables are scaled like the buffer under them (in
+  height only), so they cover their copy exactly. Scrolling by hand takes over until the next Play. **Alt + wheel** (or Alt + trackpad
   pinch) sets the height by hand around the pointer (`zoomRows`, 32-64 px rows), switching
   follow-the-music off but starting from its current framing; on a phone a two-finger pinch with
   the fingers one above the other does the same (side by side it zooms time, as before). Notes are
