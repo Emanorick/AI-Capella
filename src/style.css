@@ -3389,3 +3389,134 @@ body:has(#app.mode-landing)::after {
     bottom: calc(150px + var(--safe-b));
   }
 }
+
+/* The introduction (intro.ts): the page goes dark, and a light moves from control to control with a
+   small paper card beside it. The light is the reading line's warm gold, falling from above. */
+.intro {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+}
+.intro-block {
+  position: absolute;
+  inset: 0;
+}
+.intro-spot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 14px;
+  pointer-events: none;
+  background: radial-gradient(120% 90% at 50% 0%, rgb(255 236 196 / 0.09), rgb(255 236 196 / 0) 70%);
+  box-shadow:
+    0 0 0 1.5px rgb(214 176 98 / 0.6),
+    0 0 26px 4px rgb(214 176 98 / 0.26),
+    0 0 0 200vmax rgb(9 7 13 / 0.76);
+  opacity: 0;
+  transition:
+    transform 0.55s var(--ease),
+    width 0.55s var(--ease),
+    height 0.55s var(--ease),
+    opacity 0.4s ease;
+}
+.intro.open .intro-spot {
+  opacity: 1;
+}
+.intro-card {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: min(360px, calc(100vw - 20px));
+  padding: 14px 18px 12px;
+  border-radius: 14px;
+  background: var(--paper);
+  color: var(--ink-0);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 0.55);
+  opacity: 0;
+  transition: opacity 0.17s ease;
+}
+.intro-card.shown {
+  opacity: 1;
+  transition-duration: 0.3s;
+}
+.intro-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.intro-count {
+  font: 600 12px/1 var(--f-mono);
+  letter-spacing: 0.08em;
+  color: rgb(21 17 26 / 0.5);
+}
+.intro-dots {
+  display: flex;
+  gap: 5px;
+}
+.intro-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(21 17 26 / 0.18);
+  transition: background 0.3s, transform 0.3s;
+}
+.intro-dots i.on {
+  background: #a9823c;
+  transform: scale(1.25);
+}
+.intro-card h2 {
+  margin: 8px 0 4px;
+  font: 500 22px/1.2 var(--f-display);
+}
+.intro-card p {
+  margin: 0 0 12px;
+  font-size: 14.5px;
+  line-height: 1.45;
+}
+.intro-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+}
+.intro-asides {
+  display: flex;
+  margin-left: -6px;
+}
+.intro-card .link-btn {
+  color: rgb(21 17 26 / 0.55);
+}
+.intro-card .link-btn:hover {
+  color: var(--ink-0);
+}
+.intro-moves {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.intro-card .btn {
+  min-height: 38px;
+  padding: 0 16px;
+  background: transparent;
+  border-color: rgb(21 17 26 / 0.22);
+  color: var(--ink-0);
+  box-shadow: none;
+}
+.intro-card .btn.primary {
+  background: var(--ink-1);
+  border-color: var(--ink-1);
+  color: var(--paper);
+}
+.intro-card .btn.primary:hover {
+  background: var(--ink-3);
+}
+.intro-card .btn[hidden] {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .intro-spot {
+    transition: opacity 0.2s;
+  }
+}

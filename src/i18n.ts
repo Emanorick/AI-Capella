@@ -239,6 +239,12 @@ const en = {
   followMusicHint: "Height follows the music (F) · Alt + mouse wheel: set the height by hand",
   followOn: "Height follows the music",
   followOff: "Height stays as set",
+  introMenu: 'Introduction',
+  introSkip: 'Skip',
+  introNever: "Don't show again",
+  introBack: 'Back',
+  introNext: 'Next',
+  introDone: "Let's go",
 };
 
 const de: Record<keyof typeof en, string> = {
@@ -477,6 +483,12 @@ const de: Record<keyof typeof en, string> = {
   followMusicHint: "Höhe folgt der Musik (F) · Alt + Mausrad: Höhe von Hand",
   followOn: "Höhe folgt der Musik",
   followOff: "Höhe bleibt wie eingestellt",
+  introMenu: 'Einführung',
+  introSkip: 'Überspringen',
+  introNever: 'Nicht mehr zeigen',
+  introBack: 'Zurück',
+  introNext: 'Weiter',
+  introDone: 'Los geht’s',
 };
 
 export type MessageKey = keyof typeof en;

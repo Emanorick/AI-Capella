@@ -485,6 +485,21 @@ layer (strength between "subtle" and "balanced" of its design draft):
   and each lit note are drawn once into their own layers (`.stage-layer`) and only faded; per
   frame only the dust is drawn. The cone is one radial and one conic gradient -- many faint
   layers added together round off differently per colour channel and tint it.
+- **Draft: the introduction (`?intro=an`, `intro.ts`).** A short tour for someone new: the page
+  goes dark and a light -- the reading line's warm gold, falling from above -- moves from control
+  to control, with a small paper card beside it (step count and dots, title, one or two sentences,
+  *Zurück* / *Weiter*, *Überspringen*, *Nicht mehr zeigen*). Two tours: the repertoire (the
+  ensemble switch, a piece, adding pieces, alone or together, the menu) and the player (the music
+  as light, play, roll or sheet, the voices, the whole piece, practice switches, tempo and key, the
+  mode badge, the menu). Each starts by itself the first time its screen opens and settles (its
+  content there, no dialog open, nothing playing, not in the sing-along view); finished, it doesn't
+  come again; skipped, it comes again next visit; *Nicht mehr zeigen* ends both for good. The ⋯
+  menus show it again (*Einführung*). Steps name their controls by selector, with another for a
+  phone where it differs (the voice chips, the line opening tempo and key); a step whose control
+  isn't on screen is left out, so one tour fits every screen and folder. The card sits below,
+  above, beside or -- for the music itself -- inside the light, wherever it fits. While it shows,
+  the page underneath doesn't react; →/Enter, ← and Esc step through it, and the player's own keys
+  (space, arrows, L, M) are held back. Opening the app with `?intro=an` starts the tours afresh.
 - **Piano roll as a lit paper roll ("lantern").** `NOTE_STYLE` in `pianoRoll.ts`: part of the
   paper design (Samt & Glas uses the gel notes); any device can also pick it with `?roll=lantern`
   / `?roll=gel`. The roll is dark paper (with fibres, `theme.ts paperGrain`) with a round hole per

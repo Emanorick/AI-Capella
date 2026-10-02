@@ -28,6 +28,7 @@ import { animateStaff } from './titleStaff';
 import { animateStage } from './titleStage';
 import { notePixelSizes, observePixelSize } from './pixels';
 import { createPowerHint } from './powerHint';
+import { INTRO_ON, introDue, introRunning, startIntro, stopIntro } from './intro';
 import { canSwing, swingMap, swingScore } from './swing';
 import { loadScriptFont } from './goldInk';
 import { closeOverlay, confirmDialog, isNarrow, openMenu, openPopover, openSheet, promptDialog, toast } from './ui';
@@ -386,7 +387,9 @@ function setViewMode(mode: 'landing' | 'library' | 'player') {
     stopLandingRibbons();
     stopLandingRibbons = null;
   }
+  stopIntro();
   if (mode === 'library') {
+    offerIntro('library');
     requestAnimationFrame(drawAllCovers);
     // The header's mark had no size while the title screen was showing.
     requestAnimationFrame(drawMarks);
@@ -847,8 +850,34 @@ function languageItems() {
   ];
 }
 document.querySelector<HTMLButtonElement>('#lib-menu-btn')!.addEventListener('click', (e) => {
-  openMenu(e.currentTarget as HTMLElement, languageItems(), t('language'));
+  openMenu(e.currentTarget as HTMLElement, [...languageItems(), ...introItems('library')], t('language'));
 });
+
+/** The introduction, to see again (intro.ts) -- while it's a draft, only where it's switched on. */
+function introItems(tour: 'library' | 'player') {
+  return INTRO_ON ? [{ label: t('introMenu'), icon: 'help' as const, onSelect: () => window.setTimeout(() => startIntro(tour), 250) }] : [];
+}
+
+/**
+ * Starts a screen's tour the first time it opens, once the screen has settled: its content in
+ * place, no dialog or menu open, nothing playing, and not in the sing-along view.
+ */
+function offerIntro(tour: 'library' | 'player') {
+  if (!introDue(tour)) return;
+  const until = performance.now() + 15000;
+  const check = () => {
+    const screen = tour === 'library' ? 'mode-library' : 'mode-player';
+    if (!app.classList.contains(screen) || performance.now() > until || introRunning() || !introDue(tour)) return;
+    const ready =
+      !document.querySelector('.overlay') &&
+      !audioEngine?.isPlaying() &&
+      !app.classList.contains('sing-along') &&
+      (tour === 'player' ? !!currentScore : !!document.querySelector('#song-grid .song-card:not(.skeleton)'));
+    if (ready) startIntro(tour);
+    else window.setTimeout(check, 400);
+  };
+  window.setTimeout(check, 900);
+}
 
 // Brand marks (static) -- drawn once they have a layout size.
 function drawMarks() {
@@ -1392,6 +1421,7 @@ async function loadSongLocally(song: SongEntry) {
   applyMixToViews();
   renderSections();
   setActiveView(activeView);
+  offerIntro('player');
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2464,7 +2494,7 @@ function openPlayerMenu(anchor: HTMLElement) {
     const on = swingChosen(currentSong);
     items.push({ label: t('swingItem'), icon: 'quarter', checked: on, onSelect: () => void setSwing(!on) });
   }
-  items.push({ label: t('lightOffset'), icon: 'metronome', onSelect: () => openLightOffsetSheet(anchor) }, ...languageItems());
+  items.push({ label: t('lightOffset'), icon: 'metronome', onSelect: () => openLightOffsetSheet(anchor) }, ...languageItems(), ...introItems('player'));
   openMenu(anchor, items, t('menu'));
 }
 
