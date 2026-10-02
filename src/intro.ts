@@ -68,138 +68,129 @@ interface Step {
   text: Text;
   /** On a phone (narrow screen), when it says something else there. */
   phone?: Text;
+  phoneTitle?: Text;
 }
 
+// Written as a coach would say it: one thing per step, what you can do and what it brings you,
+// beginning with the doing ("Tippe", "Zieh"), in a sentence or two. Shortcuts and the finer points
+// stay in the controls' own tooltips.
 const TOURS: Record<TourId, Step[]> = {
   library: [
     {
       at: ['.ens-switch'],
-      title: { de: 'Euer Repertoire', en: 'Your repertoire' },
+      title: { de: 'Dein Ensemble', en: 'Your ensemble' },
       text: {
-        de: 'Hier liegen die Stücke deines Ensembles. Bist du in mehreren, wechselst du hier – oder öffnest mit einem Code ein weiteres.',
-        en: "Your ensemble's pieces live here. Belong to more than one? Switch here – or open another with its code.",
+        de: 'Hier sind die Stücke deines Chors. Mit einem Code öffnest du ein weiteres Ensemble.',
+        en: "Here are your choir's pieces. Open another ensemble with its code.",
       },
     },
     {
       at: ['#song-grid .song-card:not(.skeleton)'],
-      title: { de: 'Ein Stück öffnen', en: 'Open a piece' },
-      text: { de: 'Tippe ein Stück an, um es zu öffnen – zum Hören, Mitlesen und Üben.', en: 'Tap a piece to open it – to listen, read along and practise.' },
+      title: { de: 'Stück öffnen', en: 'Open a piece' },
+      text: { de: 'Klick ein Stück an, um zu üben.', en: 'Click a piece to start practising.' },
+      phone: { de: 'Tippe ein Stück an, um zu üben.', en: 'Tap a piece to start practising.' },
     },
     {
       at: ['#import-btn'],
-      title: { de: 'Neue Stücke', en: 'New pieces' },
+      title: { de: 'Stück hinzufügen', en: 'Add a piece' },
       text: {
-        de: 'Füge MusicXML-, MXL- oder MIDI-Dateien hinzu – am Laptop auch einfach ins Fenster ziehen. Sie stehen dann allen im Ensemble zur Verfügung.',
-        en: 'Add MusicXML, MXL or MIDI files – on a laptop, just drop them onto the window. Everyone in the ensemble gets them.',
+        de: 'Lade MusicXML oder MIDI hoch – dein ganzes Ensemble hat es sofort.',
+        en: 'Upload MusicXML or MIDI – your whole ensemble gets it at once.',
       },
     },
     {
       at: ['#mode-seg'],
-      title: { de: 'Allein oder gemeinsam', en: 'Alone or together' },
+      title: { de: 'Gemeinsam proben', en: 'Rehearse together' },
       text: {
-        de: 'Allein übst du für dich. Gemeinsam seid ihr in einer Probe verbunden: Wer leitet, startet und stoppt die Musik auf allen Geräten.',
-        en: 'Alone, you practise on your own. Together, you are joined in one rehearsal: whoever leads starts and stops the music on every device.',
+        de: 'Wähle »Gemeinsam«: Wer leitet, startet die Musik auf allen Geräten.',
+        en: 'Choose “Together”: whoever leads starts the music on every device.',
       },
-    },
-    {
-      at: ['#lib-menu-btn'],
-      title: { de: 'Menü', en: 'Menu' },
-      text: { de: 'Hier wählst du die Sprache – und findest diese Einführung jederzeit wieder.', en: 'Choose the language here – and find this introduction again any time.' },
     },
   ],
   player: [
     {
       at: ['#stage'],
-      title: { de: 'Die Musik als Licht', en: 'The music as light' },
+      title: { de: 'Die Musik leuchtet', en: 'The music lights up' },
       text: {
-        de: 'Jede Stimme hat ihre Farbe, der Text steht darunter. Was gerade erklingt, leuchtet an der Leselinie auf. Ziehen verschiebt die Ansicht, ein Klick in die Taktleiste oben setzt den Startpunkt – dort ziehen markiert eine Wiederholung.',
-        en: 'Each voice has its colour, with the lyrics beneath. What sounds right now lights up at the reading line. Drag to move the view; click the bar ruler at the top to set the start – drag there to mark a loop.',
+        de: 'Jede Stimme hat ihre Farbe, was gerade klingt, leuchtet auf. Klick oben in die Taktleiste, um dort zu starten.',
+        en: 'Each voice has its colour; what sounds now lights up. Click the bar ruler at the top to start there.',
       },
       phone: {
-        de: 'Jede Stimme hat ihre Farbe, der Text steht darunter. Was gerade erklingt, leuchtet an der Leselinie auf. Wischen verschiebt die Ansicht, zwei Finger zoomen. Tippe in die Taktleiste oben, um dort zu starten.',
-        en: 'Each voice has its colour, with the lyrics beneath. What sounds right now lights up at the reading line. Swipe to move the view, pinch to zoom. Tap the bar ruler at the top to start there.',
+        de: 'Jede Stimme hat ihre Farbe, was gerade klingt, leuchtet auf. Tippe oben in die Taktleiste, um dort zu starten.',
+        en: 'Each voice has its colour; what sounds now lights up. Tap the bar ruler at the top to start there.',
       },
     },
     {
       at: ['.play-btn'],
       title: { de: 'Abspielen', en: 'Play' },
-      text: {
-        de: 'Start und Pause – auch mit der Leertaste. Die Pfeile daneben springen taktweise (gedrückt halten geht schneller), ■ führt zurück zum Startpunkt.',
-        en: 'Play and pause – the space bar does it too. The arrows beside it step bar by bar (hold for faster); ■ goes back to the start point.',
-      },
-      phone: {
-        de: 'Start und Pause. Die Pfeile daneben springen taktweise (gedrückt halten geht schneller), ■ führt zurück zum Startpunkt.',
-        en: 'Play and pause. The arrows beside it step bar by bar (hold for faster); ■ goes back to the start point.',
-      },
+      text: { de: 'Starte und pausiere hier – oder mit der Leertaste.', en: 'Start and pause here – or with the space bar.' },
+      phone: { de: 'Starte und pausiere hier. Die Pfeile springen einen Takt weiter.', en: 'Start and pause here. The arrows move a bar at a time.' },
     },
     {
       at: ['#view-seg'],
-      title: { de: 'Klavierrolle oder Noten', en: 'Piano roll or sheet music' },
+      title: { de: 'Noten oder Klavierrolle', en: 'Sheet music or piano roll' },
       text: {
-        de: 'Die Klavierrolle zeigt Tonhöhe und Länge als Lichtbalken, die Notenansicht das gewohnte Notenbild. Beide leuchten mit.',
-        en: 'The piano roll shows pitch and length as bars of light, the sheet view the usual notation. Both light up as the music plays.',
+        de: 'Wechsle zwischen Notenbild und Lichtbalken – beide leuchten mit.',
+        en: 'Switch between notation and bars of light – both light up as you go.',
       },
     },
     {
       at: ['.voices-panel', '#voice-chips'],
-      title: { de: 'Stimmen', en: 'Voices' },
+      title: { de: 'Deine Stimme hören', en: 'Hear your voice' },
       text: {
-        de: 'Ein Klick auf den Namen spielt nur diese Stimme (nochmal: alle). M schaltet stumm, S hebt eine Stimme hervor – die anderen werden leiser; wie leise, stellst du unten ein.',
-        en: 'Click a name to hear only that voice (again: all). M mutes, S brings a voice forward – the others get quieter; how quiet, you set below.',
+        de: 'Klick auf deine Stimme, um nur sie zu hören. Mit S bleiben die anderen leise dabei.',
+        en: 'Click your voice to hear only it. With S, the others stay in, quietly.',
       },
       phone: {
-        de: 'Tippe eine Stimme an, um nur sie zu hören (nochmal: alle). Gedrückt halten – oder der Regler rechts – öffnet das Mischpult mit Stumm und Solo.',
-        en: 'Tap a voice to hear only it (again: all). Hold it – or the sliders on the right – for the mixer with mute and solo.',
+        de: 'Tippe deine Stimme an, um nur sie zu hören. Halte sie gedrückt für mehr.',
+        en: 'Tap your voice to hear only it. Hold it for more.',
       },
     },
     {
       at: ['#overview-wrap'],
-      title: { de: 'Das ganze Stück', en: 'The whole piece' },
+      title: { de: 'Eine Stelle üben', en: 'Practise a passage' },
       text: {
-        de: 'Hier liegt das ganze Stück im Überblick. Klicken springt an eine Stelle, Ziehen markiert einen Teil zum Wiederholen. Die Buchstaben sind die Abschnitte.',
-        en: 'The whole piece at a glance. Click to jump there; drag to mark a part to loop. The letters are its sections.',
-      },
-      phone: {
-        de: 'Hier liegt das ganze Stück im Überblick. Tippen springt an eine Stelle, Ziehen markiert einen Teil zum Wiederholen.',
-        en: 'The whole piece at a glance. Tap to jump there; drag to mark a part to loop.',
+        de: 'Zieh hier über eine Stelle – sie wiederholt sich, bis sie sitzt.',
+        en: 'Drag across a passage here – it repeats until you have it.',
       },
     },
     {
-      // Laptop: the three practice switches; phone: the line that opens tempo, key and the rest.
-      at: ['.t-center .toggle'],
+      // Laptop: the practice switches; phone: the line that opens tempo, key and the rest.
+      at: ['.t-center .t-metro'],
       atPhone: ['.info-row'],
-      title: { de: 'Üben', en: 'Practice' },
+      title: { de: 'Mitzählen und Anfangstöne', en: 'Count-in and starting notes' },
+      phoneTitle: { de: 'Tempo und Tonart', en: 'Tempo and key' },
       text: {
-        de: 'Wiederholen (L) spielt den markierten Teil in Schleife, das Metronom (M) zählt mit, und die Stimmgabel singt vor jedem Start die Anfangstöne aller Stimmen.',
-        en: 'Loop (L) repeats the marked part, the metronome (M) counts along, and the tuning fork sings every voice’s first note before each start.',
+        de: 'Das Metronom zählt mit, die Stimmgabel singt vor jedem Start eure Anfangstöne.',
+        en: 'The metronome counts along; the tuning fork sings your starting notes before each start.',
       },
       phone: {
-        de: 'Tippe hier für Tempo, Tonart, Sprung zu einem Takt, Abschnitte, Metronom und Anfangstöne. Wiederholen findest du unten rechts.',
-        en: 'Tap here for tempo, key, going to a bar, sections, metronome and starting notes. Loop is at the bottom right.',
+        de: 'Tippe hier, um langsamer zu üben, die Tonart anzupassen oder mitzählen zu lassen.',
+        en: 'Tap here to practise slower, change the key or turn on the metronome.',
       },
     },
     {
       at: ['.t-right'],
       title: { de: 'Tempo und Tonart', en: 'Tempo and key' },
       text: {
-        de: 'Langsamer üben oder die Tonart verschieben, bis sie zu euren Stimmen passt. Ein Klick auf das Tempo öffnet Eingabe, Takt-Sprung und Abschnitte.',
-        en: 'Practise slower, or move the key until it suits your voices. Click the tempo for typing it, going to a bar and sections.',
+        de: 'Übe langsamer oder verschiebe die Tonart, bis sie zu euch passt.',
+        en: 'Practise slower, or move the key until it suits you.',
       },
     },
     {
       at: ['#mode-badge'],
-      title: { de: 'Allein oder gemeinsam', en: 'Alone or together' },
+      title: { de: 'Probe leiten', en: 'Lead the rehearsal' },
       text: {
-        de: 'Zeigt, ob du allein übst oder in der gemeinsamen Probe bist. In der Probe übernimmst du hier die Leitung – dann folgen alle Geräte deinem Abspielen.',
-        en: 'Shows whether you practise alone or are in the shared rehearsal. In a rehearsal, take the lead here – every device then follows your playing.',
+        de: 'In der gemeinsamen Probe übernimmst du hier die Leitung – alle Geräte folgen dann dir.',
+        en: 'In a shared rehearsal, take the lead here – every device then follows you.',
       },
     },
     {
       at: ['#player-menu-btn'],
       title: { de: 'Noch mehr', en: 'More' },
       text: {
-        de: 'Klang (Flügel oder Stimme), Swing, Licht und Ton abgleichen, Sprache – und diese Einführung zum Nachlesen.',
-        en: 'Sound (piano or voice), swing, matching light and sound, language – and this introduction to read again.',
+        de: 'Klang, Swing und Sprache – und diese Einführung, falls du sie nochmal brauchst.',
+        en: 'Sound, swing and language – and this introduction, should you need it again.',
       },
     },
   ],
@@ -349,7 +340,7 @@ export function startIntro(id: TourId, onClose?: () => void) {
     // The light moves on at once; the card fades, takes the new text, and comes back at its new place.
     const fill = () => {
       count.textContent = `${index + 1} / ${steps.length}`;
-      title.textContent = say(step.title);
+      title.textContent = say(narrow() && step.phoneTitle ? step.phoneTitle : step.title);
       text.textContent = say(narrow() && step.phone ? step.phone : step.text);
       place();
       card.classList.add('shown');
