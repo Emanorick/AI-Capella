@@ -696,13 +696,20 @@ export class PianoRoll {
     // Played music steps back (one rect over it -- with the lantern a soft edge instead, which
     // leaves the lamp's glow whole); the notes sounding right now light up.
     if (playheadXPos > 0) {
-      if (LANTERN) {
+      const end = Math.min(width, playheadXPos);
+      // The shade is even up to the fade, which only spans the last PAST_FADE_PX: a flat fill there
+      // and the gradient over just that strip -- a gradient across the whole played area costs
+      // many times more to fill, every frame.
+      const fadeFrom = LANTERN ? Math.max(0, playheadXPos - PAST_FADE_PX) : end;
+      ctx.fillStyle = PAST_SHADE;
+      if (fadeFrom > 0) ctx.fillRect(0, 0, Math.min(fadeFrom, end), contentAreaHeight);
+      if (LANTERN && end > fadeFrom) {
         const fade = ctx.createLinearGradient(playheadXPos - PAST_FADE_PX, 0, playheadXPos, 0);
         fade.addColorStop(0, PAST_SHADE);
         fade.addColorStop(1, 'rgba(13,12,22,0)');
         ctx.fillStyle = fade;
-      } else ctx.fillStyle = PAST_SHADE;
-      ctx.fillRect(0, 0, Math.min(width, playheadXPos), contentAreaHeight);
+        ctx.fillRect(fadeFrom, 0, end - fadeFrom, contentAreaHeight);
+      }
     }
     // In front of the paper: the lamp's glow and the light spilling from its holes.
     if (lit) this.lantern!.over(ctx);

@@ -694,6 +694,7 @@ export class AudioEngine {
       this.playStartBeat = fromBeat;
     }
     this.playing = true;
+    this.visualClock = null; // the context may have been suspended in between: measure afresh
     this.scheduledUpToBeat = this.playStartBeat;
     this.startTonesEndCtxTime = 0;
     if (startTones.length) {
@@ -873,6 +874,39 @@ export class AudioEngine {
   private scheduledBeat(): number {
     if (!this.playing) return this.pausedBeat;
     return this.beatAt(this.ctx.currentTime);
+  }
+
+  // The picture's clock (see visualBeat): the context's time relative to the page's, and the output
+  // delay, both smoothed.
+  private visualClock: { offset: number; delay: number; sampledAt: number } | null = null;
+
+  /**
+   * The beat being heard at `atMs` on the page's clock (performance.now(); for a frame, its
+   * requestAnimationFrame timestamp) -- what the picture shows. Not read straight from
+   * ctx.currentTime: on many browsers that advances in steps of an audio buffer (10-20 ms), so the
+   * picture would move unevenly from one frame to the next -- a full step, then half of one --
+   * which smears moving text. Instead the context's time is tracked against the page's clock: its
+   * offset is the highest seen (a reading lags its true value by up to one step, never leads it),
+   * easing down slowly so it follows real drift and a stalled audio thread; the output delay is
+   * smoothed too. The picture then moves evenly, frame by frame, within a millisecond or two of the
+   * sound.
+   */
+  visualBeat(atMs: number): number {
+    if (!this.playing) return this.pausedBeat;
+    const nowSec = performance.now() / 1000;
+    const offset = this.ctx.currentTime - nowSec;
+    const delay = this.outputDelay();
+    const c = this.visualClock;
+    if (!c || Math.abs(offset - c.offset) > 0.05) {
+      this.visualClock = { offset, delay, sampledAt: nowSec };
+    } else {
+      const dt = Math.max(0, nowSec - c.sampledAt);
+      c.offset = Math.max(offset, c.offset - dt * 0.01);
+      c.delay = Math.abs(delay - c.delay) > 0.02 ? delay : c.delay + (delay - c.delay) * 0.05;
+      c.sampledAt = nowSec;
+    }
+    const v = this.visualClock!;
+    return this.beatAt(atMs / 1000 + v.offset - v.delay);
   }
 
   private beatAt(ctxTime: number): number {

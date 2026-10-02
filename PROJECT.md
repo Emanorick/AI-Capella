@@ -736,6 +736,21 @@ single cheap `drawImage` blit of just the visible slice. The ruler's measure-num
 the same treatment in a matching `rulerBuffer`, rather than being `fillText`'d fresh every
 frame.
 
+**An even clock for the picture.** The playing position drawn each frame is not read straight
+from `AudioContext.currentTime`: on many browsers that advances in steps of an audio buffer
+(10-20 ms), so the roll moved a full step one frame and half of one the next (measured: 27, 12,
+27, 27, 15 thousandths of a beat per frame) -- the judder that made moving lyrics hard to read.
+`AudioEngine.visualBeat(ms)` tracks the context's time against the page's clock instead (the
+highest offset seen, since a reading lags its true value by up to a step and never leads it,
+easing down slowly to follow drift or a stalled audio thread; the output delay smoothed too), and
+`renderLoop` asks for it at the frame's `requestAnimationFrame` timestamp plus the usual delay
+before the frame is drawn (smoothed). The picture now moves the same distance every frame (22,
+22, 22, ...) and stays within a millisecond or two of the sound. Everything that needs the sound's
+exact position (publishing it, the loop/end check) still uses `getCurrentBeat()`. The played-music
+shade left of the reading line is a flat fill plus a gradient over just its fading strip, not a
+gradient across the whole played area (the same picture, far cheaper per frame). In development
+`window.__frames` logs each frame's position and render time.
+
 **Pixel-snapped blitting.** Even a nominally 1:1-scale `drawImage` blurs slightly if its
 destination lands on a fractional device pixel — which, mid-playback, it does essentially
 every frame, since the scroll offset follows continuous audio time rather than discrete pixel

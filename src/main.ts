@@ -3109,16 +3109,26 @@ function stopAudioTick() {
   }
 }
 
-function renderLoop() {
+// Development only: the shown position and render time of each frame, for measuring smoothness.
+const frameLog: { t: number; beat: number; ms: number; heard: number }[] | null = import.meta.env.DEV ? [] : null;
+if (frameLog) (window as unknown as { __frames: typeof frameLog }).__frames = frameLog;
+let frameLag = 0; // ms from a frame's timestamp to its drawing, smoothed
+function renderLoop(frameMs: number) {
   if (!audioEngine || !pianoRoll || !currentScore || !audioEngine.isPlaying()) {
     rafId = null; // stopped (e.g. by audioTick's own boundary check) since this frame was requested
     backdrop.setPlaying(false);
     return;
   }
-  const beat = audioEngine.getCurrentBeat();
+  // The position for this frame, on an even clock (see AudioEngine.visualBeat): the picture moves
+  // the same distance every frame. Taken at the frame's own time plus the usual delay before it is
+  // drawn (smoothed): on a slow device that delay is long, and the picture would trail the sound.
+  frameLag += (Math.min(100, Math.max(0, performance.now() - frameMs)) - frameLag) * 0.1;
+  const beat = audioEngine.visualBeat(frameMs + frameLag);
   const shown = beat + viewOffsetBeats + glideResidual();
+  const t0 = performance.now();
   renderActiveView(shown, beat);
   updatePositionDisplay(shown);
+  if (import.meta.env.DEV) frameLog?.push({ t: t0, beat: shown, ms: performance.now() - t0, heard: audioEngine.getCurrentBeat() + viewOffsetBeats + glideResidual() });
   rafId = requestAnimationFrame(renderLoop);
 }
 function startRenderLoop() {
