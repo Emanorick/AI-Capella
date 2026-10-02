@@ -29,6 +29,7 @@ import { animateStage } from './titleStage';
 import { notePixelSizes, observePixelSize } from './pixels';
 import { createPowerHint } from './powerHint';
 import { attachReorder } from './reorder';
+import type { PdfVoice } from './exportPdf';
 import { INTRO_ON, introDue, introRunning, startIntro, stopIntro } from './intro';
 import { canSwing, swingMap, swingScore } from './swing';
 import { loadScriptFont } from './goldInk';
@@ -837,6 +838,99 @@ function openLightOffsetSheet(opener: HTMLElement | null) {
     audioEngine?.setLightOffsetMs(lightOffsetMs);
   });
   openSheet(t('lightOffset'), body, opener);
+}
+
+/**
+ * Export as PDF (exportPdf.ts): the open song in the key it plays in now, all its voices -- or,
+ * behind "Choose and rename voices", some of them, under other names (for this PDF only).
+ */
+function openExportSheet(opener: HTMLElement | null) {
+  const song = currentSong;
+  const score = currentScore;
+  if (!song || !score) return;
+  const key = transposedKeyName();
+  const body = document.createElement('div');
+  body.className = 'sheet-body export-body';
+  const note = document.createElement('p');
+  note.className = 'ctl-note';
+  const details = document.createElement('details');
+  details.className = 'export-voices';
+  const summary = document.createElement('summary');
+  summary.textContent = t('exportVoices');
+  const list = document.createElement('ul');
+  list.className = 'export-voice-list';
+  const rows = score.parts.map((part, i) => {
+    const li = document.createElement('li');
+    li.style.setProperty('--c', colorForPart(i, score.parts.length));
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.checked = true;
+    check.setAttribute('aria-label', part.name);
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.className = 'field';
+    name.value = part.name;
+    name.setAttribute('aria-label', t('renameVoice'));
+    li.append(check, name);
+    list.appendChild(li);
+    check.addEventListener('change', () => {
+      li.classList.toggle('off', !check.checked);
+      describe();
+    });
+    return { part, check, name };
+  });
+  details.append(summary, list);
+  const status = document.createElement('p');
+  status.className = 'export-status';
+  status.setAttribute('role', 'status');
+  const go = document.createElement('button');
+  go.type = 'button';
+  go.className = 'btn primary wide';
+  go.innerHTML = `${icon('file')}<span>${t('exportMake')}</span>`;
+  body.append(note, details, status, go);
+  const describe = () => {
+    const n = rows.filter((r) => r.check.checked).length;
+    note.textContent = `${t('exportNote', { title: score.title, key })} ${n === rows.length ? t('exportNoteAll') : t('exportNoteSome', { n, total: rows.length })}`;
+  };
+  describe();
+  const close = openSheet(t('exportItem'), body, opener);
+  go.addEventListener('click', async () => {
+    const voices: PdfVoice[] = [
+      ...rows.map(({ part, check, name }) => ({
+        id: part.id,
+        name: name.value.trim() || part.name,
+        include: check.checked,
+        clef: song.clefOverrides?.[part.id] ? CLEF_SPECS[song.clefOverrides[part.id]!] : undefined,
+      })),
+      // Voices removed from the song in the app aren't in it.
+      ...(song.removedParts ?? []).map((id) => ({ id, name: '', include: false })),
+    ];
+    if (!voices.some((v) => v.include)) {
+      status.textContent = t('exportNone');
+      return;
+    }
+    go.disabled = true;
+    try {
+      const { makePdf } = await import('./exportPdf');
+      const xml = await readSongText(song);
+      const blob = await makePdf({ xml, title: score.title, semitones: transpose, voices }, (step, page, pages) => {
+        status.textContent = step === 'engraver' ? t('exportLoading') : step === 'engraving' ? t('exportEngraving') : t('exportPage', { n: page ?? 1, total: pages ?? 1 });
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${score.title}${key ? ` (${key})` : ''}.pdf`.replace(/[\\/:*?"<>|]+/g, '-');
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      toast(t('exportDone'));
+      close();
+    } catch (err) {
+      status.textContent = t('exportFailed', { msg: errorText(err) });
+      go.disabled = false;
+    }
+  });
 }
 
 function lightOffsetLabel(ms: number): string {
@@ -2551,6 +2645,8 @@ function openPlayerMenu(anchor: HTMLElement) {
     const on = swingChosen(currentSong);
     items.push({ label: t('swingItem'), icon: 'quarter', checked: on, onSelect: () => void setSwing(!on) });
   }
+  // The sheet music as a PDF, from the file (not offered for MIDI imports: no notation in them).
+  if (currentSong && currentSong.format !== 'score') items.push({ label: t('exportItem'), icon: 'file', onSelect: () => openExportSheet(anchor) });
   items.push({ label: t('lightOffset'), icon: 'metronome', onSelect: () => openLightOffsetSheet(anchor) }, ...languageItems(), ...introItems('player'));
   openMenu(anchor, items, t('menu'));
 }

@@ -320,6 +320,28 @@ Removing asks for confirmation (it affects everyone) and can be undone from the 
 (**Restore removed voices**); the last voice can't be removed. Other devices pick up clef and
 voice changes as soon as their playback is paused.
 
+### Export as PDF
+The player's ⋯ menu offers **Als PDF exportieren** (MusicXML songs; MIDI imports have no notation
+to set). A sheet says what will come out -- the song in the key it plays in now, all its voices --
+and **PDF erstellen** makes it; behind **Stimmen auswählen und umbenennen** (folded away) each voice
+has a checkbox and its name to change, for this PDF only. Voices removed in the app are left out,
+and a clef chosen in the app is used. `exportPdf.ts`, loaded only when asked for:
+- **Engraving:** Verovio (verovio.org, LGPL-3.0, the unmodified npm build, ~8 MB, its own chunk)
+  sets the song's own MusicXML -- trimmed to the chosen voices, renamed, titled as in the
+  repertoire (`prepareXml`) -- on A4 pages (scale 42, Bravura), transposed by the interval that
+  gives the key signature the app shows (`transposeInterval`, the same choice as
+  `signatures.ts transposeFifths`: +1 is a minor second up, to D♭, -6 a diminished fifth down).
+- **PDF:** jsPDF + svg2pdf.js (MIT) draw each page's SVG as vectors. Verovio draws the music as
+  paths and only text as text; that is set in Liberation Serif (Times' metric twin, OFL, embedded,
+  so every language's letters come out -- Latvian included) and, for the odd music symbol in text
+  (a metronome mark's note), "LightScore Music Text", a 48 KB TrueType subset of Bravura
+  (renamed, as its OFL asks of a modified version). Verovio's page is an inner `<svg>` without a
+  size of its own, which svg2pdf doesn't scale; it's flattened into a scaled group first. A bar
+  wider than a line runs past the right edge in Verovio's layout; such a page is drawn slightly
+  smaller (`fitToWidth`). Page numbers from page 2 on.
+- About 5 s for a 7-page piece on a laptop (once the engraver is loaded); the file is named
+  "Title (Key).pdf".
+
 ### Editable song and voice names
 Rename a song from its ⋯ menu in the repertoire, from the player's ⋯ menu, or by double-clicking
 its title in the player; rename a voice by double-clicking its name in the sidebar, or with the
@@ -604,7 +626,10 @@ AI-Capella/
 │   ├── ui.ts                  # menus, popovers, sheets, dialogs, toasts
 │   ├── icons.ts               # inline SVG icon set
 │   ├── i18n.ts                # German/English strings, key names
-│   ├── assets/fonts/          # Bravura subset + its OFL licence
+│   ├── assets/fonts/          # Bravura subset + its OFL licence; pdf/: the PDF export's fonts + licences
+│   ├── exportPdf.ts           # Export as PDF: Verovio engraving → jsPDF/svg2pdf (loaded on demand)
+│   ├── reorder.ts             # moving pieces in the repertoire by hand
+│   ├── intro.ts               # the introduction tours
 │   ├── library.ts             # Firestore-backed shared song storage, PIN verification, .mxl unzip
 │   ├── sync.ts                 # multi-device shared playback session: clock calibration + pub/sub
 │   ├── firebase.ts            # Firebase app/auth/Firestore initialization, anonymous sign-in

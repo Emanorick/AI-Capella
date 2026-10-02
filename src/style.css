@@ -3572,3 +3572,49 @@ body:has(#app.mode-landing)::after {
   border-radius: 14px;
   background: rgb(255 244 228 / 0.03);
 }
+
+/* Export as PDF (main.ts openExportSheet). */
+.export-body {
+  display: grid;
+  gap: 14px;
+}
+.export-body .ctl-note {
+  margin: 0;
+}
+.export-voices summary {
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--paper-dim);
+}
+.export-voice-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.export-voice-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.export-voice-list input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  accent-color: var(--c);
+}
+.export-voice-list .field {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+}
+.export-voice-list li.off .field {
+  opacity: 0.45;
+}
+.export-status {
+  min-height: 1.3em;
+  margin: 0;
+  font-size: 14px;
+  color: var(--paper-dim);
+}
