@@ -1,5 +1,5 @@
 import { doc, getDocFromServer, onSnapshot, serverTimestamp, setDoc, Timestamp, type Unsubscribe } from 'firebase/firestore';
-import { db } from './firebase';
+import { currentUid, db } from './firebase';
 import type { LoopRegion } from './pianoRoll';
 
 // How far into the future a "start playing" instant is broadcast, relative to the moment it's
@@ -89,17 +89,18 @@ const CALIBRATION_SAMPLES = 5;
  * NTP-style round-trip offset estimate: write a per-device doc with a serverTimestamp(), read it
  * straight back from the server (bypassing the local cache, which would just echo our own write
  * instantly and defeat the measurement), and estimate the server clock at the midpoint of the
- * round trip. Keyed by a per-device id rather than a shared doc -- two devices calibrating
+ * round trip. Keyed by the device's own (anonymous) user id rather than a shared doc -- two devices calibrating
  * concurrently against the same doc would corrupt each other's round-trip reading. Repeats this
  * CALIBRATION_SAMPLES times and keeps the lowest-round-trip-time sample (see the constant's
  * comment); one bad sample doesn't abort the rest, only a doc that never once resolves does.
  */
 export async function calibrateClockOffset(): Promise<void> {
   if (!db) return;
-  const ref = doc(db, 'sessions', `clockPing_${getDeviceId()}`);
   let best: { offsetMs: number; rttMs: number } | null = null;
   for (let i = 0; i < CALIBRATION_SAMPLES; i++) {
     try {
+      // Keyed by the signed-in (anonymous) user, so the rules let only this device touch it.
+      const ref = doc(db, 'sessions', `clockPing_${currentUid()}`);
       const t0 = Date.now();
       await setDoc(ref, { ts: serverTimestamp() });
       const snap = await getDocFromServer(ref);

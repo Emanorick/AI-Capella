@@ -5,9 +5,7 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDocs,
   onSnapshot,
-  orderBy,
   query,
   serverTimestamp,
   updateDoc,
@@ -77,12 +75,12 @@ function parseSongDoc(id: string, data: Record<string, unknown>): StoredSong {
   };
 }
 
-/** Live-subscribes to the shared song library; the callback fires immediately and again on every change from any device.
- *  With an ensemble, only that ensemble's songs -- the only query the Firestore rules allow then. */
+/** Live-subscribes to an ensemble's songs (the only query the Firestore rules allow); the callback
+ *  fires immediately and again on every change from any device. */
 export function subscribeToSongs(
   callback: (songs: StoredSong[], fromCache: boolean) => void,
   onError: (err: unknown) => void,
-  ensemble?: string,
+  ensemble: string,
 ): Unsubscribe {
   if (!db) {
     onError(new Error('Firebase is not configured'));
@@ -90,9 +88,7 @@ export function subscribeToSongs(
   }
   // Filtered by ensemble, sorted here: ordering by another field in the query would need a
   // composite index set up in the Firebase console.
-  const q = ensemble
-    ? query(collection(db, SONGS_COLLECTION), where('ensemble', '==', ensemble))
-    : query(collection(db, SONGS_COLLECTION), orderBy('importedAt', 'asc'));
+  const q = query(collection(db, SONGS_COLLECTION), where('ensemble', '==', ensemble));
   // A collection onSnapshot fires (with the FULL current result set) on every change to ANY doc
   // in it -- one voice's rename, a new import, anything. Re-gunzipping and re-decoding every
   // song's XML from scratch on every single one of those events (as this used to do) means a
@@ -118,22 +114,6 @@ export function subscribeToSongs(
     },
     onError,
   );
-}
-
-/**
- * Files every song stored before ensembles existed (no `ensemble` field) into the given one, so
- * it shows in that ensemble's (filtered) repertoire and the rules can tell whose it is. Works only
- * while the rules still let a device list every song -- i.e. before the ensembles' rules are
- * published; afterwards it is refused, and has nothing left to do.
- */
-export async function fileUnfiledSongs(ensemble: string): Promise<number> {
-  if (!db) return 0;
-  const all = await getDocs(collection(db, SONGS_COLLECTION));
-  const unfiled = all.docs.filter((d) => !d.data().ensemble);
-  // Not awaited: the filtered repertoire shows them at once (Firestore applies its own writes
-  // locally first), and offline they go out once the connection is back.
-  for (const d of unfiled) void updateDoc(d.ref, { ensemble }).catch(() => {});
-  return unfiled.length;
 }
 
 /** Returns the new song's id (available immediately from Firestore's optimistic local write). */

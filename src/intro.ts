@@ -399,12 +399,12 @@ export function startIntro(id: TourId, onClose?: () => void) {
   const follow = window.setInterval(place, 500);
 
   let closed = false;
-  function close(how: 'done' | 'later' | 'never') {
+  function close(how: 'done' | 'later' | 'never' | 'gone') {
     if (closed) return;
     closed = true;
     if (how === 'never') set(() => localStorage, OFF_KEY);
     else if (how === 'done') set(() => localStorage, doneKey(id));
-    else set(() => sessionStorage, LATER_KEY);
+    else if (how === 'later') set(() => sessionStorage, LATER_KEY);
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('keyup', onKeyUp, true);
     window.removeEventListener('resize', onResize);
@@ -414,7 +414,9 @@ export function startIntro(id: TourId, onClose?: () => void) {
     window.setTimeout(() => root.remove(), 350);
     onClose?.();
   }
-  stopCurrent = () => close('later');
+  // Its screen going away (a rehearsal's leader opening a song, say) isn't the singer skipping it:
+  // nothing is noted, and it comes again the next time its screen opens.
+  stopCurrent = () => close('gone');
   placeSpot(); // where the light first appears, before it is drawn (so it doesn't fly in from a corner)
 
   // In: the dark comes up first, then the light finds the first control.

@@ -8,7 +8,7 @@ rules_version = '2';
 //   ensembles/{ensemble}                { name, codeId }      an ensemble's name and current code
 //   songs/{songId}                      { ensemble, ... }     each song belongs to one ensemble
 //   sessions/live, sessions/live-<id>   rehearsing together: the first ensemble's, then the others'
-//   sessions/clockPing_<device>         each device's clock calibration
+//   sessions/clockPing_<uid>            each device's clock calibration
 //
 // Anything not matched below (config/access, the old PIN's hash, among it) is closed.
 service cloud.firestore {
@@ -16,6 +16,17 @@ service cloud.firestore {
 
     function signedIn() {
       return request.auth != null;
+    }
+
+    // The ensembles there are (src/ensembles.ts ENSEMBLES): nothing else can be set up or stored.
+    function known(ensemble) {
+      return ensemble in ['nnb', 'rm', 'frederick'];
+    }
+
+    // A code document that opens the ensemble.
+    function opens(codeId, ensemble) {
+      return codeId is string && exists(/databases/$(database)/documents/ensembleCodes/$(codeId))
+        && get(/databases/$(database)/documents/ensembleCodes/$(codeId)).data.ensemble == ensemble;
     }
 
     function memberOf(ensemble) {
@@ -29,14 +40,16 @@ service cloud.firestore {
         || !('codeId' in get(/databases/$(database)/documents/ensembles/$(ensemble)).data);
     }
 
-    // A code's document. Fetching it needs the code in hand (its id is derived from it); listing
-    // them never works, and an existing one can't be pointed at another ensemble.
+    // A code's document. Fetching it needs the code in hand (its id is derived from it -- a
+    // SHA-256, nothing shorter); listing them never works, and an existing one can't be pointed at
+    // another ensemble.
     match /ensembleCodes/{codeId} {
       allow get: if signedIn();
       allow list: if false;
       allow create: if signedIn()
+        && codeId.matches('[0-9a-f]{64}')
         && request.resource.data.keys().hasOnly(['ensemble'])
-        && request.resource.data.ensemble is string
+        && known(request.resource.data.ensemble)
         && (memberOf(request.resource.data.ensemble) || unclaimed(request.resource.data.ensemble));
       allow update: if false;
       allow delete: if memberOf(resource.data.ensemble);
@@ -45,16 +58,17 @@ service cloud.firestore {
     // Joining: a device adds an ensemble to its own list by naming a code document that opens it.
     match /members/{uid}/ensembles/{ensemble} {
       allow read, delete: if signedIn() && request.auth.uid == uid;
-      allow create, update: if signedIn() && request.auth.uid == uid
-        && request.resource.data.code is string
-        && get(/databases/$(database)/documents/ensembleCodes/$(request.resource.data.code)).data.ensemble == ensemble;
+      allow create, update: if signedIn() && request.auth.uid == uid && known(ensemble)
+        && opens(request.resource.data.code, ensemble);
     }
 
     // An ensemble's name and current code: for its members (and readable while it's unguarded,
-    // so the app can offer to set it up).
+    // so the app can offer to set it up). It always keeps a code that opens it -- a member can't
+    // delete it or drop its code, which would leave the ensemble open to be claimed again.
     match /ensembles/{ensemble} {
-      allow read: if memberOf(ensemble) || (signedIn() && (resource == null || !('codeId' in resource.data)));
-      allow write: if memberOf(ensemble);
+      allow read: if memberOf(ensemble) || (signedIn() && known(ensemble) && (resource == null || !('codeId' in resource.data)));
+      allow create, update: if memberOf(ensemble) && opens(request.resource.data.codeId, ensemble);
+      allow delete: if false;
     }
 
     // The repertoire: only an ensemble's members see, add, change or delete its songs; moving a
@@ -68,8 +82,11 @@ service cloud.firestore {
 
     match /sessions/{sessionId} {
       allow read, write: if (sessionId == 'live' && memberOf('nnb'))
-        || (sessionId.matches('live-[a-z0-9]+') && memberOf(sessionId.split('-')[1]))
-        || (sessionId.matches('clockPing_.+') && signedIn());
+        || (sessionId.matches('live-[a-z0-9]+') && known(sessionId.split('-')[1]) && memberOf(sessionId.split('-')[1]));
+      // A device's clock calibration: its own document only, holding only the server's time.
+      allow read, delete: if signedIn() && sessionId == 'clockPing_' + request.auth.uid;
+      allow create, update: if signedIn() && sessionId == 'clockPing_' + request.auth.uid
+        && request.resource.data.keys().hasOnly(['ts']);
     }
   }
 }

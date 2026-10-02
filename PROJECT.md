@@ -79,11 +79,17 @@ samples), **Relativ männlich** (`rm`) and **Frederick** (`frederick`, a persona
   anonymous user has joined; `ensembles/{ensemble}` `{ name, codeId }`; every song carries
   `ensemble`. Rehearsing together has one session document per ensemble (`sessions/live` for
   n.n.b., as before; `sessions/live-rm`).
-- **The rules** (all closed unless listed): a code document can be fetched by id but never
-  listed, created only by the ensemble's members (or for an ensemble nobody guards yet, i.e.
-  without `codeId`), never repointed; a device joins by writing its own membership naming a code
-  document that opens that ensemble; songs, sessions and the ensemble's document are for its
-  members only (moving a song needs both). The old `config/access` (the PIN's hash, which every
+- **The rules** (all closed unless listed): only the known ensembles (`known()`: nnb, rm,
+  frederick -- a new one is added there and in `ENSEMBLES`) can have codes, members, songs or a
+  session, so nobody can make up an ensemble and store things in it. A code document's id must be
+  a SHA-256 (64 hex digits); it can be fetched by id but never listed, created only by the
+  ensemble's members (or for an ensemble nobody guards yet, i.e. without `codeId`), never
+  repointed; a device joins by writing its own membership naming a code document that opens that
+  ensemble; songs, sessions and the ensemble's document are for its members only (moving a song
+  needs both). The ensemble's document always names a code that opens it: a member can rename it
+  but not delete it or drop its code (which would let anyone claim the ensemble again). A
+  device's clock calibration (`sessions/clockPing_<uid>`) is its own: keyed by its anonymous
+  user id, holding only the server's time. The old `config/access` (the PIN's hash, which every
   device could read) is closed -- which is why the code ids use a salt. Changing a code creates
   the new code document and deletes the old one: new devices need the new code, devices already
   in stay in. Codes need at least 8 characters (`MIN_CODE_LENGTH`): each guess is a request to
@@ -91,9 +97,9 @@ samples), **Relativ männlich** (`rm`) and **Frederick** (`frederick`, a persona
 - **Joining** writes the membership; at startup the device checks its ensembles against its
   memberships (`syncMemberships`) and forgets any it isn't in, and a refused song query (no
   longer a member) asks for the code again.
-- **Moving over** from the shared library: the first time a device opens n.n.b. it files every
-  song without `ensemble` into it (`fileUnfiledSongs` -- possible only while the old rules still
-  let a device list all songs). New songs get `ensemble` even with the flag off.
+- **Moving over** from the shared library: before the rules were published, the first device to
+  open n.n.b. filed every song without `ensemble` into it. That step (and the unfiltered song
+  query) is gone now that the rules refuse both.
 - **Set up** on 1 October 2026: the codes were set from the app (*Ohne Code weiter* → heading →
   *Code für … festlegen*), the old songs filed into n.n.b., Der Affe moved, and then the rules
   published -- in that order, since an ensemble nobody guards could otherwise be claimed by
@@ -1466,12 +1472,9 @@ To point the app at your own Firebase project instead of the bundled one, edit
 `src/firebaseConfig.ts` with your project's web app config (Project settings → General →
 "Your apps" → Web app in the Firebase console), and create:
 - A Firestore collection `songs` (populated automatically as scores are imported).
-- A single document at `config/access` with a `pinHash` field: the SHA-256 hex digest of
-  whatever PIN you want the group to use.
-- Firestore Security Rules that require `request.auth != null` for reads/writes to `songs/**`,
-  `config/access`, **and `sessions/**`** (the synced-playback session doc `sessions/live` plus
-  the per-device clock-calibration docs `sessions/clockPing_*`, see §4.7). A rule scoped to the
-  literal path `sessions/live` and not the whole collection will silently break clock
+- The Firestore Security Rules in `firestore.rules` (see Ensembles). They cover the
+  synced-playback session docs **and** the per-device clock-calibration docs
+  `sessions/clockPing_<uid>` (see §4.7). Rules that leave the latter out silently break clock
   calibration — `calibrateClockOffset()` swallows the permission-denied error and just leaves
   the offset at its default of 0, which shows up as synced playback starting audibly out of
   sync (by however much this device's own clock differs from the server) rather than as an

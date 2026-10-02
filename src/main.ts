@@ -14,7 +14,7 @@ import { StaffView } from './staffView';
 import { OverviewStrip } from './overview';
 import { colorForPart } from './palette';
 import { measureAtBeat, type Score } from './score';
-import { deleteImportedSong, fileUnfiledSongs, readScoreFile, saveImportedSong, saveSongConfig, saveSongSections, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong, type VoiceClef } from './library';
+import { deleteImportedSong, readScoreFile, saveImportedSong, saveSongConfig, saveSongSections, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong, type VoiceClef } from './library';
 import { ensureSignedIn, isFirebaseConfigured } from './firebase';
 import { animateRibbons, coverDataFromScore, drawCover, drawMark, prepareCanvas, type CoverData } from './artwork';
 import { icon } from './icons';
@@ -751,22 +751,6 @@ async function renameCurrentEnsemble() {
     renderLibraryHead();
   } catch (err) {
     toast(t('renameEnsembleFailed', { msg: errorText(err) }), 'error');
-  }
-}
-
-/**
- * Once, in the first ensemble: files the songs stored before ensembles existed into it (see
- * fileUnfiledSongs; only possible until the ensembles' rules are published, refused after).
- */
-const SONGS_FILED_KEY = 'ai-capella-songs-filed';
-async function fileOldSongs() {
-  if (localStorage.getItem(SONGS_FILED_KEY)) return;
-  try {
-    // Bounded: without a connection the full list may not come at all.
-    await Promise.race([fileUnfiledSongs(FIRST_ENSEMBLE_ID), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))]);
-    localStorage.setItem(SONGS_FILED_KEY, '1');
-  } catch (err) {
-    if ((err as { code?: string }).code === 'permission-denied') localStorage.setItem(SONGS_FILED_KEY, '1');
   }
 }
 
@@ -3374,7 +3358,6 @@ async function runBootstrap() {
     // ensemble, joined with its code on the title screen).
     await ensureSignedIn();
     void refreshEnsembleNames().then(renderLibraryHead).catch(() => {});
-    if (currentEnsemble === FIRST_ENSEMBLE_ID) await fileOldSongs();
     initScan({ onImport: importScannedScore, onStatusChange: renderScanChip });
     subscribeToSongs(
       (songs, fromCache) => {
@@ -3413,7 +3396,7 @@ async function runBootstrap() {
         libraryError = errorText(err);
         renderSongList();
       },
-      ensemble?.id,
+      currentEnsemble,
     );
     if (syncEnabled()) {
       sync.startPeriodicCalibration();
