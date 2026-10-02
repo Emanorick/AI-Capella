@@ -1372,6 +1372,13 @@ libraryEl.addEventListener('drop', (e) => {
  * control below -- see pushState()'s doc comment for why nothing here applies state directly.
  */
 async function selectSong(song: SongEntry) {
+  // The piece already open (the repertoire was only looked at): back to it as it was. The shared
+  // state wouldn't change, so going through it wouldn't bring the player back.
+  if (song.id === loadedSongId && currentScore) {
+    setViewMode('player');
+    renderNow();
+    return;
+  }
   // Every song starts at its own tempo -- never the previous song's: the saved default, else the
   // tempo written in the file, else 100.
   const fileTempo = (await songMeta(song))?.tempo;
