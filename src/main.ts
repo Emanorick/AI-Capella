@@ -3117,6 +3117,36 @@ if (import.meta.env.DEV) (window as unknown as { __repaintRoll: () => void }).__
   (pianoRoll as unknown as { invalidateBuffers(): void } | null)?.invalidateBuffers();
   renderNow();
 };
+// A frame-rate probe for finding out what a device really shows (?fps=1 in the address, this visit
+// only): frames per second, how long drawing a frame takes, and how many frames came late.
+const fpsProbe = new URLSearchParams(location.search).has('fps')
+  ? (() => {
+      const el = document.createElement('div');
+      el.className = 'fps-probe';
+      document.body.appendChild(el);
+      const stamps: number[] = [];
+      const draws: number[] = [];
+      let shownAt = 0;
+      return (frameMs: number, drawMs: number) => {
+        stamps.push(frameMs);
+        draws.push(drawMs);
+        while (stamps.length && stamps[0] < frameMs - 2000) {
+          stamps.shift();
+          draws.shift();
+        }
+        if (frameMs - shownAt < 500 || stamps.length < 3) return;
+        shownAt = frameMs;
+        const gaps = stamps.slice(1).map((t, i) => t - stamps[i]);
+        const sorted = [...gaps].sort((a, b) => a - b);
+        const typical = sorted[sorted.length >> 1];
+        const late = gaps.filter((g) => g > typical * 1.5).length;
+        const fps = (gaps.length / (stamps[stamps.length - 1] - stamps[0])) * 1000;
+        const avgDraw = draws.reduce((a, b) => a + b, 0) / draws.length;
+        el.textContent = `${fps.toFixed(0)} Bilder/s · Abstand ${typical.toFixed(1)} ms · zu spät ${late} in 2 s · Zeichnen ⌀ ${avgDraw.toFixed(1)} ms, max ${Math.max(...draws).toFixed(1)} ms · ${window.devicePixelRatio}×`;
+      };
+    })()
+  : null;
+
 let frameLag = 0; // ms from a frame's timestamp to its drawing, smoothed
 function renderLoop(frameMs: number) {
   if (!audioEngine || !pianoRoll || !currentScore || !audioEngine.isPlaying()) {
@@ -3133,6 +3163,7 @@ function renderLoop(frameMs: number) {
   const t0 = performance.now();
   renderActiveView(shown, beat);
   updatePositionDisplay(shown);
+  fpsProbe?.(frameMs, performance.now() - t0);
   if (import.meta.env.DEV) frameLog?.push({ t: t0, beat: shown, ms: performance.now() - t0, heard: audioEngine.getCurrentBeat() + viewOffsetBeats + glideResidual(), ...(pianoRoll?.debugInfo() ?? {}) });
   rafId = requestAnimationFrame(renderLoop);
 }

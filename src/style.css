@@ -3327,3 +3327,17 @@ body:has(#app.mode-landing)::after {
   opacity: 0;
   will-change: opacity;
 }
+
+/* The frame-rate probe (?fps=1, main.ts). */
+.fps-probe {
+  position: fixed;
+  left: 8px;
+  bottom: 8px;
+  z-index: 2000;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.75);
+  color: #fff;
+  font: 500 12px/1.3 ui-monospace, monospace;
+  pointer-events: none;
+}
