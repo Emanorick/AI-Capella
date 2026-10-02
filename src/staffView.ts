@@ -1105,18 +1105,32 @@ export class StaffView {
     ctx.font = MUSIC_FONT;
     ctx.textBaseline = 'alphabetic';
 
+    // A tie-merged note is split back into individually-notatable segments, each with its own
+    // notehead/stem/flag, joined by ties -- preferring the original tie boundaries from the source
+    // file (tieSegments) over a mathematical split.
+    const segments = segmentsGiven ?? (note.tieSegments ? segmentsFromTieLengths(note.startBeat, note.tieSegments) : splitIntoNotatedSegments(note.startBeat, note.durationBeats, this.score.measures));
+    // A head is lit while it sounds -- the whole note with it: head, stem, flag, dot (and the
+    // accidental, with the first head).
+    const litSeg = (seg: { startBeat: number; durationBeats: number }) => sounding && this.soundAt(seg.startBeat) <= playheadBeat && playheadBeat < this.soundAt(seg.startBeat + seg.durationBeats);
+    const glowing = (lit: boolean, draw: () => void) => {
+      if (lit) {
+        ctx.save();
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 12;
+        draw();
+        ctx.restore();
+      }
+      draw();
+    };
+
     // Accidental: only where the key signature (or an earlier note in the same measure) doesn't
     // already imply it -- standard practice. Not repeated on tied-to noteheads.
     if (showAccidental) {
       const glyph = accidentalGlyph(spelling.alter);
       const w = ctx.measureText(glyph).width;
-      ctx.fillText(glyph, firstX - HEAD_W / 2 - w - 0.25 * SP, y);
+      glowing(!!segments[0] && litSeg(segments[0]), () => ctx.fillText(glyph, firstX - HEAD_W / 2 - w - 0.25 * SP, y));
     }
 
-    // A tie-merged note is split back into individually-notatable segments, each with its own
-    // notehead/stem/flag, joined by ties -- preferring the original tie boundaries from the source
-    // file (tieSegments) over a mathematical split.
-    const segments = segmentsGiven ?? (note.tieSegments ? segmentsFromTieLengths(note.startBeat, note.tieSegments) : splitIntoNotatedSegments(note.startBeat, note.durationBeats, this.score.measures));
     let prevSegX: number | null = null;
     // Ties curve away from the stems -- the first head's direction for the whole note.
     const tieUp = chords?.[0]?.stemUp ?? ownUp;
@@ -1140,37 +1154,31 @@ export class StaffView {
           for (const pos of ledgers) ctx.fillRect(hx - LEDGER_EXTENSION, Math.round(bottomLineY - pos * HALF_SPACE_PX), headW + LEDGER_EXTENSION * 2, 1.2);
           ctx.fillStyle = color;
         }
-        const lit = sounding && this.soundAt(seg.startBeat) <= playheadBeat && playheadBeat < this.soundAt(seg.startBeat + seg.durationBeats);
-        if (lit) {
-          ctx.save();
-          ctx.shadowColor = color;
-          ctx.shadowBlur = 12;
+        glowing(litSeg(seg), () => {
           ctx.fillText(head, hx, y);
-          ctx.restore();
-        }
-        ctx.fillText(head, hx, y);
 
-        if (shape.dotted) {
-          // A dot on a line moves up into the space above it.
-          ctx.fillText(GLYPH.dot, hx + headW + 0.35 * SP, y - (staffPosition % 2 === 0 ? HALF_SPACE_PX : 0));
-        }
-
-        // In a chord only one note draws the stem, from its head past the chord's furthest note.
-        if (shape.hasStem && (!chord || chord.stemTo !== null)) {
-          const reach = chord && chord.stemTo !== null ? Math.abs(chord.stemTo - staffPosition) * HALF_SPACE_PX : 0;
-          const stemLength = STEM_LENGTH + reach + Math.max(0, shape.flags - 1) * 0.75 * SP;
-          if (stemUp) {
-            const sx = hx - shift + HEAD_W - STEM_THICKNESS;
-            const top = y - stemLength;
-            ctx.fillRect(sx, top, STEM_THICKNESS, y - STEM_ANCHOR_Y - top);
-            if (shape.flags) ctx.fillText(FLAG_UP[Math.min(3, shape.flags)], sx, top);
-          } else {
-            const sx = hx - shift;
-            const bottom = y + stemLength;
-            ctx.fillRect(sx, y + STEM_ANCHOR_Y, STEM_THICKNESS, bottom - y - STEM_ANCHOR_Y);
-            if (shape.flags) ctx.fillText(FLAG_DOWN[Math.min(3, shape.flags)], sx, bottom);
+          if (shape.dotted) {
+            // A dot on a line moves up into the space above it.
+            ctx.fillText(GLYPH.dot, hx + headW + 0.35 * SP, y - (staffPosition % 2 === 0 ? HALF_SPACE_PX : 0));
           }
-        }
+
+          // In a chord only one note draws the stem, from its head past the chord's furthest note.
+          if (shape.hasStem && (!chord || chord.stemTo !== null)) {
+            const reach = chord && chord.stemTo !== null ? Math.abs(chord.stemTo - staffPosition) * HALF_SPACE_PX : 0;
+            const stemLength = STEM_LENGTH + reach + Math.max(0, shape.flags - 1) * 0.75 * SP;
+            if (stemUp) {
+              const sx = hx - shift + HEAD_W - STEM_THICKNESS;
+              const top = y - stemLength;
+              ctx.fillRect(sx, top, STEM_THICKNESS, y - STEM_ANCHOR_Y - top);
+              if (shape.flags) ctx.fillText(FLAG_UP[Math.min(3, shape.flags)], sx, top);
+            } else {
+              const sx = hx - shift;
+              const bottom = y + stemLength;
+              ctx.fillRect(sx, y + STEM_ANCHOR_Y, STEM_THICKNESS, bottom - y - STEM_ANCHOR_Y);
+              if (shape.flags) ctx.fillText(FLAG_DOWN[Math.min(3, shape.flags)], sx, bottom);
+            }
+          }
+        });
       }
 
       if (prevSegX != null) this.drawTie(ctx, prevSegX, segX, y, tieUp);

@@ -1261,7 +1261,7 @@ enharmonic spelling, only a reasonable one.
 formula (`octave*7 + letterIndex`), independent of accidental — the standard trick that makes
 adjacent-letter steps exactly half a line-spacing apart regardless of sharps/flats. Ledger lines
 are derived from the same position, drawn under each notehead (also each tied segment) in the
-paper tone. **Chords and two voices**: the noteheads of one part struck at the same moment --
+paper tone. **Lit notes**: a head sounding now glows in its voice's colour -- the whole note with it: head, stem, flag, dot, and with the first head its accidental. **Chords and two voices**: the noteheads of one part struck at the same moment --
 a note's own head, or a tied note's head carried on past a bar line -- are grouped by how long
 they last. Heads of one length are a chord with one stem, as engraved: its direction set by the
 note furthest from the middle line, drawn from the note at the stem's far end through to the
