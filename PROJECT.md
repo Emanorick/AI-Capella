@@ -91,7 +91,8 @@ samples), **Relativ männlich** (`rm`) and **Frederick** (`frederick`, a persona
   device one of its leaders (`leaders/{uid}/ensembles/{id}`, `leads()` in the app). Only leaders
   change the ensemble's code, its name and the leaders' code -- the menu shows those items to
   them alone; while an ensemble has no leaders' code yet, any member may set the first (and leads
-  it then). Songs stay with all members. Changing a code doesn't remove anyone already in or
+  it then). Songs stay with all members -- except their order in the list (`sortKey`), which
+  leaders set. Changing a code doesn't remove anyone already in or
   leading. The ensemble's document always names a code that opens it (and, once set, a leaders'
   code): nobody can delete it or drop its codes (which would let anyone claim the ensemble again). A
   device's clock calibration (`sessions/clockPing_<uid>`) is its own: keyed by its anonymous
@@ -125,7 +126,8 @@ freeze the page. A search field appears once there are more than eight songs; fi
 dropped anywhere on the page or picked with **Add arrangement**; each library song's **⋯** menu
 offers Rename and Delete. While the shared library loads, skeleton cards show; if it can't be
 reached, a banner says so with a Retry button instead of silently showing only the sample. On
-phones the grid becomes a list with small covers. **The order is set by hand** (`reorder.ts`): a
+phones the grid becomes a list with small covers. **The order is set by hand** by the ensemble's
+leaders (`reorder.ts`; the rules let only them change `sortKey`): a
 long press on a card (on a laptop, the mouse button held, 420 ms) lifts it; it follows the pointer
 or finger, the others glide aside around an empty slot, the list scrolls along near its edges, and
 letting go puts it there -- for everyone in the ensemble: the song gets a `sortKey` halfway

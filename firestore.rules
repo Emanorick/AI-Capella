@@ -123,11 +123,12 @@ service cloud.firestore {
     }
 
     // The repertoire: only an ensemble's members see, add, change or delete its songs; moving a
-    // song needs membership of both ensembles.
+    // song needs membership of both ensembles. Its place in the list (sortKey) is set by leaders.
     match /songs/{songId} {
       allow read: if memberOf(resource.data.ensemble);
-      allow create: if memberOf(request.resource.data.ensemble);
-      allow update: if memberOf(resource.data.ensemble) && memberOf(request.resource.data.ensemble);
+      allow create: if memberOf(request.resource.data.ensemble) && !('sortKey' in request.resource.data);
+      allow update: if memberOf(resource.data.ensemble) && memberOf(request.resource.data.ensemble)
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['sortKey']) || leaderOf(resource.data.ensemble));
       allow delete: if memberOf(resource.data.ensemble);
     }
 

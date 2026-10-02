@@ -1252,12 +1252,12 @@ async function importFiles(files: FileList | File[]) {
   if (lastImported) void selectSong(lastImported);
 }
 
-// The repertoire's order, set by hand (reorder.ts): a long press lifts a card, letting go puts it
-// down -- for everyone in the ensemble. The bundled samples stay first; while searching, the list
+// The repertoire's order, set by hand (reorder.ts) by the ensemble's leaders: a long press lifts a
+// card, letting go puts it down -- for everyone in the ensemble. The bundled samples stay first; while searching, the list
 // is only part of the order, so nothing moves then.
 let songListStale = false;
 const reorder = attachReorder(songGridEl, document.querySelector<HTMLElement>('.lib-scroll')!, {
-  movable: (card) => !inPublicFolder() && libraryState === 'ready' && !searchInput.value.trim() && !!importedSongs.find((s) => s.id === card.dataset.id),
+  movable: (card) => !inPublicFolder() && leads(currentEnsemble) && libraryState === 'ready' && !searchInput.value.trim() && !!importedSongs.find((s) => s.id === card.dataset.id),
   onDrop: (ids, movedId) => {
     const at = (id: string | undefined) => importedSongs.find((s) => s.id === id)?.order ?? 0;
     const i = ids.indexOf(movedId);
