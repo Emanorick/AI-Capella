@@ -39,6 +39,9 @@ import {
   ensembleNeedsCode,
   forgetEnsemble,
   joinWithCode,
+  leads,
+  ensembleNeedsLeaderCode,
+  setLeaderCode,
   MIN_CODE_LENGTH,
   ensembleName,
   ENSEMBLES,
@@ -636,13 +639,13 @@ codeForm.addEventListener('submit', async (e) => {
   submit.disabled = true;
   try {
     await ensureSignedIn();
-    const id = await joinWithCode(code);
-    if (!id) {
+    const joined = await joinWithCode(code);
+    if (!joined) {
       codeError.textContent = t('codeWrong');
       codeInput.select();
       return;
     }
-    setActiveEnsemble(id);
+    setActiveEnsemble(joined.id);
     codeInput.value = '';
     askingCode = false;
     renderLanding(true);
@@ -686,9 +689,17 @@ async function openEnsembleMenu(anchor: HTMLElement) {
     items.push({ label: ensembleName(id), icon: id === PUBLIC_ID ? 'globe' : 'users', checked: id === currentEnsemble, onSelect: () => switchEnsemble(id) });
   }
   items.push({ label: t('enterCode'), icon: 'key', onSelect: () => void enterCodeInApp() });
+  // Its leaders change the ensemble's name and codes; while it has no leaders' code yet, any member
+  // may set that (and leads it then).
   if (!inPublicFolder()) {
-    items.push({ label: t('renameEnsemble'), icon: 'pencil', onSelect: () => void renameCurrentEnsemble() });
-    items.push({ label: t('changeCodeFor', { name: ensembleName(currentEnsemble) }), icon: 'key', onSelect: () => void setCodeFor(currentEnsemble) });
+    const name = ensembleName(currentEnsemble);
+    if (leads(currentEnsemble)) {
+      items.push({ label: t('renameEnsemble'), icon: 'pencil', onSelect: () => void renameCurrentEnsemble() });
+      items.push({ label: t('changeCodeFor', { name }), icon: 'key', onSelect: () => void setCodeFor(currentEnsemble) });
+      items.push({ label: t('changeLeaderCodeFor', { name }), icon: 'crown', onSelect: () => void setLeaderCodeFor(currentEnsemble) });
+    } else if (await ensembleNeedsLeaderCode(currentEnsemble)) {
+      items.push({ label: t('setLeaderCodeFor', { name }), icon: 'crown', onSelect: () => void setLeaderCodeFor(currentEnsemble) });
+    }
   }
   // An ensemble nobody guards yet gets its first code here -- from the public folder too, which is
   // where setting up the very first one starts.
@@ -713,13 +724,13 @@ async function enterCodeInApp() {
   if (!code) return;
   try {
     await ensureSignedIn();
-    const id = await joinWithCode(code);
-    if (!id) {
+    const joined = await joinWithCode(code);
+    if (!joined) {
       toast(t('codeWrong'), 'error');
       return;
     }
-    toast(t('codeWelcome', { name: ensembleName(id) }));
-    await switchEnsemble(id);
+    toast(t(joined.leader ? 'leaderWelcome' : 'codeWelcome', { name: ensembleName(joined.id) }));
+    await switchEnsemble(joined.id);
   } catch (err) {
     toast(t('codeFailed', { msg: errorText(err) }), 'error');
   }
@@ -737,6 +748,21 @@ async function setCodeFor(id: string) {
     toast(t('codeSaved'));
     // Set up from the public folder (the very first code): open it.
     if (inPublicFolder()) await switchEnsemble(id);
+  } catch (err) {
+    toast(t('codeSaveFailed', { msg: errorText(err) }), 'error');
+  }
+}
+
+async function setLeaderCodeFor(id: string) {
+  const code = await promptDialog(t(leads(id) ? 'changeLeaderCodeFor' : 'setLeaderCodeFor', { name: ensembleName(id) }), '', t('save'));
+  if (!code) return;
+  try {
+    const result = await setLeaderCode(id, code);
+    if (result !== 'ok') {
+      toast(result === 'short' ? t('codeShort', { n: MIN_CODE_LENGTH }) : t('codeInUse'), 'error');
+      return;
+    }
+    toast(t('leaderCodeSaved', { name: ensembleName(id) }));
   } catch (err) {
     toast(t('codeSaveFailed', { msg: errorText(err) }), 'error');
   }

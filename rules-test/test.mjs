@@ -5,6 +5,7 @@ import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebas
 import { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 import fs from 'fs';
 const env = await initializeTestEnvironment({ projectId: 'demo-ls', firestore: { rules: fs.readFileSync(new URL('../firestore.rules', import.meta.url), 'utf8'), host: '127.0.0.1', port: 8085 } });
+await env.clearFirestore(); // a fresh start, also against an emulator that is already running
 const C_NNB = 'a'.repeat(64), C_RM = 'b'.repeat(64);
 await env.withSecurityRulesDisabled(async (ctx) => {
   const db = ctx.firestore();
@@ -60,7 +61,18 @@ await check('clock ping by device id', false, () => setDoc(doc(alice, 'sessions'
 await check('clock ping with other data', false, () => setDoc(doc(alice, 'sessions', 'clockPing_alice'), { ts: serverTimestamp(), junk: 'x'.repeat(100) }));
 await check('signed out clock ping', false, () => setDoc(doc(anon, 'sessions', 'clockPing_alice'), { ts: serverTimestamp() }));
 await check('read own ensemble', true, () => getDoc(doc(alice, 'ensembles', 'nnb')));
+// Leaders: n.n.b. has no leaders' code yet -- a member sets the first and leads it.
+const L_NNB = '1'.repeat(64), L_NNB2 = '2'.repeat(64);
+await check('member cannot rename before leading', false, () => setDoc(doc(alice, 'ensembles', 'nnb'), { name: 'Neu' }, { merge: true }));
+await check('member cannot change the code before leading', false, () => setDoc(doc(alice, 'ensembleCodes', '3'.repeat(64)), { ensemble: 'nnb' }));
+await check('not a member: no leaders\' code', false, () => setDoc(doc(carol, 'leaderCodes', L_NNB), { ensemble: 'nnb' }));
+await check('first leaders\' code', true, () => setDoc(doc(alice, 'leaderCodes', L_NNB), { ensemble: 'nnb' }));
+await check('lead with it', true, () => setDoc(doc(alice, 'leaders', 'alice', 'ensembles', 'nnb'), { code: L_NNB }));
+await check('cannot lead with the members\' code', false, () => setDoc(doc(alice, 'leaders', 'alice', 'ensembles', 'nnb'), { code: C_NNB }));
+await check('record it', true, () => setDoc(doc(alice, 'ensembles', 'nnb'), { leaderCodeId: L_NNB }, { merge: true }));
+await check('cannot list leaders\' codes', false, () => getDocs(collection(alice, 'leaderCodes')));
 await check('rename own ensemble', true, () => setDoc(doc(alice, 'ensembles', 'nnb'), { name: 'Neu' }, { merge: true }));
+await check('cannot drop the leaders\' code', false, () => setDoc(doc(alice, 'ensembles', 'nnb'), { codeId: C_NNB, name: 'Neu' }));
 await check('cannot drop its code', false, () => setDoc(doc(alice, 'ensembles', 'nnb'), { name: 'Neu' }));
 await check('cannot point it at no code', false, () => setDoc(doc(alice, 'ensembles', 'nnb'), { codeId: '9'.repeat(64) }, { merge: true }));
 await check('cannot delete it', false, () => deleteDoc(doc(alice, 'ensembles', 'nnb')));
@@ -79,6 +91,13 @@ await check('move a song between own ensembles', true, () => updateDoc(doc(alice
 await check('rm session', true, () => getDoc(doc(alice, 'sessions', 'live-rm')));
 // bob is only in n.n.b.
 await check('bob joins nnb', true, () => setDoc(doc(bob, 'members', 'bob', 'ensembles', 'nnb'), { code: C_NNB }));
+await check('bob: no second first leaders\' code', false, () => setDoc(doc(bob, 'leaderCodes', '4'.repeat(64)), { ensemble: 'nnb' }));
+await check('bob: cannot lead with no code', false, () => setDoc(doc(bob, 'leaders', 'bob', 'ensembles', 'nnb'), { code: '4'.repeat(64) }));
+await check('bob: cannot rename', false, () => setDoc(doc(bob, 'ensembles', 'nnb'), { name: 'bob' }, { merge: true }));
+await check('bob: cannot change the code', false, () => setDoc(doc(bob, 'ensembleCodes', '5'.repeat(64)), { ensemble: 'nnb' }));
+await check('bob: cannot retire the code', false, () => deleteDoc(doc(bob, 'ensembleCodes', C_NNB)));
+await check('bob: cannot repoint the ensemble', false, () => setDoc(doc(bob, 'ensembles', 'nnb'), { codeId: C_NNB }, { merge: true }));
+await check('bob: songs as before', true, () => songsOf(bob, 'nnb'));
 await check('bob: no second code for a guarded ensemble', false, () => setDoc(doc(bob, 'ensembleCodes', 'd'.repeat(64)), { ensemble: 'rm' }));
 await check('bob: cannot repoint a code', false, () => setDoc(doc(bob, 'ensembleCodes', C_RM), { ensemble: 'nnb' }));
 await check('bob: cannot delete another\'s code', false, () => deleteDoc(doc(bob, 'ensembleCodes', C_RM)));
@@ -92,6 +111,18 @@ await check('retire the old one', true, () => deleteDoc(doc(alice, 'ensembleCode
 await check('old code no longer opens it', false, () => setDoc(doc(carol, 'members', 'carol', 'ensembles', 'nnb'), { code: C_NNB }));
 await check('new code does', true, () => setDoc(doc(carol, 'members', 'carol', 'ensembles', 'nnb'), { code: C_NNB2 }));
 await check('bob stays in', true, () => songsOf(bob, 'nnb'));
+await check('ensemble points at the new code', true, () => setDoc(doc(alice, 'ensembles', 'nnb'), { codeId: C_NNB2 }, { merge: true }));
+// the leaders' code opens the ensemble too, and makes a device a leader
+const dave = env.authenticatedContext('dave').firestore();
+await check('join with the leaders\' code', true, () => setDoc(doc(dave, 'members', 'dave', 'ensembles', 'nnb'), { code: L_NNB }));
+await check('lead with the leaders\' code', true, () => setDoc(doc(dave, 'leaders', 'dave', 'ensembles', 'nnb'), { code: L_NNB }));
+await check('dave renames', true, () => setDoc(doc(dave, 'ensembles', 'nnb'), { name: 'Dave' }, { merge: true }));
+// a new leaders' code
+await check('new leaders\' code', true, () => setDoc(doc(alice, 'leaderCodes', L_NNB2), { ensemble: 'nnb' }));
+await check('point at it', true, () => setDoc(doc(alice, 'ensembles', 'nnb'), { leaderCodeId: L_NNB2 }, { merge: true }));
+await check('retire the old leaders\' code', true, () => deleteDoc(doc(alice, 'leaderCodes', L_NNB)));
+await check('old leaders\' code no longer leads', false, () => setDoc(doc(carol, 'leaders', 'carol', 'ensembles', 'nnb'), { code: L_NNB }));
+await check('a member cannot retire a leaders\' code', false, () => deleteDoc(doc(bob, 'leaderCodes', L_NNB2)));
 console.log(`\n${pass} passed, ${fail} failed`);
 await env.cleanup();
 process.exit(fail ? 1 : 0);

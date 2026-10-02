@@ -4,8 +4,10 @@ rules_version = '2';
 // ensembles it has joined with their codes (src/ensembles.ts):
 //
 //   ensembleCodes/{codeId}              { ensemble }          codeId = salted SHA-256 of the code
+//   leaderCodes/{codeId}                { ensemble }          the leaders' code (another salt)
 //   members/{uid}/ensembles/{ensemble}  { code, joinedAt }    the ensembles a device has joined
-//   ensembles/{ensemble}                { name, codeId }      an ensemble's name and current code
+//   leaders/{uid}/ensembles/{ensemble}  { code, joinedAt }    ... and those it leads
+//   ensembles/{ensemble}                { name, codeId, leaderCodeId }
 //   songs/{songId}                      { ensemble, ... }     each song belongs to one ensemble
 //   sessions/live, sessions/live-<id>   rehearsing together: the first ensemble's, then the others'
 //   sessions/clockPing_<uid>            each device's clock calibration
@@ -29,6 +31,24 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/ensembleCodes/$(codeId)).data.ensemble == ensemble;
     }
 
+    // A leaders' code document that opens the ensemble.
+    function leaderOpens(codeId, ensemble) {
+      return codeId is string && exists(/databases/$(database)/documents/leaderCodes/$(codeId))
+        && get(/databases/$(database)/documents/leaderCodes/$(codeId)).data.ensemble == ensemble;
+    }
+
+    // The ensemble's leaders change its code and name and keep the leaders' code; a device becomes
+    // one with that code.
+    function leaderOf(ensemble) {
+      return signedIn() && ensemble is string
+        && exists(/databases/$(database)/documents/leaders/$(request.auth.uid)/ensembles/$(ensemble));
+    }
+
+    // No leaders' code yet: a member may set the first one (and with it become a leader).
+    function leaderless(ensemble) {
+      return !('leaderCodeId' in get(/databases/$(database)/documents/ensembles/$(ensemble)).data);
+    }
+
     function memberOf(ensemble) {
       return signedIn() && ensemble is string
         && exists(/databases/$(database)/documents/members/$(request.auth.uid)/ensembles/$(ensemble));
@@ -50,24 +70,55 @@ service cloud.firestore {
         && codeId.matches('[0-9a-f]{64}')
         && request.resource.data.keys().hasOnly(['ensemble'])
         && known(request.resource.data.ensemble)
-        && (memberOf(request.resource.data.ensemble) || unclaimed(request.resource.data.ensemble));
+        && (leaderOf(request.resource.data.ensemble) || unclaimed(request.resource.data.ensemble));
       allow update: if false;
-      allow delete: if memberOf(resource.data.ensemble);
+      allow delete: if leaderOf(resource.data.ensemble);
     }
 
-    // Joining: a device adds an ensemble to its own list by naming a code document that opens it.
+    // The leaders' codes: the same, set and retired by leaders -- the first one by any member.
+    match /leaderCodes/{codeId} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && codeId.matches('[0-9a-f]{64}')
+        && request.resource.data.keys().hasOnly(['ensemble'])
+        && known(request.resource.data.ensemble)
+        && (leaderOf(request.resource.data.ensemble)
+          || (memberOf(request.resource.data.ensemble) && leaderless(request.resource.data.ensemble)));
+      allow update: if false;
+      allow delete: if leaderOf(resource.data.ensemble);
+    }
+
+    // Joining: a device adds an ensemble to its own list by naming a code document that opens it
+    // (the leaders' code opens it too).
     match /members/{uid}/ensembles/{ensemble} {
       allow read, delete: if signedIn() && request.auth.uid == uid;
       allow create, update: if signedIn() && request.auth.uid == uid && known(ensemble)
-        && opens(request.resource.data.code, ensemble);
+        && (opens(request.resource.data.code, ensemble) || leaderOpens(request.resource.data.code, ensemble));
     }
 
-    // An ensemble's name and current code: for its members (and readable while it's unguarded,
-    // so the app can offer to set it up). It always keeps a code that opens it -- a member can't
-    // delete it or drop its code, which would leave the ensemble open to be claimed again.
+    // Leading: likewise, naming a leaders' code document.
+    match /leaders/{uid}/ensembles/{ensemble} {
+      allow read, delete: if signedIn() && request.auth.uid == uid;
+      allow create, update: if signedIn() && request.auth.uid == uid && known(ensemble)
+        && leaderOpens(request.resource.data.code, ensemble);
+    }
+
+    // An ensemble's name and current codes: for its members (and readable while it's unguarded,
+    // so the app can offer to set it up). Its leaders change them; a member may only guard an
+    // unguarded ensemble (its first code) or give it its first leaders' code. It always keeps a code
+    // that opens it, and once it has a leaders' code, a valid one -- nobody can delete it or drop
+    // its codes, which would leave it open to be claimed again.
     match /ensembles/{ensemble} {
       allow read: if memberOf(ensemble) || (signedIn() && known(ensemble) && (resource == null || !('codeId' in resource.data)));
-      allow create, update: if memberOf(ensemble) && opens(request.resource.data.codeId, ensemble);
+      allow create: if memberOf(ensemble) && opens(request.resource.data.codeId, ensemble)
+        && request.resource.data.keys().hasOnly(['codeId', 'name']);
+      allow update: if memberOf(ensemble) && opens(request.resource.data.codeId, ensemble)
+        && (('leaderCodeId' in request.resource.data && leaderOpens(request.resource.data.leaderCodeId, ensemble))
+          || (!('leaderCodeId' in request.resource.data) && !('leaderCodeId' in resource.data)))
+        && (leaderOf(ensemble)
+          || (!('codeId' in resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['codeId']))
+          || (!('leaderCodeId' in resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['leaderCodeId'])));
       allow delete: if false;
     }
 

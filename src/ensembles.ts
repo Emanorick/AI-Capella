@@ -38,6 +38,7 @@ export function ensembleById(id: string): Ensemble | undefined {
 }
 
 const UNLOCKED_KEY = 'ai-capella-ensembles-unlocked';
+const LEADING_KEY = 'ai-capella-ensembles-leading';
 const ACTIVE_KEY = 'ai-capella-ensemble';
 const NAMES_KEY = 'ai-capella-ensemble-names';
 
@@ -65,6 +66,19 @@ export function unlockedEnsembles(): string[] {
 export function unlockEnsemble(id: string) {
   const list = unlockedEnsembles();
   if (!list.includes(id)) writeJson(UNLOCKED_KEY, [...list, id]);
+}
+
+/** Whether this device leads the ensemble (opened it with the leaders' code), as last known here. */
+export function leads(id: string): boolean {
+  return readJson<string[]>(LEADING_KEY, []).includes(id);
+}
+
+function rememberLeading(id: string) {
+  if (!leads(id)) writeJson(LEADING_KEY, [...readJson<string[]>(LEADING_KEY, []), id]);
+}
+
+function forgetLeading(id: string) {
+  writeJson(LEADING_KEY, readJson<string[]>(LEADING_KEY, []).filter((e) => e !== id));
 }
 
 /** The folder this device opens: the last one chosen, if it's still open to it; null: none chosen yet. */
@@ -95,7 +109,12 @@ export function ensembleName(id: string): string {
 //
 //   ensembleCodes/{codeId}              { ensemble }          codeId = SHA-256 of the salted code
 //   members/{uid}/ensembles/{ensemble}  { code: codeId }      this device (anonymous user) is in
-//   ensembles/{ensemble}                { name, codeId }      the ensemble's name and current code
+//   ensembles/{ensemble}                { name, codeId, leaderCodeId }
+//   leaderCodes/{codeId}                { ensemble }          the leaders' code (another salt)
+//   leaders/{uid}/ensembles/{ensemble}  { code: codeId }      this device leads it
+//
+// The leaders' code is a second code per ensemble, for the choir's leaders: it opens the ensemble
+// like its code, and lets the device change the ensemble's code, name and the leaders' code itself.
 //
 // The rules (firestore.rules) let a device fetch a code's document only by its id -- so only with
 // the code in hand -- and never list them; join an ensemble only by naming a code document that
@@ -103,6 +122,7 @@ export function ensembleName(id: string): string {
 // The salt keeps the ids apart from the old PIN's hash, which every device could read.
 
 const CODE_SALT = 'lightscore-ensemble-code:';
+const LEADER_SALT = 'lightscore-leader-code:';
 /** A code must be long enough not to be guessed by trying (each try is a request to Firestore). */
 export const MIN_CODE_LENGTH = 8;
 
@@ -118,6 +138,10 @@ function codeId(code: string): Promise<string> {
   return sha256Hex(CODE_SALT + code.trim());
 }
 
+function leaderCodeId(code: string): Promise<string> {
+  return sha256Hex(LEADER_SALT + code.trim());
+}
+
 function firestore() {
   if (!db) throw new Error('Firebase is not configured');
   return db;
@@ -127,9 +151,14 @@ function memberRef(id: string) {
   return doc(firestore(), 'members', currentUid(), 'ensembles', id);
 }
 
+function leaderRef(id: string) {
+  return doc(firestore(), 'leaders', currentUid(), 'ensembles', id);
+}
+
 /** Forgets an ensemble on this device (its membership is gone, or was never made). */
 export function forgetEnsemble(id: string) {
   writeJson(UNLOCKED_KEY, unlockedEnsembles().filter((e) => e !== id));
+  forgetLeading(id);
   if (localStorage.getItem(ACTIVE_KEY) === id) localStorage.removeItem(ACTIVE_KEY);
 }
 
@@ -145,6 +174,9 @@ export async function syncMemberships(): Promise<boolean> {
       const snap = await getDocFromServer(memberRef(id));
       if (!snap.exists()) {
         forgetEnsemble(id);
+        changed = true;
+      } else if (leads(id) && !(await getDocFromServer(leaderRef(id))).exists()) {
+        forgetLeading(id);
         changed = true;
       }
     } catch {
@@ -170,16 +202,37 @@ export async function refreshEnsembleNames(): Promise<void> {
   writeJson(NAMES_KEY, names);
 }
 
-/** Opens the ensemble a code belongs to: joins it in Firestore and remembers it here. Null: no such code. */
-export async function joinWithCode(code: string): Promise<string | null> {
-  const id = await codeId(code);
-  const snap = await getDoc(doc(firestore(), 'ensembleCodes', id));
-  const ensemble = snap.data()?.ensemble;
-  if (!snap.exists() || typeof ensemble !== 'string' || !ensembleById(ensemble)) return null;
-  await setDoc(memberRef(ensemble), { code: id, joinedAt: serverTimestamp() });
-  unlockEnsemble(ensemble);
-  void refreshEnsembleNames().catch(() => {});
-  return ensemble;
+/**
+ * Opens the ensemble a code belongs to: joins it in Firestore and remembers it here -- with the
+ * leaders' code, as one of its leaders. Null: no such code.
+ */
+export async function joinWithCode(code: string): Promise<{ id: string; leader: boolean } | null> {
+  const fs = firestore();
+  for (const leader of [false, true]) {
+    const id = await (leader ? leaderCodeId(code) : codeId(code));
+    const snap = await getDoc(doc(fs, leader ? 'leaderCodes' : 'ensembleCodes', id));
+    const ensemble = snap.data()?.ensemble;
+    if (!snap.exists() || typeof ensemble !== 'string' || !ensembleById(ensemble)) continue;
+    await setDoc(memberRef(ensemble), { code: id, joinedAt: serverTimestamp() });
+    if (leader) {
+      await setDoc(leaderRef(ensemble), { code: id, joinedAt: serverTimestamp() });
+      rememberLeading(ensemble);
+    }
+    unlockEnsemble(ensemble);
+    void refreshEnsembleNames().catch(() => {});
+    return { id: ensemble, leader };
+  }
+  return null;
+}
+
+/** Whether an ensemble (this device is in) has no leaders' code yet -- then any member may set it. */
+export async function ensembleNeedsLeaderCode(id: string): Promise<boolean> {
+  try {
+    const snap = await getDoc(doc(firestore(), 'ensembles', id));
+    return snap.exists() && !snap.data()?.leaderCodeId;
+  } catch {
+    return false;
+  }
 }
 
 /** Whether an ensemble still waits for its first code -- readable only while nobody guards it yet. */
@@ -203,6 +256,8 @@ export async function setEnsembleCode(id: string, code: string): Promise<'ok' | 
   const newId = await codeId(code);
   const existing = await getDoc(doc(fs, 'ensembleCodes', newId));
   if (existing.exists() && existing.data()?.ensemble !== id) return 'taken';
+  // Not the leaders' code: entering it would then only let a device in, not lead.
+  if ((await getDoc(doc(fs, 'leaderCodes', await leaderCodeId(code)))).exists()) return 'taken';
   const ensembleRef = doc(fs, 'ensembles', id);
   const oldId = (await getDoc(ensembleRef)).data()?.codeId as string | undefined;
   if (!existing.exists()) await setDoc(doc(fs, 'ensembleCodes', newId), { ensemble: id });
@@ -210,6 +265,28 @@ export async function setEnsembleCode(id: string, code: string): Promise<'ok' | 
   await setDoc(ensembleRef, { codeId: newId }, { merge: true });
   if (oldId && oldId !== newId) await deleteDoc(doc(fs, 'ensembleCodes', oldId));
   unlockEnsemble(id);
+  return 'ok';
+}
+
+/**
+ * Sets the ensemble's leaders' code (its first, or a new one -- the old one then no longer makes a
+ * device a leader; those that are stay). Whoever sets it leads the ensemble. Refused: too short, or
+ * the same as a code that opens an ensemble.
+ */
+export async function setLeaderCode(id: string, code: string): Promise<'ok' | 'short' | 'taken'> {
+  if (code.trim().length < MIN_CODE_LENGTH) return 'short';
+  const fs = firestore();
+  const newId = await leaderCodeId(code);
+  const existing = await getDoc(doc(fs, 'leaderCodes', newId));
+  if (existing.exists() && existing.data()?.ensemble !== id) return 'taken';
+  if ((await getDoc(doc(fs, 'ensembleCodes', await codeId(code)))).exists()) return 'taken';
+  const ensembleRef = doc(fs, 'ensembles', id);
+  const oldId = (await getDoc(ensembleRef)).data()?.leaderCodeId as string | undefined;
+  if (!existing.exists()) await setDoc(doc(fs, 'leaderCodes', newId), { ensemble: id });
+  await setDoc(leaderRef(id), { code: newId, joinedAt: serverTimestamp() });
+  await setDoc(ensembleRef, { leaderCodeId: newId }, { merge: true });
+  if (oldId && oldId !== newId) await deleteDoc(doc(fs, 'leaderCodes', oldId));
+  rememberLeading(id);
   return 'ok';
 }
 

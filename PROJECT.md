@@ -86,8 +86,14 @@ samples), **Relativ männlich** (`rm`) and **Frederick** (`frederick`, a persona
   ensemble's members (or for an ensemble nobody guards yet, i.e. without `codeId`), never
   repointed; a device joins by writing its own membership naming a code document that opens that
   ensemble; songs, sessions and the ensemble's document are for its members only (moving a song
-  needs both). The ensemble's document always names a code that opens it: a member can rename it
-  but not delete it or drop its code (which would let anyone claim the ensemble again). A
+  needs both). **Leaders:** each ensemble has a second code, the leaders' code (`leaderCodes`,
+  another salt): entered anywhere a code is asked for, it opens the ensemble *and* makes the
+  device one of its leaders (`leaders/{uid}/ensembles/{id}`, `leads()` in the app). Only leaders
+  change the ensemble's code, its name and the leaders' code -- the menu shows those items to
+  them alone; while an ensemble has no leaders' code yet, any member may set the first (and leads
+  it then). Songs stay with all members. Changing a code doesn't remove anyone already in or
+  leading. The ensemble's document always names a code that opens it (and, once set, a leaders'
+  code): nobody can delete it or drop its codes (which would let anyone claim the ensemble again). A
   device's clock calibration (`sessions/clockPing_<uid>`) is its own: keyed by its anonymous
   user id, holding only the server's time. The old `config/access` (the PIN's hash, which every
   device could read) is closed -- which is why the code ids use a salt. Changing a code creates
