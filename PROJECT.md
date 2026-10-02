@@ -1320,8 +1320,9 @@ draws the group's stems under one beam (`drawBeams`): one common direction (forc
 two-voice situation, otherwise set by the note furthest from the middle line), a slope following
 the first and last notes but at most one space over the group and flat when tiny, the line moved
 out so no stem gets shorter than 2.5 spaces; secondary beams join consecutive stems that carry
-that level, hooks are short stubs. The beam glows while any of its notes sounds, each stem with
-its own note. Where the file has no beams (or a group would hold one stem), the notes keep their
+that level, hooks are short stubs. A sounding note lights its stem and its stretch of the beams:
+from halfway back to the note before to halfway on to the next (from its own stem, for the first
+and the last), every level that runs there. Where the file has no beams (or a group would hold one stem), the notes keep their
 flags -- no beaming is invented from the metre.
 
 **Each voice gets its own staff, stacked vertically** (top to bottom in score order, like a

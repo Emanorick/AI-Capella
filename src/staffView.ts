@@ -1256,7 +1256,6 @@ export class StaffView {
         if (!up && y < near[i] + shortest) y0 += near[i] + shortest - y;
       }
       const beamY = (x: number) => y0 + slope * (x - xs[0]);
-      const anyLit = group.some(lit);
 
       // Stems: from the head furthest from the beam to the beam.
       group.forEach((st, i) => {
@@ -1282,24 +1281,34 @@ export class StaffView {
         ctx.closePath();
         ctx.fill();
       };
-      glowing(anyLit, () => {
-        bar(0, xs[0], xs[xs.length - 1] + STEM_THICKNESS);
-        for (let level = 1; level < levels; level++) {
-          for (let i = 0; i < group.length; i++) {
-            const mark = group[i].marks?.[level];
-            if (!mark) continue;
-            const next = group[i + 1]?.marks?.[level];
-            if ((mark === 'begin' || mark === 'continue') && (next === 'continue' || next === 'end')) {
-              bar(level, xs[i], xs[i + 1] + STEM_THICKNESS);
-            } else if (mark === 'forward hook') {
-              const to = Math.min(xs[i] + BEAM_HOOK, i + 1 < group.length ? (xs[i] + xs[i + 1]) / 2 : xs[i] + BEAM_HOOK);
-              bar(level, xs[i], to + STEM_THICKNESS);
-            } else if (mark === 'backward hook') {
-              const from = Math.max(xs[i] - BEAM_HOOK, i > 0 ? (xs[i - 1] + xs[i]) / 2 : xs[i] - BEAM_HOOK);
-              bar(level, from, xs[i] + STEM_THICKNESS);
-            }
+      // The bars as engraved, as spans per level...
+      const spans: [number, number, number][] = [[0, xs[0], xs[xs.length - 1] + STEM_THICKNESS]];
+      for (let level = 1; level < levels; level++) {
+        for (let i = 0; i < group.length; i++) {
+          const mark = group[i].marks?.[level];
+          if (!mark) continue;
+          const next = group[i + 1]?.marks?.[level];
+          if ((mark === 'begin' || mark === 'continue') && (next === 'continue' || next === 'end')) {
+            spans.push([level, xs[i], xs[i + 1] + STEM_THICKNESS]);
+          } else if (mark === 'forward hook') {
+            const to = Math.min(xs[i] + BEAM_HOOK, i + 1 < group.length ? (xs[i] + xs[i + 1]) / 2 : xs[i] + BEAM_HOOK);
+            spans.push([level, xs[i], to + STEM_THICKNESS]);
+          } else if (mark === 'backward hook') {
+            const from = Math.max(xs[i] - BEAM_HOOK, i > 0 ? (xs[i - 1] + xs[i]) / 2 : xs[i] - BEAM_HOOK);
+            spans.push([level, from, xs[i] + STEM_THICKNESS]);
           }
         }
+      }
+      for (const [level, xa, xb] of spans) bar(level, xa, xb);
+      // ...and lit around each sounding note: from halfway back to the note before to halfway on
+      // to the next (from its own stem, for the first and the last).
+      group.forEach((st, i) => {
+        if (!lit(st)) return;
+        const from = i > 0 ? (xs[i - 1] + xs[i] + STEM_THICKNESS) / 2 : xs[i];
+        const to = i < group.length - 1 ? (xs[i] + xs[i + 1] + STEM_THICKNESS) / 2 : xs[i] + STEM_THICKNESS;
+        glowing(true, () => {
+          for (const [level, xa, xb] of spans) if (Math.min(xb, to) > Math.max(xa, from)) bar(level, Math.max(xa, from), Math.min(xb, to));
+        });
       });
     }
   }
