@@ -55,6 +55,41 @@ function lyricLanePx(rowHeight: number): number {
 }
 const DIMMED_ALPHA = 0.3;
 
+const SAME = 1e-6;
+const voiceOf = (n: NoteEvent) => n.voice ?? '1';
+
+/**
+ * The syllables as the roll shows them: a note without one takes the syllable of a note of its part
+ * struck at the same moment for just as long. Where two voices share a staff (tenor 1 and 2, bass
+ * and baritone) and move together, a score prints the words once, for both -- in the file they hang
+ * on one voice's notes only, and in the roll the other voice's notes stood bare. Not a note held on
+ * in its own voice's melisma (its syllable carried on with an extender line): that voice is still
+ * singing its own word. The notes are a part's, sorted by start; those that gain a syllable are copies.
+ */
+export function shareLyrics(notes: NoteEvent[]): NoteEvent[] {
+  // Per voice: whether its last syllable is still being held, and where its last note ended.
+  const held = new Map<string, boolean>();
+  const lastEnd = new Map<string, number>();
+  const out: NoteEvent[] = [];
+  for (let i = 0; i < notes.length; i++) {
+    const note = notes[i];
+    const v = voiceOf(note);
+    const contiguous = Math.abs((lastEnd.get(v) ?? -1) - note.startBeat) < SAME;
+    if (note.lyric) held.set(v, !!note.lyricExtend);
+    else if (!contiguous) held.set(v, false);
+    lastEnd.set(v, Math.max(lastEnd.get(v) ?? -1, note.startBeat + note.durationBeats));
+    if (note.lyric || held.get(v)) {
+      out.push(note);
+      continue;
+    }
+    let source: NoteEvent | undefined;
+    for (let j = i - 1; j >= 0 && notes[j].startBeat > note.startBeat - SAME; j--) if (notes[j].lyric && Math.abs(notes[j].durationBeats - note.durationBeats) < SAME) source ??= notes[j];
+    for (let j = i + 1; !source && j < notes.length && notes[j].startBeat < note.startBeat + SAME; j++) if (notes[j].lyric && Math.abs(notes[j].durationBeats - note.durationBeats) < SAME) source = notes[j];
+    out.push(source ? { ...note, lyric: source.lyric, lyricJoin: source.lyricJoin, lyricExtend: source.lyricExtend } : note);
+  }
+  return out;
+}
+
 type Sounding = Flare & { note: NoteEvent };
 const PAST_SHADE = 'rgba(13,12,22,0.38)'; // laid over everything left of the playhead: played notes step back
 const PAST_FADE_PX = 72; // lantern: the shade fades in over this width left of the playhead
@@ -192,7 +227,7 @@ export class PianoRoll {
       if (list) list.push(note);
       else this.notesByPart.set(note.partId, [note]);
     }
-    for (const list of this.notesByPart.values()) list.sort((a, b) => a.startBeat - b.startBeat);
+    for (const [partId, list] of this.notesByPart) this.notesByPart.set(partId, shareLyrics(list.sort((a, b) => a.startBeat - b.startBeat)));
     this.maxNoteBeats = score.notes.reduce((max, n) => Math.max(max, n.durationBeats), 0);
     this.slursByPart = new Map();
     for (const slur of score.slurs) {
@@ -1144,16 +1179,24 @@ export class PianoRoll {
         if (!score) continue;
         const mid = top + bmp.cssHeight * 0.58;
         ctx.fillStyle = textColor;
-        if (note.lyricJoin && lyricNotes[i + 1]) {
+        // The word's next syllable, and the notes its syllable is held over, are its own voice's
+        // (another voice on the staff may be singing beside it).
+        const nextSyllable = note.lyricJoin ? lyricNotes.find((l, k) => k > i && voiceOf(l.note) === voiceOf(note) && l.note.startBeat > note.startBeat + SAME) : undefined;
+        if (nextSyllable) {
           // Hyphen, centred in the space before the word's next syllable.
           const gapStart = x2 + 3;
-          const gapEnd = lyricNotes[i + 1].x - 1;
+          const gapEnd = nextSyllable.x - 1;
           const dash = Math.min(fontPx * 0.55, gapEnd - gapStart - 2);
           if (dash >= 3) ctx.fillRect(Math.round((gapStart + gapEnd - dash) / 2), Math.round(mid), dash, Math.max(1, fontPx * 0.09));
         } else if (note.lyricExtend) {
           // Extender: a line under the held syllable to the end of its last note.
           let last = note;
-          for (let j = index + 1; j < notes.length && !notes[j].lyric; j++) last = notes[j];
+          for (let j = index + 1; j < notes.length; j++) {
+            const n = notes[j];
+            if (voiceOf(n) !== voiceOf(note) || n.startBeat < note.startBeat + SAME) continue;
+            if (n.lyric || n.startBeat > last.startBeat + last.durationBeats + SAME) break; // its next word, or a rest
+            if (n.startBeat + n.durationBeats > last.startBeat + last.durationBeats) last = n;
+          }
           const end = localBeatToX(last.startBeat + last.durationBeats) - 4;
           const base = top + bmp.cssHeight - 2;
           if (end > x2 + 6) ctx.fillRect(x2 + 3, Math.round(base), end - x2 - 3, 1);

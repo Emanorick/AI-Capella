@@ -162,7 +162,11 @@ connected device — so nobody is left with music playing to an empty player.
 - **Notes** are rounded pills in the voice colour, with the lyric syllable printed *inside* the
   pill when it fits (like note blocks in vocal-synth editors) and in a small lane under it when
   the note is too short; a syllable in that lane is skipped if another voice already printed one
-  at the same spot, so unison voices don't print over each other. Notes under the playhead light
+  at the same spot, so unison voices don't print over each other. Two voices sharing a staff
+  (tenor 1 and 2, bass and baritone) that move together carry the words once in the file, on one
+  voice's notes; the roll gives a bare note the syllable of a note of its part struck at the same
+  moment for just as long (`shareLyrics`) -- not a note held in its own voice's melisma. Hyphens
+  and extender lines follow each note's own voice. Notes under the playhead light
   up with a soft glow, and everything already played is shaded back slightly.
 - **Rows are shaded like piano keys** (black-key rows slightly darker, a hairline under every C)
   so intervals and octaves read at a glance without a persistent keyboard.
