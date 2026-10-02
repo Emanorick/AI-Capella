@@ -1,3 +1,4 @@
+import { backingSize } from './pixels';
 import type { NoteEvent, Score, SlurArc } from './score';
 import { getBeatMarkers } from './score';
 import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, withAlpha, stageFill, gelPill, playheadBeam, paperGrain } from './theme';
@@ -476,8 +477,9 @@ export class PianoRoll {
     this.cssHeight = rect.height;
     this.dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
 
-    this.canvas.width = Math.max(1, Math.round(rect.width * this.dpr));
-    this.canvas.height = Math.max(1, Math.round(rect.height * this.dpr));
+    const size = backingSize(this.canvas, rect.width, rect.height, this.dpr);
+    this.canvas.width = size.w;
+    this.canvas.height = size.h;
     this.ctx2d.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     // Resizing the backing store resets context state, including this -- see snapToDevicePx for
     // why it matters (an unsnapped position wouldn't need smoothing disabled, but a snapped one

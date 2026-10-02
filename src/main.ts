@@ -26,6 +26,7 @@ import { START_DRAFT, START_STAFF, START_STAGE } from './design';
 import { lightScoreName, type TitleName } from './lightName';
 import { animateStaff } from './titleStaff';
 import { animateStage } from './titleStage';
+import { notePixelSizes, observePixelSize } from './pixels';
 import { canSwing, swingMap, swingScore } from './swing';
 import { loadScriptFont } from './goldInk';
 import { closeOverlay, confirmDialog, isNarrow, openMenu, openPopover, openSheet, promptDialog, toast } from './ui';
@@ -3199,10 +3200,13 @@ window.addEventListener('resize', () => {
 // Mobile browsers can change the canvas's laid-out size (address bar show/hide, dynamic toolbar,
 // app-switcher return) without firing a window 'resize' event -- ResizeObserver watches the
 // canvases' own boxes directly, so it catches every case.
-const canvasResizeObserver = new ResizeObserver(resizeCanvases);
-canvasResizeObserver.observe(canvas);
-canvasResizeObserver.observe(staffCanvas);
-canvasResizeObserver.observe(overviewCanvas);
+// In device pixels where the browser reports them, so each canvas's backing store matches the
+// screen exactly (pixels.ts) -- this also catches a change of the page's zoom.
+const canvasResizeObserver = new ResizeObserver((entries) => {
+  notePixelSizes(entries);
+  resizeCanvases();
+});
+for (const c of [canvas, staffCanvas, overviewCanvas]) observePixelSize(canvasResizeObserver, c);
 
 function setActiveView(view: 'roll' | 'staff') {
   activeView = view;

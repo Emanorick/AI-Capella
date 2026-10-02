@@ -1,3 +1,4 @@
+import { backingSize } from './pixels';
 import type { MeasureInfo, NoteEvent, PartInfo, Score } from './score';
 import type { PartMixState } from './audioEngine';
 import { FONT_DISPLAY, FONT_MONO, FONT_MUSIC, FONT_TEXT, INK1, PAPER, paper, stageFill, playheadBeam, readingStrip, paperGrain } from './theme';
@@ -523,8 +524,9 @@ export class StaffView {
     this.cssWidth = rect.width;
     this.cssHeight = rect.height;
     this.dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
-    this.canvas.width = Math.max(1, Math.round(rect.width * this.dpr));
-    this.canvas.height = Math.max(1, Math.round(rect.height * this.dpr));
+    const size = backingSize(this.canvas, rect.width, rect.height, this.dpr);
+    this.canvas.width = size.w;
+    this.canvas.height = size.h;
     this.ctx2d.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.setZoom(this.zoom);
     this.updateFill();

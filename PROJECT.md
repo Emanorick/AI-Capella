@@ -773,6 +773,11 @@ seconds, how long drawing a frame takes (average and longest) and the pixel rati
 what a particular device really shows (a browser's energy saver, or an iPhone in Low Power Mode,
 caps pages at 30 frames per second).
 
+**Backing stores of the exact device size** (`pixels.ts`). Where the browser reports it
+(Chromium: ResizeObserver's 'device-pixel-content-box'), the roll's, the sheet view's and the
+overview's canvases get exactly the device-pixel size they are shown at, so they aren't resampled
+to fit at a fractional pixel ratio (a browser zoomed to 90% on a Retina screen is 1.8x).
+
 **Pixel-snapped blitting.** Even a nominally 1:1-scale `drawImage` blurs slightly if its
 destination lands on a fractional device pixel — which, mid-playback, it does essentially
 every frame, since the scroll offset follows continuous audio time rather than discrete pixel

@@ -1,3 +1,4 @@
+import { backingSize } from './pixels';
 import type { Score } from './score';
 import type { LoopRegion } from './pianoRoll';
 import { PAPER, paper, withAlpha } from './theme';
@@ -41,8 +42,9 @@ export class OverviewStrip {
     this.cssWidth = rect.width;
     this.cssHeight = rect.height;
     this.dpr = Math.min(2, window.devicePixelRatio || 1);
-    this.canvas.width = Math.max(1, Math.round(this.cssWidth * this.dpr));
-    this.canvas.height = Math.max(1, Math.round(this.cssHeight * this.dpr));
+    const size = backingSize(this.canvas, this.cssWidth, this.cssHeight, this.dpr);
+    this.canvas.width = size.w;
+    this.canvas.height = size.h;
     this.dirty = true;
   }
 
