@@ -1686,10 +1686,42 @@ button.stepper-value:hover {
   text-align: left;
 }
 
+/* The light of the reading line: the item under the pointer (or keyboard focus) glows in its warm,
+   soft gold -- a spot of light, not a filled bar. The chosen one keeps a gold check. */
+.menu-item {
+  position: relative;
+  isolation: isolate;
+  transition: color var(--t-fast), text-shadow var(--t-fast);
+}
+.menu-item::before {
+  content: '';
+  position: absolute;
+  inset: 8px 14px;
+  z-index: -1;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgb(255 212 160 / 0.2), rgb(255 208 156 / 0.08) 60%, rgb(255 208 156 / 0));
+  filter: blur(9px);
+  opacity: 0;
+  transition: opacity var(--t-fast);
+  pointer-events: none;
+}
 .menu-item:hover,
 .menu-item:focus-visible {
-  background: var(--ink-3);
+  color: #fff3e2;
+  text-shadow: 0 0 14px rgb(255 214 160 / 0.45);
   outline: none;
+}
+.menu-item:hover::before,
+.menu-item:focus-visible::before {
+  opacity: 1;
+}
+.menu-item:hover .ic,
+.menu-item:focus-visible .ic {
+  color: #e2c48c;
+  filter: drop-shadow(0 0 6px rgb(255 208 156 / 0.55));
+}
+.menu-item[aria-checked='true'] .menu-check {
+  color: #e2c48c;
 }
 
 .menu-item .ic {
