@@ -751,6 +751,22 @@ shade left of the reading line is a flat fill plus a gradient over just its fadi
 gradient across the whole played area (the same picture, far cheaper per frame). In development
 `window.__frames` logs each frame's position and render time.
 
+**Painting ahead, a slice per frame.** The buffer is large -- three screen-widths of the roll,
+on a 16" laptop 8192 x 3144 device px -- and repainting it in one go while playing stalled the
+motion for several frames (measured 45-90 ms on a phone-sized view, every couple of seconds): the
+regular hitch that made moving text hard to read. Now, while the view moves on, the next stretch
+is painted into a second set of buffers (`prepareNextBuffer`) in slices about 512 device px wide,
+one per frame (more while the frame has spent under 2.5 ms on them), and swapped in when the view
+reaches the end of the current one (`swapInNext`). Slices are clipped on whole pixels of each
+canvas, so they meet without a seam -- checked pixel for pixel against a one-piece repaint,
+including at a 1.5 pixel ratio; syllables far from a slice aren't even rasterised for it. A buffer
+reaches a quarter screen behind the view and the rest ahead (the old rule only looked at the
+reading line, not the screen's right edge, so the "doesn't cover the screen" safety repaint fired
+every time). Changes to what the roll shows (`invalidateBuffers`: mix, transpose, zoom, rows,
+sections, resize) drop the slices painted so far and repaint at once, as before; the second set is
+allocated and touched at that first paint, not in the first seconds of playback. The paper's
+grain is anchored to the music (`paperGrain`'s offset), so it doesn't jump when buffers change.
+
 **Pixel-snapped blitting.** Even a nominally 1:1-scale `drawImage` blurs slightly if its
 destination lands on a fractional device pixel — which, mid-playback, it does essentially
 every frame, since the scroll offset follows continuous audio time rather than discrete pixel

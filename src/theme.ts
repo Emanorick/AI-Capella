@@ -26,7 +26,8 @@ let grainTile: HTMLCanvasElement | null = null;
  * The paper's fibres, painted into the piano roll's content buffer (so they scroll with the roll
  * like real paper, and cost nothing per frame).
  */
-export function paperGrain(ctx: CanvasRenderingContext2D, width: number, height: number) {
+/** The paper's grain over width x height; `offsetX` shifts it, so it can stay put on the music when a buffer starts elsewhere. */
+export function paperGrain(ctx: CanvasRenderingContext2D, width: number, height: number, offsetX = 0) {
   if (!grainTile) {
     const tile = document.createElement('canvas');
     tile.width = tile.height = 96;
@@ -48,6 +49,7 @@ export function paperGrain(ctx: CanvasRenderingContext2D, width: number, height:
   }
   const pattern = ctx.createPattern(grainTile, 'repeat');
   if (!pattern) return;
+  if (offsetX) pattern.setTransform(new DOMMatrix().translateSelf(offsetX % grainTile.width, 0));
   ctx.fillStyle = pattern;
   ctx.fillRect(0, 0, width, height);
 }

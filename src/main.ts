@@ -3110,8 +3110,13 @@ function stopAudioTick() {
 }
 
 // Development only: the shown position and render time of each frame, for measuring smoothness.
-const frameLog: { t: number; beat: number; ms: number; heard: number }[] | null = import.meta.env.DEV ? [] : null;
+const frameLog: { t: number; beat: number; ms: number; heard: number; scale?: number; rebuilds?: number }[] | null = import.meta.env.DEV ? [] : null;
 if (frameLog) (window as unknown as { __frames: typeof frameLog }).__frames = frameLog;
+// Development only: repaint the roll's buffers in one piece (to compare with the sliced painting).
+if (import.meta.env.DEV) (window as unknown as { __repaintRoll: () => void }).__repaintRoll = () => {
+  (pianoRoll as unknown as { invalidateBuffers(): void } | null)?.invalidateBuffers();
+  renderNow();
+};
 let frameLag = 0; // ms from a frame's timestamp to its drawing, smoothed
 function renderLoop(frameMs: number) {
   if (!audioEngine || !pianoRoll || !currentScore || !audioEngine.isPlaying()) {
@@ -3128,7 +3133,7 @@ function renderLoop(frameMs: number) {
   const t0 = performance.now();
   renderActiveView(shown, beat);
   updatePositionDisplay(shown);
-  if (import.meta.env.DEV) frameLog?.push({ t: t0, beat: shown, ms: performance.now() - t0, heard: audioEngine.getCurrentBeat() + viewOffsetBeats + glideResidual() });
+  if (import.meta.env.DEV) frameLog?.push({ t: t0, beat: shown, ms: performance.now() - t0, heard: audioEngine.getCurrentBeat() + viewOffsetBeats + glideResidual(), ...(pianoRoll?.debugInfo() ?? {}) });
   rafId = requestAnimationFrame(renderLoop);
 }
 function startRenderLoop() {

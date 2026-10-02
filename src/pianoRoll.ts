@@ -61,6 +61,11 @@ const MAX_DPR = 2; // native Retina density; only caps 3x phones, doesn't soften
 const BUFFER_SPAN_MULTIPLIER = 3; // scrolling-content buffer covers this many viewport-widths of beats
 const MAX_BUFFER_DEVICE_PX = 8192; // defensive cap on the content buffer's width in device px (see ensureContentBuffer)
 const BUFFER_REBUILD_MARGIN = 0.25; // rebuild once the playhead gets within this fraction of a viewport-width of the buffer's edge
+const NEXT_BUFFER_LEAD = 1; // start painting the next buffer this many viewport-widths before it's needed
+const SLICE_LYRIC_REACH_PX = 300; // a slice's syllables: those within this of its edges (see paintContent)
+const BUFFER_BEHIND = 0.25; // a buffer reaches this many viewport-widths behind the view (the rest is ahead)
+const NEXT_SLICE_DEVICE_PX = 512; // the next buffer is painted in slices about this wide (device px)...
+const NEXT_SLICE_BUDGET_MS = 2.5; // ...one per frame, more while a frame has spent less than this on them
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 // A simplified "keyboard-style gutter" (alternating light/dark bands per semitone row, matching
 // real piano key coloring -- not literal interlocking key polygons, out of scope for the visual
@@ -149,6 +154,13 @@ export class PianoRoll {
   private contentBufferOriginBeat = 0;
   private contentBufferBeatsSpan = 0;
   private contentBufferDirty = true;
+  private rebuilds = 0; // content buffer repaints (for the development frame log)
+  private swaps = 0;
+  private drops = 0;
+  // The next stretch of the roll, being painted ahead (see prepareNextBuffer), and the canvases
+  // the last swap freed for it.
+  private next: { content: HTMLCanvasElement; glass: HTMLCanvasElement | null; ruler: HTMLCanvasElement; origin: number; span: number; rowHeight: number; done: number; slices: number } | null = null;
+  private spare: { content: HTMLCanvasElement | null; glass: HTMLCanvasElement | null; ruler: HTMLCanvasElement | null } = { content: null, glass: null, ruler: null };
   // Lantern style: the voices' colour filters, one per hole, on transparent (same span as the
   // content buffer, at GLASS_SCALE), and the lamp behind the paper.
   private glassBuffer: HTMLCanvasElement | null = null;
@@ -231,18 +243,18 @@ export class PianoRoll {
       if (state === 'muted') this.hiddenParts.add(partId);
       else if (anySolo && state !== 'solo') this.dimmedParts.add(partId);
     }
-    this.contentBufferDirty = true;
+    this.invalidateBuffers();
   }
 
   setTranspose(semitones: number) {
     this.transpose = semitones;
     this.updatePitchRange();
-    this.contentBufferDirty = true;
+    this.invalidateBuffers();
   }
 
   setZoom(factor: number) {
     this.pixelsPerBeat = BASE_PIXELS_PER_BEAT * factor;
-    this.contentBufferDirty = true;
+    this.invalidateBuffers();
   }
 
   getPixelsPerBeat() {
@@ -335,7 +347,7 @@ export class PianoRoll {
   private setBufferRow(row: number) {
     if (Math.abs(row - this.rowHeightPx) < 0.01) return;
     this.rowHeightPx = row;
-    this.contentBufferDirty = true;
+    this.invalidateBuffers();
     this.lyricBitmaps.clear(); // the lyric size follows the row height
   }
 
@@ -431,6 +443,18 @@ export class PianoRoll {
     this.scrollY = (this.maxMidi - view.top) * this.rowHeightPx;
   }
 
+  /** Something the buffers show changed: repaint the current one, drop the one being painted ahead. */
+  private invalidateBuffers() {
+    if (this.next) this.drops++;
+    this.contentBufferDirty = true;
+    this.next = null;
+  }
+
+  /** For the development frame log: the blit's vertical scale and how often the buffer was repainted. */
+  debugInfo(): { scale: number; rebuilds: number; swaps: number; drops: number; next: string; bufW: number; bufH: number } {
+    return { scale: this.viewScale, rebuilds: this.rebuilds, swaps: this.swaps, drops: this.drops, next: this.next ? `${this.next.done}/${this.next.slices}` : '-', bufW: this.contentBuffer?.width ?? 0, bufH: this.contentBuffer?.height ?? 0 };
+  }
+
   setLoopRegion(region: LoopRegion | null) {
     this.loopRegion = region;
   }
@@ -438,7 +462,7 @@ export class PianoRoll {
   /** Section letters (rehearsal marks) printed as boxed letters in the ruler. */
   setSections(sections: { label: string; beat: number }[]) {
     this.sections = sections;
-    this.contentBufferDirty = true;
+    this.invalidateBuffers();
   }
 
   /** Shows the pitch name label at a clicked note's position (or clears it, if null). */
@@ -460,7 +484,7 @@ export class PianoRoll {
     // still gets blitted at a fractional *device* pixel unless smoothing is off, since some
     // browsers interpolate a 1:1 drawImage anyway when antialiasing hints are on).
     this.ctx2d.imageSmoothingEnabled = false;
-    this.contentBufferDirty = true;
+    this.invalidateBuffers();
     this.lyricBitmaps.clear(); // cached bitmaps are baked at the old dpr
 
     if (this.autoFit) {
@@ -605,7 +629,7 @@ export class PianoRoll {
     }
     // Bar numbers and section letters are pre-rendered into rulerBuffer (see ensureContentBuffer)
     // and just blitted here, same as the note content below -- see snapToDevicePx's doc comment.
-    this.ensureContentBuffer(displayBeat, width, rowHeight);
+    this.ensureContentBuffer(displayBeat, width, rowHeight, anchorX);
     if (this.rulerBuffer) {
       const destX = this.snapToDevicePx(anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat);
       const bufferCssWidth = this.contentBufferBeatsSpan * this.pixelsPerBeat;
@@ -647,8 +671,8 @@ export class PianoRoll {
       const destXCheck = anchorX - (displayBeat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
       const bufferCssWidthCheck = this.contentBufferBeatsSpan * this.pixelsPerBeat;
       if (destXCheck > 0.5 || destXCheck + bufferCssWidthCheck < width - 0.5) {
-        this.contentBufferDirty = true;
-        this.ensureContentBuffer(displayBeat, width, rowHeight);
+        this.invalidateBuffers();
+        this.ensureContentBuffer(displayBeat, width, rowHeight, anchorX);
       }
     }
     // Lit notes go on exactly the pixel grid the buffer is blitted to (its x is snapped to whole
@@ -807,16 +831,49 @@ export class PianoRoll {
     return Math.max(6, Math.min(PILL_MAX_PX, rowHeight - BAR_PAD_PX * 2 - lyricLanePx(rowHeight)));
   }
 
-  private ensureContentBuffer(currentBeat: number, contentWidth: number, rowHeight: number) {
+  private ensureContentBuffer(currentBeat: number, contentWidth: number, rowHeight: number, anchorX: number) {
     const visibleBeatsSpan = Math.max(1, contentWidth / this.pixelsPerBeat);
     const margin = visibleBeatsSpan * BUFFER_REBUILD_MARGIN;
-    const needsRebuild =
-      this.contentBufferDirty ||
-      !this.contentBuffer ||
-      currentBeat - margin < this.contentBufferOriginBeat ||
-      currentBeat + margin > this.contentBufferOriginBeat + this.contentBufferBeatsSpan;
-    if (!needsRebuild) return;
+    // What is on screen: from the left edge (the reading line sits anchorX in) to the right one.
+    const viewFrom = currentBeat - anchorX / this.pixelsPerBeat;
+    const viewTo = viewFrom + contentWidth / this.pixelsPerBeat;
+    const covers = (origin: number, span: number) => viewFrom - margin >= origin && viewTo + margin <= origin + span;
+    const needsRebuild = this.contentBufferDirty || !this.contentBuffer || !covers(this.contentBufferOriginBeat, this.contentBufferBeatsSpan);
+    if (!needsRebuild) {
+      this.prepareNextBuffer(viewFrom, viewTo, visibleBeatsSpan, margin, rowHeight);
+      return;
+    }
+    // The next stretch, painted ahead a slice at a time (prepareNextBuffer): just swap it in.
+    const next = this.next;
+    if (!this.contentBufferDirty && this.contentBuffer && next && next.done >= next.slices && covers(next.origin, next.span)) {
+      this.swapInNext(next);
+      return;
+    }
+    this.rebuilds++;
+    this.next = null;
+    const { originBeat, beatsSpan } = this.bufferSpan(viewFrom, visibleBeatsSpan, margin);
+    this.contentBufferOriginBeat = originBeat;
+    this.contentBufferBeatsSpan = beatsSpan;
+    const set = this.sizeBufferSet({ content: this.contentBuffer, glass: this.glassBuffer, ruler: this.rulerBuffer }, beatsSpan);
+    this.contentBuffer = set.content;
+    this.glassBuffer = set.glass;
+    this.rulerBuffer = set.ruler;
+    this.paintSlice(set, originBeat, beatsSpan, rowHeight, 0, 1);
+    this.paintRuler(set.ruler, originBeat, beatsSpan * this.pixelsPerBeat);
+    this.contentBufferDirty = false;
+    // The second set, for painting ahead, sized and touched now (a canvas takes its memory at its
+    // first drawing) -- so that moment falls here, not into the first frames of playback.
+    if (!this.spare.content) {
+      this.spare = this.sizeBufferSet(this.spare, beatsSpan);
+      for (const c of [this.spare.content, this.spare.glass, this.spare.ruler]) c?.getContext('2d')?.clearRect(0, 0, c.width, c.height);
+    }
+  }
 
+  /**
+   * Where a buffer for a view starting at `viewFrom` starts and how many beats it spans: from a
+   * little behind the view to well ahead of it -- the music comes from the right.
+   */
+  private bufferSpan(viewFrom: number, visibleBeatsSpan: number, margin: number): { originBeat: number; beatsSpan: number } {
     // Cap the buffer's device-pixel width defensively: some browser/GPU combinations silently
     // clamp or fail to paint canvases beyond roughly 16k device px on a side, which on a very
     // wide and/or high-DPI desktop display could turn "3 viewport-widths of buffer" into a canvas
@@ -825,36 +882,111 @@ export class PianoRoll {
     const idealHalfSpan = (visibleBeatsSpan * BUFFER_SPAN_MULTIPLIER) / 2;
     const maxBeatsSpan = MAX_BUFFER_DEVICE_PX / this.dpr / this.pixelsPerBeat;
     const halfSpan = Math.min(idealHalfSpan, Math.max(visibleBeatsSpan, maxBeatsSpan / 2));
-    const originBeat = currentBeat - halfSpan;
-    const beatsSpan = halfSpan * 2;
-    this.contentBufferOriginBeat = originBeat;
-    this.contentBufferBeatsSpan = beatsSpan;
+    return { originBeat: viewFrom - margin - visibleBeatsSpan * BUFFER_BEHIND, beatsSpan: halfSpan * 2 };
+  }
 
+  /**
+   * Sizes (or creates) a buffer set's canvases for a span of beats. Only a real change of size is
+   * set: setting a canvas's size, even to the same, clears it and has the browser allocate it anew.
+   * (Whatever is left on them is painted over: every slice clears its own part first.)
+   */
+  private sizeBufferSet(set: { content: HTMLCanvasElement | null; glass: HTMLCanvasElement | null; ruler: HTMLCanvasElement | null }, beatsSpan: number) {
     const contentH = this.contentHeightPx();
     const bufCssWidth = Math.max(1, beatsSpan * this.pixelsPerBeat);
-    const buf = this.contentBuffer ?? document.createElement('canvas');
-    buf.width = Math.max(1, Math.round(bufCssWidth * this.dpr));
-    buf.height = Math.max(1, Math.round(contentH * this.dpr));
-    const bctx = buf.getContext('2d');
-    if (!bctx) return;
-    bctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    this.paintContent(bctx, originBeat, bufCssWidth, contentH, rowHeight);
-    this.contentBuffer = buf;
+    const size = (c: HTMLCanvasElement, w: number, h: number) => {
+      if (c.width !== w) c.width = w;
+      if (c.height !== h) c.height = h;
+    };
+    const content = set.content ?? document.createElement('canvas');
+    size(content, Math.max(1, Math.round(bufCssWidth * this.dpr)), Math.max(1, Math.round(contentH * this.dpr)));
+    let glass: HTMLCanvasElement | null = null;
     if (LANTERN) {
-      const glass = this.glassBuffer ?? document.createElement('canvas');
-      glass.width = Math.max(1, Math.round(bufCssWidth * GLASS_SCALE));
-      glass.height = Math.max(1, Math.round(contentH * GLASS_SCALE));
-      const gctx = glass.getContext('2d');
-      if (gctx) {
-        gctx.setTransform(GLASS_SCALE, 0, 0, GLASS_SCALE, 0, 0);
-        this.paintGlass(gctx, originBeat, bufCssWidth, rowHeight);
-      }
-      this.glassBuffer = glass;
+      glass = set.glass ?? document.createElement('canvas');
+      size(glass, Math.max(1, Math.round(bufCssWidth * GLASS_SCALE)), Math.max(1, Math.round(contentH * GLASS_SCALE)));
     }
+    const ruler = set.ruler ?? document.createElement('canvas');
+    size(ruler, content.width, Math.max(1, Math.round(RULER_HEIGHT_PX * this.dpr)));
+    return { content, glass, ruler };
+  }
 
-    const rulerBuf = this.rulerBuffer ?? document.createElement('canvas');
-    rulerBuf.width = buf.width;
-    rulerBuf.height = Math.max(1, Math.round(RULER_HEIGHT_PX * this.dpr));
+  /**
+   * Paints the part [from, to) (fractions of its width) of a buffer set's content and glass: clipped
+   * to that part, on edges that fall on whole pixels of each canvas so neighbouring parts meet
+   * without a seam.
+   */
+  private paintSlice(set: { content: HTMLCanvasElement; glass: HTMLCanvasElement | null }, originBeat: number, beatsSpan: number, rowHeight: number, from: number, to: number) {
+    const contentH = this.contentHeightPx();
+    const bufCssWidth = Math.max(1, beatsSpan * this.pixelsPerBeat);
+    const bctx = set.content.getContext('2d');
+    if (bctx) {
+      const x0 = Math.round(from * set.content.width) / this.dpr;
+      const x1 = Math.round(to * set.content.width) / this.dpr;
+      bctx.save();
+      bctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      bctx.beginPath();
+      bctx.rect(x0, 0, x1 - x0, contentH);
+      bctx.clip();
+      this.paintContent(bctx, originBeat, bufCssWidth, contentH, rowHeight, from > 0 || to < 1 ? { x0, x1 } : undefined);
+      bctx.restore();
+    }
+    const gctx = set.glass?.getContext('2d');
+    if (set.glass && gctx) {
+      const x0 = Math.round(from * set.glass.width) / GLASS_SCALE;
+      const x1 = Math.round(to * set.glass.width) / GLASS_SCALE;
+      gctx.save();
+      gctx.setTransform(GLASS_SCALE, 0, 0, GLASS_SCALE, 0, 0);
+      gctx.beginPath();
+      gctx.rect(x0, 0, x1 - x0, contentH);
+      gctx.clip();
+      this.paintGlass(gctx, originBeat, bufCssWidth, rowHeight);
+      gctx.restore();
+    }
+  }
+
+  /**
+   * While playing on, the next stretch of the roll is painted ahead into a second set of buffers,
+   * a slice per frame (each a few milliseconds), and swapped in when the view reaches the end of
+   * the current one -- instead of repainting several screen-widths of roll in one frame, which
+   * stalled the motion for several frames (a visible hitch every couple of seconds).
+   */
+  private prepareNextBuffer(viewFrom: number, viewTo: number, visibleBeatsSpan: number, margin: number, rowHeight: number) {
+    const end = this.contentBufferOriginBeat + this.contentBufferBeatsSpan;
+    // Start when the view is `lead` short of needing the next buffer, and lay that one out for the
+    // view as it will be then. The lead fits in what a fresh buffer has ahead of its view (with
+    // room to spare), or the view would already have moved past the next one's start.
+    const ahead = this.contentBufferBeatsSpan - (viewTo - viewFrom) - 2 * margin - visibleBeatsSpan * BUFFER_BEHIND;
+    const lead = Math.max(0, Math.min(visibleBeatsSpan * NEXT_BUFFER_LEAD, ahead * 0.8));
+    if (!this.next) {
+      if (viewTo + margin + lead <= end) return;
+      const { originBeat, beatsSpan } = this.bufferSpan(viewFrom + lead, visibleBeatsSpan, margin);
+      const set = this.sizeBufferSet(this.spare, beatsSpan);
+      this.next = { ...set, origin: originBeat, span: beatsSpan, rowHeight, done: 0, slices: Math.max(2, Math.ceil(set.content.width / NEXT_SLICE_DEVICE_PX)) };
+      return; // painting starts next frame: this one has had its share of work
+    }
+    const next = this.next;
+    if (next.done >= next.slices || next.rowHeight !== rowHeight) return;
+    // A slice per frame -- more while there's time left in this one.
+    const t0 = performance.now();
+    do {
+      this.paintSlice(next, next.origin, next.span, rowHeight, next.done / next.slices, (next.done + 1) / next.slices);
+      next.done++;
+    } while (next.done < next.slices && performance.now() - t0 < NEXT_SLICE_BUDGET_MS);
+    if (next.done >= next.slices) this.paintRuler(next.ruler, next.origin, next.span * this.pixelsPerBeat);
+  }
+
+  private swapInNext(next: NonNullable<PianoRoll['next']>) {
+    this.spare = { content: this.contentBuffer, glass: this.glassBuffer, ruler: this.rulerBuffer };
+    this.contentBuffer = next.content;
+    this.glassBuffer = next.glass;
+    this.rulerBuffer = next.ruler;
+    this.contentBufferOriginBeat = next.origin;
+    this.contentBufferBeatsSpan = next.span;
+    this.next = null;
+    this.swaps++;
+  }
+
+  /** The ruler's bar numbers, section letters and signature changes for a buffer's span. */
+  private paintRuler(rulerBuf: HTMLCanvasElement, originBeat: number, bufCssWidth: number) {
     const rctx = rulerBuf.getContext('2d');
     if (rctx) {
       rctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -905,20 +1037,20 @@ export class PianoRoll {
         rctx.fillText(section.label, x + 9, 18.5);
         rctx.textAlign = 'start';
       }
-      this.rulerBuffer = rulerBuf;
     }
 
-    this.contentBufferDirty = false;
   }
 
   /** Paints gridlines, notes, and slurs into a buffer strip spanning the full pitch range, using buffer-local (not screen) coordinates. */
-  private paintContent(ctx: CanvasRenderingContext2D, originBeat: number, widthCss: number, heightCss: number, rowHeight: number) {
+  private paintContent(ctx: CanvasRenderingContext2D, originBeat: number, widthCss: number, heightCss: number, rowHeight: number, slice?: { x0: number; x1: number }) {
     const localBeatToX = (beat: number) => (beat - originBeat) * this.pixelsPerBeat;
     ctx.clearRect(0, 0, widthCss, heightCss);
     if (LANTERN) {
       ctx.fillStyle = LANTERN_PAPER;
       ctx.fillRect(0, 0, widthCss, heightCss);
-      paperGrain(ctx, widthCss, heightCss);
+      // Anchored to the music, not to where this buffer starts: no jump in the grain when the
+      // next buffer is swapped in.
+      paperGrain(ctx, widthCss, heightCss, -originBeat * this.pixelsPerBeat);
     }
 
     // Rows shaded like piano keys: black-key rows a touch darker, and a hairline under every C, so
@@ -993,6 +1125,10 @@ export class PianoRoll {
       const textColor = score ? towardPaper(color, 0.62) : paper(0.8);
       for (let i = 0; i < lyricNotes.length; i++) {
         const { note, x, y, index } = lyricNotes[i];
+        // Painting one slice (prepareNextBuffer): syllables well away from it are left out -- not
+        // even their bitmaps made, which for a new stretch of music took a whole frame -- but those
+        // near it still take their place in the lane, and a held one's extender may reach in.
+        if (slice && (x > slice.x1 + SLICE_LYRIC_REACH_PX || (x < slice.x0 - SLICE_LYRIC_REACH_PX && !note.lyricExtend))) continue;
         const bmp = this.getLyricBitmap(note.lyric!, textColor, fontPx, 550);
         const row = Math.round(y);
         const used = lyricLane.get(row) ?? [];
