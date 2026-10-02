@@ -41,6 +41,12 @@ export interface NoteEvent {
   // consumed by the sheet-music view, as the preferred alternative to mathematically re-deriving
   // a split -- playback and the piano roll use durationBeats alone, as before.
   tieSegments?: number[];
+  // The MusicXML voice the note was written in (beams join the notes of one voice).
+  voice?: string;
+  // Its beams as engraved (<beam>), per written note -- one entry per tie segment (one for an untied
+  // note) -- and per beam level (index 0 = the eighths' beam): 'begin' | 'continue' | 'end' |
+  // 'forward hook' | 'backward hook'. Absent where the file has none. Sheet view only.
+  beams?: (string[] | undefined)[];
 }
 
 export interface MeasureInfo {

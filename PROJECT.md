@@ -1267,16 +1267,23 @@ they last. Heads of one length are a chord with one stem, as engraved: its direc
 note furthest from the middle line, drawn from the note at the stem's far end through to the
 other, a second's head displaced to the stem's other side. Heads of different lengths at once are
 two voices on one staff (a held bass note under a moving line): the upper voice stems up, the
-lower down, rather than two stems drawn over each other. **Clef per part** is a heuristic, since no clef is parsed
+lower down (by the file's voice numbers when each length is its own voice -- voice 1 up --
+otherwise by pitch), rather than two stems drawn over each other. **Clef per part** is a heuristic, since no clef is parsed
 anywhere in this app's pipeline: each part's average MIDI pitch decides treble vs. bass at
 construction time. **Note duration shape** (filled vs. hollow notehead, stem, flag count) is
 classified from the nearest standard duration to the note's continuous `durationBeats` value
 (including dotted variants) — the only duration representation the rest of the app carries, so
 this is inherently a best-fit approximation, not a re-derivation of the source file's actual
-notated rhythm. Unbeamed: consecutive eighth/16th notes each get their own flagged stem rather
-than being grouped under a beam — full beam-grouping (grouping rules, cross-barline handling) is
-a materially larger typesetting problem, left as a possible follow-up rather than built
-speculatively.
+notated rhythm. **Beams** come from the file: `musicxml.ts` keeps each note's `<beam number=n>`
+marks (begin / continue / end / forward hook / backward hook, per level, per tied segment) and
+its `<voice>`; the sheet view chains a stem's marks within its voice (begin → continue → end) and
+draws the group's stems under one beam (`drawBeams`): one common direction (forced in a
+two-voice situation, otherwise set by the note furthest from the middle line), a slope following
+the first and last notes but at most one space over the group and flat when tiny, the line moved
+out so no stem gets shorter than 2.5 spaces; secondary beams join consecutive stems that carry
+that level, hooks are short stubs. The beam glows while any of its notes sounds, each stem with
+its own note. Where the file has no beams (or a group would hold one stem), the notes keep their
+flags -- no beaming is invented from the metre.
 
 **Each voice gets its own staff, stacked vertically** (top to bottom in score order, like a
 choral octavo), never overlaid on a shared staff — a hard requirement, since SATB voices sharing

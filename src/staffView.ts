@@ -71,6 +71,12 @@ const WHOLE_HEAD_W = 1.688 * SP;
 const STEM_ANCHOR_Y = 0.168 * SP;
 const STEM_THICKNESS = Math.max(1.1, 0.12 * SP);
 const STEM_LENGTH = 3.5 * SP;
+// Beams (drawBeams): a beam's thickness, the step from one beam level to the next, the shortest a
+// beamed stem may get, and a hook's length.
+const BEAM_THICKNESS = 0.5 * SP;
+const BEAM_STEP = 0.75 * SP;
+const MIN_BEAMED_STEM = 2.5 * SP;
+const BEAM_HOOK = 1.1 * SP;
 const LEDGER_EXTENSION = 0.4 * SP;
 const CLEF_W = 2.75 * SP;
 const KEY_ACCIDENTAL_ADVANCE = 0.95 * SP;
@@ -222,6 +228,17 @@ function transposeSpelling(spelling: { step: string; alter: number; octave: numb
 
 /** A note's place in a chord of its voice: shared stem direction, whether it draws the stem (up to
  *  the chord's furthest note, in staff positions), and a sideways shift for a second. */
+/** One stem: the heads of one voice struck at one moment, and the beam marks it carries. */
+interface BeamStem {
+  at: number; // beat x 1e4, rounded (the key heads are grouped by)
+  beat: number;
+  voice: string;
+  dur: number;
+  heads: { n: NoteEvent; k: number; dur: number; pos: number }[]; // lowest first
+  marks: string[] | undefined; // per beam level, as engraved
+  forcedUp: boolean | null; // two voices on the staff: the upper one's stems up, the lower one's down
+}
+
 interface ChordPlace {
   stemUp: boolean;
   stemTo: number | null;
@@ -265,9 +282,8 @@ const DURATION_TABLE: { units: number; filled: boolean; hasStem: boolean; flags:
 
 /**
  * Maps a continuous beat-length (the only duration representation the rest of the app carries) to
- * the nearest standard notated duration, for notehead/stem/flag shape. Not beam-grouping unbeamed
- * eighth/16th notes -- each gets its own flagged stem instead, a deliberately smaller scope than
- * full engraving-quality beaming (see PROJECT.md).
+ * the nearest standard notated duration, for notehead/stem/flag shape. Flagged notes the file beams
+ * are drawn under their beam instead (drawBeams); the others keep their flags (see PROJECT.md).
  */
 function classifyDuration(durationBeats: number): DurationShape {
   let best = DURATION_TABLE[2];
@@ -922,10 +938,11 @@ export class StaffView {
     const notes = this.notesByPart.get(layout.partId) ?? [];
     const notesStartIdx = effectiveMeasure ? firstIndexAtOrAfter(notes, effectiveMeasure.startBeat) : 0;
     // The noteheads struck together in this part -- a note's own head, or a tied note's head carried
-    // on past a bar line -- are grouped by when they sound and for how long. Heads of the same length
-    // are a chord: one stem for all of them, in the direction the note furthest from the middle line
-    // asks for. Heads of different lengths at once are two voices on one staff: the upper one's stems
-    // go up, the lower one's down, as engraved -- rather than two stems over each other.
+    // on past a bar line -- are grouped by when they sound and by voice. A voice's heads together are
+    // a chord: one stem for all of them, in the direction the note furthest from the middle line asks
+    // for. Two voices at once on one staff: the upper one's stems go up, the lower one's down, as
+    // engraved -- rather than two stems over each other. Stems joined by a beam in the file are drawn
+    // with it (drawBeams), all pointing one way.
     const placeOf = (n: NoteEvent) => {
       const sp = this.effectiveSpelling(n);
       return diatonicIndex(sp.step, sp.octave) - (CLEF_BOTTOM_LINE[layout.clef] - layout.octaveShift * 7);
@@ -944,35 +961,87 @@ export class StaffView {
         heads.get(at)!.push({ n, k, dur: seg.durationBeats, pos });
       });
     }
-    for (const struck of heads.values()) {
-      if (struck.length < 2) continue;
+    // Each moment's heads by length: heads of one length are a chord on one stem -- even when the
+    // file writes them in two voices -- and heads of two lengths are two voices.
+    const stems: BeamStem[] = [];
+    for (const [at, struck] of heads) {
       const byLength = new Map<number, typeof struck>();
       for (const h of struck) {
         const len = Math.round(h.dur * 1e4);
         if (!byLength.has(len)) byLength.set(len, []);
         byLength.get(len)!.push(h);
       }
-      const voices = [...byLength.values()].sort((a, b) => Math.max(...b.map((h) => h.pos)) - Math.max(...a.map((h) => h.pos)));
+      // Two voices: the file's first voice on top (stems up) where it says which is which, else the
+      // higher one.
+      const voiceNo = (g: typeof struck) => Math.min(...g.map((h) => Number(h.n.voice)));
+      const groups = [...byLength.values()];
+      const numbered = groups.every((g) => Number.isFinite(voiceNo(g))) && new Set(groups.map(voiceNo)).size === groups.length;
+      const voices = groups.sort(numbered ? (a, b) => voiceNo(a) - voiceNo(b) : (a, b) => Math.max(...b.map((h) => h.pos)) - Math.max(...a.map((h) => h.pos)));
       const twoVoices = voices.length > 1;
       voices.forEach((group, v) => {
-        if (group.length < 2 && !twoVoices) return;
         const placed = [...group].sort((a, b) => a.pos - b.pos);
-        const low = placed[0].pos;
-        const high = placed[placed.length - 1].pos;
-        const stemUp = twoVoices ? v === 0 : high - 4 < 4 - low;
-        const owner = stemUp ? placed[0] : placed[placed.length - 1];
-        const far = stemUp ? high : low;
-        // Walked from the stem's end of the chord: a second's two heads can't share a column, so
-        // the one further along moves to the other side of the stem, as engravers do.
-        const walk = stemUp ? placed : [...placed].reverse();
-        let lastDisplaced = false;
-        walk.forEach((h, k) => {
-          const before = walk[k - 1];
-          const displaced = !!before && Math.abs(before.pos - h.pos) === 1 && !lastDisplaced;
-          lastDisplaced = displaced;
-          if (!chords.has(h.n)) chords.set(h.n, []);
-          chords.get(h.n)![h.k] = { stemUp, stemTo: h === owner ? far : null, dx: displaced ? (stemUp ? 1 : -1) * (HEAD_W - STEM_THICKNESS) : 0 };
+        // Its beam marks, and the voice they chain in: the file's lowest-numbered voice that has some.
+        const marked = group.filter((h) => h.n.beams?.[h.k]?.[0]).sort((a, b) => (a.n.voice ?? '').localeCompare(b.n.voice ?? '', undefined, { numeric: true }));
+        const first = marked[0];
+        stems.push({
+          at,
+          beat: at / 1e4,
+          voice: first?.n.voice ?? group[0].n.voice ?? `len ${Math.round(group[0].dur * 1e4)}`,
+          dur: group[0].dur,
+          heads: placed,
+          marks: first?.n.beams?.[first.k],
+          forcedUp: twoVoices ? v === 0 : null,
         });
+      });
+    }
+    // Beams as engraved: the stems of one voice joined from a beam's 'begin' to its 'end'.
+    stems.sort((a, b) => a.at - b.at);
+    const beamGroups: BeamStem[][] = [];
+    const openBeams = new Map<string, BeamStem[]>();
+    for (const st of stems) {
+      const mark = st.marks?.[0];
+      if (!mark || mark.includes('hook')) continue;
+      if (mark === 'begin') openBeams.set(st.voice, [st]);
+      else {
+        const group = openBeams.get(st.voice) ?? [];
+        group.push(st);
+        if (mark === 'end') {
+          if (group.length > 1) beamGroups.push(group);
+          openBeams.delete(st.voice);
+        } else openBeams.set(st.voice, group);
+      }
+    }
+    for (const group of openBeams.values()) if (group.length > 1) beamGroups.push(group);
+    const beamed = new Set<BeamStem>(beamGroups.flat());
+    // A beamed group's stems all point one way: the voice's way where two share the staff, else the
+    // way the note furthest from the middle line asks for.
+    const beamUp = new Map<BeamStem, boolean>();
+    for (const group of beamGroups) {
+      const forced = group.find((st) => st.forcedUp !== null)?.forcedUp;
+      const all = group.flatMap((st) => st.heads.map((h) => h.pos));
+      const up = forced ?? Math.max(...all) - 4 < 4 - Math.min(...all);
+      for (const st of group) beamUp.set(st, up);
+    }
+    for (const st of stems) {
+      const inBeam = beamed.has(st);
+      if (st.heads.length < 2 && st.forcedUp === null && !inBeam) continue;
+      const placed = st.heads;
+      const low = placed[0].pos;
+      const high = placed[placed.length - 1].pos;
+      const stemUp = beamUp.get(st) ?? st.forcedUp ?? high - 4 < 4 - low;
+      const owner = stemUp ? placed[0] : placed[placed.length - 1];
+      const far = stemUp ? high : low;
+      // Walked from the stem's end of the chord: a second's two heads can't share a column, so
+      // the one further along moves to the other side of the stem, as engravers do.
+      const walk = stemUp ? placed : [...placed].reverse();
+      let lastDisplaced = false;
+      walk.forEach((h, k) => {
+        const before = walk[k - 1];
+        const displaced = !!before && Math.abs(before.pos - h.pos) === 1 && !lastDisplaced;
+        lastDisplaced = displaced;
+        if (!chords.has(h.n)) chords.set(h.n, []);
+        // A beamed stem is drawn with its beam (drawBeams), not by the note.
+        chords.get(h.n)![h.k] = { stemUp, stemTo: !inBeam && h === owner ? far : null, dx: displaced ? (stemUp ? 1 : -1) * (HEAD_W - STEM_THICKNESS) : 0 };
       });
     }
     for (let i = notesStartIdx; i < notes.length; i++) {
@@ -992,6 +1061,7 @@ export class StaffView {
       if (note.startBeat + note.durationBeats < startBeat - 2) continue;
       this.drawNote(ctx, note, bottomLineIndex, bottomLineY, displayBeat, playheadBeat, color, dimmed, showAccidental, segmentsOf.get(note), chords.get(note));
     }
+    this.drawBeams(ctx, beamGroups, beamUp, bottomLineY, displayBeat, playheadBeat, color, dimmed);
 
     const rests = this.restsByPart.get(layout.partId) ?? [];
     const restsStartIdx = firstIndexAtOrAfter(rests, startBeat - 2);
@@ -1061,6 +1131,107 @@ export class StaffView {
   }
 
   /** A tie: a slim filled crescent between two noteheads, bulging away from the stems. */
+  /**
+   * The beams, as engraved in the file: per group a straight beam -- sloped with the melody, at most
+   * a staff space across the group, moved out so every stem keeps a readable length -- the stems
+   * from their notes to it, and the further beams (sixteenths, thirty-seconds) between the stems that
+   * carry them, or as a short stub (a dotted rhythm's hook). A beam lights while any of its notes
+   * sounds; each stem with its note.
+   */
+  private drawBeams(
+    ctx: CanvasRenderingContext2D,
+    groups: BeamStem[][],
+    beamUp: Map<BeamStem, boolean>,
+    bottomLineY: number,
+    displayBeat: number,
+    playheadBeat: number,
+    color: string,
+    dimmed: boolean,
+  ) {
+    const yOf = (pos: number) => bottomLineY - pos * HALF_SPACE_PX;
+    const lit = (st: BeamStem) => !dimmed && this.soundAt(st.beat) <= playheadBeat && playheadBeat < this.soundAt(st.beat + st.dur);
+    const glowing = (on: boolean, draw: () => void) => {
+      if (on) {
+        ctx.save();
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 12;
+        draw();
+        ctx.restore();
+      }
+      draw();
+    };
+    ctx.fillStyle = color;
+    for (const group of groups) {
+      const up = beamUp.get(group[0]) ?? true;
+      const xs = group.map((st) => {
+        const headX = this.beatToX(st.beat, displayBeat) + NOTE_X_OFFSET_PX - HEAD_W / 2;
+        return up ? headX + HEAD_W - STEM_THICKNESS : headX;
+      });
+      if (xs[xs.length - 1] < this.gutterPx - 40 || xs[0] > this.cssWidth + 40) continue;
+      // Each stem's beam end: from the head nearest the beam, the usual stem length on.
+      const levels = Math.max(...group.map((st) => st.marks?.length ?? 1));
+      const reach = STEM_LENGTH + Math.max(0, levels - 1) * BEAM_STEP;
+      const near = group.map((st) => yOf(up ? st.heads[st.heads.length - 1].pos : st.heads[0].pos));
+      const ends = near.map((y) => (up ? y - reach : y + reach));
+      const span = xs[xs.length - 1] - xs[0] || 1;
+      const slope = clamp((ends[ends.length - 1] - ends[0]) / span, -SP / span, SP / span) * (Math.abs(ends[ends.length - 1] - ends[0]) < 2 ? 0 : 1);
+      // Moved out until no stem is shorter than the shortest a beamed note takes.
+      const shortest = MIN_BEAMED_STEM + Math.max(0, levels - 1) * BEAM_STEP;
+      let y0 = ends[0];
+      for (let i = 0; i < group.length; i++) {
+        const y = y0 + slope * (xs[i] - xs[0]);
+        if (up && y > near[i] - shortest) y0 -= y - (near[i] - shortest);
+        if (!up && y < near[i] + shortest) y0 += near[i] + shortest - y;
+      }
+      const beamY = (x: number) => y0 + slope * (x - xs[0]);
+      const anyLit = group.some(lit);
+
+      // Stems: from the head furthest from the beam to the beam.
+      group.forEach((st, i) => {
+        const far = yOf(up ? st.heads[0].pos : st.heads[st.heads.length - 1].pos);
+        const y1 = beamY(xs[i]);
+        glowing(lit(st), () => {
+          if (up) ctx.fillRect(xs[i], y1, STEM_THICKNESS, far - STEM_ANCHOR_Y - y1);
+          else ctx.fillRect(xs[i], far + STEM_ANCHOR_Y, STEM_THICKNESS, y1 - far - STEM_ANCHOR_Y);
+        });
+      });
+
+      // Beams: level 0 across the group; further levels where the stems carry them.
+      const bar = (level: number, xa: number, xb: number) => {
+        const off = (up ? 1 : -1) * level * BEAM_STEP;
+        const ya = beamY(xa) + off;
+        const yb = beamY(xb) + off;
+        const t = up ? BEAM_THICKNESS : -BEAM_THICKNESS;
+        ctx.beginPath();
+        ctx.moveTo(xa, ya);
+        ctx.lineTo(xb, yb);
+        ctx.lineTo(xb, yb + t);
+        ctx.lineTo(xa, ya + t);
+        ctx.closePath();
+        ctx.fill();
+      };
+      glowing(anyLit, () => {
+        bar(0, xs[0], xs[xs.length - 1] + STEM_THICKNESS);
+        for (let level = 1; level < levels; level++) {
+          for (let i = 0; i < group.length; i++) {
+            const mark = group[i].marks?.[level];
+            if (!mark) continue;
+            const next = group[i + 1]?.marks?.[level];
+            if ((mark === 'begin' || mark === 'continue') && (next === 'continue' || next === 'end')) {
+              bar(level, xs[i], xs[i + 1] + STEM_THICKNESS);
+            } else if (mark === 'forward hook') {
+              const to = Math.min(xs[i] + BEAM_HOOK, i + 1 < group.length ? (xs[i] + xs[i + 1]) / 2 : xs[i] + BEAM_HOOK);
+              bar(level, xs[i], to + STEM_THICKNESS);
+            } else if (mark === 'backward hook') {
+              const from = Math.max(xs[i] - BEAM_HOOK, i > 0 ? (xs[i - 1] + xs[i]) / 2 : xs[i] - BEAM_HOOK);
+              bar(level, from, xs[i] + STEM_THICKNESS);
+            }
+          }
+        }
+      });
+    }
+  }
+
   private drawTie(ctx: CanvasRenderingContext2D, x1: number, x2: number, y: number, stemUp: boolean) {
     const dir = stemUp ? 1 : -1;
     const edgeY = y + dir * 0.55 * SP;

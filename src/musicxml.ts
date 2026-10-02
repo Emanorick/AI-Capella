@@ -211,6 +211,16 @@ function readPart(partEl: Element, partId: string, plan: BarPlan[] | null, surve
                 Array.from(child.querySelectorAll(':scope > tie, :scope > notations > tied')).map((el) => el.getAttribute('type')),
               );
               const continuesOpenTie = tieTypes.has('stop') && openTieNotes.has(midi);
+              // Its beams, by level (a grace note's own little beams aren't kept).
+              let beamMarks: string[] | undefined;
+              if (!isGrace) {
+                for (const beamEl of Array.from(child.querySelectorAll(':scope > beam'))) {
+                  const level = parseInt(beamEl.getAttribute('number') || '1', 10);
+                  const mark = beamEl.textContent?.trim();
+                  if (!mark || level < 1 || level > 6) continue;
+                  (beamMarks ??= [])[level - 1] = mark;
+                }
+              }
 
               if (continuesOpenTie) {
                 // Extend the already-pushed NoteEvent through this note's end instead of adding a
@@ -224,6 +234,10 @@ function readPart(partEl: Element, partId: string, plan: BarPlan[] | null, surve
                   open.tieSegments.push(newTotal - priorSum);
                 }
                 open.durationBeats = newTotal;
+                if (open.beams || beamMarks) {
+                  open.beams ??= (open.tieSegments ?? [0]).slice(0, -1).map(() => undefined);
+                  open.beams.push(beamMarks);
+                }
                 if (!tieTypes.has('start')) openTieNotes.delete(midi);
               } else {
                 const noteEvent: NoteEvent = {
@@ -239,6 +253,8 @@ function readPart(partEl: Element, partId: string, plan: BarPlan[] | null, surve
                   alter,
                   octave,
                   tieSegments: tieTypes.has('start') ? [noteBeats] : undefined,
+                  voice,
+                  beams: beamMarks ? [beamMarks] : undefined,
                 };
                 result.notes.push(noteEvent);
                 if (tieTypes.has('start')) openTieNotes.set(midi, noteEvent);
