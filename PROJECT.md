@@ -490,7 +490,7 @@ layer (strength between "subtle" and "balanced" of its design draft):
   to control, with a small paper card beside it (step count and dots, title, one or two sentences,
   *Zurück* / *Weiter*, *Überspringen*, *Nicht mehr zeigen*). Two tours: the repertoire (the
   ensemble, opening a piece, adding one, rehearsing together) and the player (the music lighting
-  up, play, sheet or roll, hearing your voice, practising a passage, count-in and starting notes,
+  up, play, sheet or roll, hearing your voice, the whole piece to jump in, count-in and starting notes,
   tempo and key, leading the rehearsal, the menu). The texts are written as a coach would say them:
   one thing per step, beginning with what to do and saying what it brings, a sentence or two;
   shortcuts and finer points stay in the controls' tooltips. Each starts by itself the first time its screen opens and settles (its

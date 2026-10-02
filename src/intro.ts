@@ -130,8 +130,8 @@ const TOURS: Record<TourId, Step[]> = {
       at: ['#view-seg'],
       title: { de: 'Noten oder Klavierrolle', en: 'Sheet music or piano roll' },
       text: {
-        de: 'Wechsle zwischen Notenbild und Lichtbalken – beide leuchten mit.',
-        en: 'Switch between notation and bars of light – both light up as you go.',
+        de: 'Wechsle zwischen Notenbild und Klavierrolle.',
+        en: 'Switch between sheet music and piano roll.',
       },
     },
     {
@@ -148,10 +148,14 @@ const TOURS: Record<TourId, Step[]> = {
     },
     {
       at: ['#overview-wrap'],
-      title: { de: 'Eine Stelle üben', en: 'Practise a passage' },
+      title: { de: 'Das ganze Stück', en: 'The whole piece' },
       text: {
-        de: 'Zieh hier über eine Stelle – sie wiederholt sich, bis sie sitzt.',
-        en: 'Drag across a passage here – it repeats until you have it.',
+        de: 'Hier siehst du das ganze Stück. Klick auf eine Stelle oder einen Abschnitt (A, B, C …), um dorthin zu springen.',
+        en: 'Here is the whole piece. Click a spot or a section (A, B, C …) to jump there.',
+      },
+      phone: {
+        de: 'Hier siehst du das ganze Stück. Tippe auf eine Stelle oder einen Abschnitt (A, B, C …), um dorthin zu springen.',
+        en: 'Here is the whole piece. Tap a spot or a section (A, B, C …) to jump there.',
       },
     },
     {
