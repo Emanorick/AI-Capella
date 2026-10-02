@@ -1687,7 +1687,8 @@ button.stepper-value:hover {
 }
 
 /* The light of the reading line: the item under the pointer (or keyboard focus) glows in its warm,
-   soft gold -- a spot of light, not a filled bar. The chosen one keeps a gold check. */
+   soft gold -- a spot of light, not a filled bar; its icon stays as it is. The chosen one keeps a
+   gold check. */
 .menu-item {
   position: relative;
   isolation: isolate;
@@ -1714,11 +1715,6 @@ button.stepper-value:hover {
 .menu-item:hover::before,
 .menu-item:focus-visible::before {
   opacity: 1;
-}
-.menu-item:hover .ic,
-.menu-item:focus-visible .ic {
-  color: #e2c48c;
-  filter: drop-shadow(0 0 6px rgb(255 208 156 / 0.55));
 }
 .menu-item[aria-checked='true'] .menu-check {
   color: #e2c48c;
