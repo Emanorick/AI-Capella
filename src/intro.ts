@@ -11,10 +11,10 @@ import { deviceChoice } from './design';
 import { lang, t } from './i18n';
 
 /**
- * Behind a flag while it's a draft: ?intro=an shows it on this device (and starts it afresh each
- * time the address asks for it), ?intro=aus hides it again.
+ * On for everyone; ?intro=aus switches it off on a device (no tours, no menu entry), ?intro=an
+ * back on -- and starts the tours afresh, each time the address asks for it.
  */
-export const INTRO_ON = deviceChoice('intro', 'ai-capella-intro', ['an', 'aus'] as const, 'aus') === 'an';
+export const INTRO_ON = deviceChoice('intro', 'ai-capella-intro', ['an', 'aus'] as const, 'an') === 'an';
 
 export type TourId = 'library' | 'player';
 
@@ -35,6 +35,21 @@ function set(storage: () => Storage, key: string) {
   } catch {
     /* not remembered: it may come again */
   }
+}
+
+// The tours are for people new to the app: a device that was already using it when they came
+// (it chose alone or together, or opened an ensemble) has them only in the menu. Decided once, on
+// the first start with the tours, and remembered.
+const CHECKED_KEY = 'ai-capella-intro-checked';
+try {
+  if (!localStorage.getItem(CHECKED_KEY)) {
+    localStorage.setItem(CHECKED_KEY, '1');
+    if (localStorage.getItem('ai-capella-mode-v2') || localStorage.getItem('ai-capella-ensembles-unlocked')) {
+      for (const id of ['library', 'player'] as const) localStorage.setItem(doneKey(id), '1');
+    }
+  }
+} catch {
+  /* storage unavailable: shown, as for someone new */
 }
 
 // Opening the app with ?intro=an starts the tours afresh.
