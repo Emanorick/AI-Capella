@@ -70,6 +70,27 @@ function readBeats(text: string | null | undefined): number | null {
   return sum > 0 ? sum : null;
 }
 
+const STEPS = 'CDEFGAB';
+
+/**
+ * Where a percussion note sits, as the step and octave of a treble staff: its <display-step> and
+ * <display-octave>. Some exports leave those empty or nonsensical (MuseScore wrote an empty step
+ * and octave 1434 for one drum kit -- taken at its word, the note sat miles above the staff); the
+ * note's printed height (default-y, tenths below the top line, F5) stands in then, and without
+ * that it sits on the middle line, B4.
+ */
+function unpitchedPlace(unpitched: Element, note: Element): { step: string; octave: number } {
+  const step = unpitched.querySelector('display-step')?.textContent?.trim() ?? '';
+  const octave = parseInt(unpitched.querySelector('display-octave')?.textContent ?? '', 10);
+  if (STEPS.includes(step) && step.length === 1 && octave >= 0 && octave <= 9) return { step, octave };
+  const y = parseFloat(note.getAttribute('default-y') ?? '');
+  if (Number.isFinite(y) && Math.abs(y) <= 120) {
+    const index = 5 * 7 + STEPS.indexOf('F') + Math.round(y / 5); // a step of the staff is 5 tenths
+    return { step: STEPS[((index % 7) + 7) % 7], octave: Math.floor(index / 7) };
+  }
+  return { step: 'B', octave: 4 };
+}
+
 /**
  * Walks one part. Without a plan (pass 1) bars follow each other at whatever length the part's own
  * content has, and only the survey is of use. With a plan (pass 2) every bar starts where the
@@ -204,10 +225,10 @@ function readPart(partEl: Element, partId: string, plan: BarPlan[] | null, surve
             // A percussion note: its place on the staff stands in for a pitch.
             const unpitchedEl = pitchEl ? null : child.querySelector(':scope > unpitched');
             if (pitchEl || unpitchedEl) {
-              // (Without a stated place, an unpitched note sits on the middle line: B4 on a treble staff.)
-              const step = (pitchEl ? pitchEl.querySelector('step') : unpitchedEl!.querySelector('display-step'))?.textContent?.trim() || (pitchEl ? 'C' : 'B');
+              const { step, octave } = pitchEl
+                ? { step: pitchEl.querySelector('step')?.textContent?.trim() || 'C', octave: parseInt(pitchEl.querySelector('octave')?.textContent || '4', 10) }
+                : unpitchedPlace(unpitchedEl!, child);
               const alter = pitchEl ? parseFloat(pitchEl.querySelector('alter')?.textContent || '0') : 0;
-              const octave = parseInt((pitchEl ? pitchEl.querySelector('octave') : unpitchedEl!.querySelector('display-octave'))?.textContent || '4', 10);
               const notehead = child.querySelector(':scope > notehead')?.textContent?.trim();
               const midi = pitchToMidi(step, alter, octave);
               const lyricEl = child.querySelector(':scope > lyric');
@@ -444,36 +465,37 @@ export function parseMusicXML(xmlText: string): Score {
   // Pass 1: how long each part's bars are. Pass 2: every part laid on the bars agreed from that.
   const surveys = partEls.map((el, i) => readPart(el, fileIds[i], null, null).bars);
   const plan = planBars(surveys);
-  // A part printed on several staves (a piano's two hands) is read once per staff, each a voice of
-  // its own: one staff per voice is what the sheet view draws, and each hand can be heard alone.
+  // A part printed on several staves (a piano's two hands) is one voice: one player, heard as one.
+  // It is read once per staff, each staff's notes, clef and directions marked with it, so the sheet
+  // view can draw them on their own staves (and splitStaves can make each a voice of its own).
   const parts: PartInfo[] = [];
-  const ids: string[] = [];
   const results: PartResult[] = [];
   partEls.forEach((el, i) => {
-    const info = fileParts.find((p) => p.id === fileIds[i]) ?? { id: fileIds[i], name: fileIds[i] };
+    const info: PartInfo = { ...(fileParts.find((p) => p.id === fileIds[i]) ?? { id: fileIds[i], name: fileIds[i] }) };
     const staves = Math.max(1, ...Array.from(el.querySelectorAll(':scope > measure > attributes > staves')).map((s) => parseInt(s.textContent || '1', 10) || 1));
+    parts.push(info);
     if (staves === 1) {
-      parts.push(info);
-      ids.push(info.id);
-      results.push(readPart(el, info.id, plan, surveys[i]));
+      const r = readPart(el, info.id, plan, surveys[i]);
+      info.clef = r.clef;
+      results.push(r);
       return;
     }
+    info.staves = [];
     for (let staff = 1; staff <= staves; staff++) {
-      const id = `${info.id}-staff${staff}`;
-      const label = staves === 2 ? t(staff === 1 ? 'staffUpper' : 'staffLower') : String(staff);
-      parts.push({ id, name: `${info.name} (${label})`, sourceId: info.id, sourceName: info.name });
-      ids.push(id);
-      results.push(readPart(el, id, plan, surveys[i], staff));
+      const r = readPart(el, info.id, plan, surveys[i], staff);
+      for (const n of r.notes) n.staff = staff;
+      for (const sl of r.slurs) sl.staff = staff;
+      for (const m of r.marks) m.staff = staff;
+      info.staves.push({ clef: r.clef });
+      results.push(r);
     }
+    info.clef = info.staves[0].clef;
   });
 
   const notes = results.flatMap((r) => r.notes).sort((a, b) => a.startBeat - b.startBeat);
   const slurs = results.flatMap((r) => r.slurs);
   const marks = results.flatMap((r) => r.marks).sort((a, b) => a.beat - b.beat);
-  results.forEach((r, i) => {
-    const partInfo = parts.find((p) => p.id === ids[i]);
-    if (partInfo && r.clef) partInfo.clef = r.clef;
-  });
+  for (const p of parts) if (!p.clef) delete p.clef;
 
   // Bar numbers, time and key signatures and rehearsal marks are the piece's, read from the first
   // part (real scores print rehearsal marks once, usually over the top staff).
@@ -491,6 +513,42 @@ export function parseMusicXML(xmlText: string): Score {
   const totalBeats = last ? last.start + last.length : 0;
 
   return { title, parts, notes, measures, slurs, totalBeats, rehearsalMarks, tempo: readTempo(doc), marks };
+}
+
+/**
+ * Makes each staff of the given parts a voice of its own (a song whose hands are played by two
+ * people): ids "<part>-staff<n>", named "<part> (oben)" / "(unten)" (numbered from three staves on),
+ * each with its staff's clef, notes, slurs and marks. Parts on one staff are left as they are.
+ */
+export function splitStaves(score: Score, partIds: Iterable<string>) {
+  const chosen = new Set(partIds);
+  const parts: PartInfo[] = [];
+  const moved = new Map<string, string[]>(); // part id -> its staves' new ids
+  for (const part of score.parts) {
+    if (!chosen.has(part.id) || !part.staves || part.staves.length < 2) {
+      parts.push(part);
+      continue;
+    }
+    const count = part.staves.length;
+    const ids = part.staves.map((staff, i) => {
+      const id = `${part.id}-staff${i + 1}`;
+      const label = count === 2 ? t(i === 0 ? 'staffUpper' : 'staffLower') : String(i + 1);
+      const voice: PartInfo = { id, name: `${part.name} (${label})`, sourceId: part.id, sourceName: part.name };
+      if (staff.clef) voice.clef = staff.clef;
+      parts.push(voice);
+      return id;
+    });
+    moved.set(part.id, ids);
+  }
+  if (!moved.size) return;
+  const staffId = (partId: string, staff: number | undefined) => {
+    const ids = moved.get(partId);
+    return ids ? ids[Math.min(ids.length, Math.max(1, staff ?? 1)) - 1] : partId;
+  };
+  score.parts = parts;
+  score.notes = score.notes.map((n) => (moved.has(n.partId) ? { ...n, partId: staffId(n.partId, n.staff) } : n));
+  score.slurs = score.slurs.map((sl) => (moved.has(sl.partId) ? { ...sl, partId: staffId(sl.partId, sl.staff) } : sl));
+  if (score.marks) score.marks = score.marks.map((m) => (moved.has(m.partId) ? { ...m, partId: staffId(m.partId, m.staff) } : m));
 }
 
 /**

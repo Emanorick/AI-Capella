@@ -10,9 +10,13 @@ export interface PartInfo {
   // positioned on the staff as if it sounded where it's written, hanging on many ledger lines
   // below the staff instead of sitting where a real tenor clef actually places it.
   clef?: { sign: string; line?: number; octaveChange?: number };
-  // One staff of a part printed on several (a piano's two hands, an organ's three staves): each
-  // staff becomes a voice of its own here (id "<part>-staff<n>"), and these name the part it came
-  // from -- the file's part id and name, for exporting it as a whole (exportPdf.ts).
+  // A part printed on several staves (a piano's two hands, an organ's three) is one voice, its
+  // notes each on their staff (NoteEvent.staff): here each staff's clef, top staff first. Absent for
+  // a part on one staff.
+  staves?: { clef?: PartInfo['clef'] }[];
+  // One staff of such a part made a voice of its own (the song's hands separated, splitStaves in
+  // musicxml.ts; id "<part>-staff<n>"): the part it came from -- the file's part id and name, for
+  // stored settings and for exporting it as a whole (exportPdf.ts).
   sourceId?: string;
   sourceName?: string;
 }
@@ -48,6 +52,8 @@ export interface NoteEvent {
   tieSegments?: number[];
   // The MusicXML voice the note was written in (beams join the notes of one voice).
   voice?: string;
+  // Which of its part's staves the note is printed on (1 = the top one), for a part on several.
+  staff?: number;
   // A percussion note (MusicXML <unpitched>: a clap, a stamp, a drum): `midi`/`step`/`octave` are
   // only where it's printed on the staff, not a pitch -- it isn't transposed, and sounds as a tap.
   unpitched?: boolean;
@@ -70,6 +76,7 @@ export interface MeasureInfo {
 
 export interface SlurArc {
   partId: string;
+  staff?: number; // as NoteEvent.staff
   startBeat: number;
   startMidi: number;
   endBeat: number;
@@ -89,6 +96,7 @@ export interface RehearsalMark {
 export interface ScoreMark {
   kind: 'dynamic' | 'wedge' | 'tempo' | 'words';
   partId: string;
+  staff?: number; // as NoteEvent.staff
   beat: number;
   text: string; // the dynamic ('mf'), 'crescendo' / 'diminuendo' for a wedge, or the printed words
   endBeat?: number; // wedges: where the hairpin closes

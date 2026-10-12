@@ -452,6 +452,9 @@ function computeRestGaps(notes: NoteEvent[], totalBeats: number): { startBeat: n
 
 interface PartLayout {
   partId: string;
+  key: string; // its notes and rests: the part's id, or for one staff of several, see staffKey
+  staff: number; // 1, or which of its part's staves (a piano's two hands are one voice on two)
+  ofStaves: number; // how many staves its part has
   clef: ClefType;
   octaveShift: number; // whole octaves added to a note's diatonic index before staff positioning -- see resolveClef
   topY: number; // css px, y of the staff's top line within the content area (before scroll) -- recomputed for visible staves each frame
@@ -465,6 +468,9 @@ function staffSpan(layout: PartLayout): number {
 }
 
 const voiceNumber = (n: NoteEvent) => Number(n.voice ?? 1) || 1;
+
+/** The notes of one staff of a part printed on several are kept under this key. */
+const staffKey = (partId: string, staff: number, ofStaves: number) => (ofStaves > 1 ? `${partId}#${staff}` : partId);
 
 /**
  * Which lyric line each syllable of a staff goes on. Two voices on one staff (tenor 1 and 2) can
@@ -552,7 +558,7 @@ export class StaffView {
   private pixelsPerBeat = BASE_PIXELS_PER_BEAT;
   private zoom = 1;
   private scrollY = 0; // css px scrolled down, when the stacked staves don't all fit vertically
-  private notesByPart: Map<string, NoteEvent[]>;
+  private notesByStaff: Map<string, NoteEvent[]>; // by PartLayout.key
   private layouts: PartLayout[];
   private lyricLineOf = new Map<NoteEvent, number>(); // see lyricLines; absent: the first line
   private hiddenParts = new Set<string>();
@@ -560,7 +566,7 @@ export class StaffView {
   private measureByNumber: Map<number, MeasureInfo>;
   private signatureAt: Map<number, SignatureChange>; // by bar start beat
   private marks: MarkLayout | null; // dynamics, tempo and words in gold ink (goldInk.ts)
-  private restsByPart: Map<string, { startBeat: number; durationBeats: number }[]>;
+  private restsByStaff: Map<string, { startBeat: number; durationBeats: number }[]>;
   private transpose = 0;
   private gutterPx = 80;
   private sections: { label: string; beat: number }[] = [];
@@ -583,34 +589,43 @@ export class StaffView {
     this.signatureAt = new Map(signatureChanges(score.measures).map((c) => [c.beat, c]));
     this.marks = MARKS_ON ? layoutMarks(score) : null;
 
-    this.notesByPart = new Map();
+    // Each staff's notes: a part's, or for a part on several staves (a piano), each staff's own.
+    const staffCount = new Map(score.parts.map((p) => [p.id, p.staves?.length ?? 1]));
+    this.notesByStaff = new Map();
     for (const note of score.notes) {
-      const list = this.notesByPart.get(note.partId);
+      const of = staffCount.get(note.partId) ?? 1;
+      const key = staffKey(note.partId, Math.min(of, Math.max(1, note.staff ?? 1)), of);
+      const list = this.notesByStaff.get(key);
       if (list) list.push(note);
-      else this.notesByPart.set(note.partId, [note]);
+      else this.notesByStaff.set(key, [note]);
     }
-    for (const list of this.notesByPart.values()) list.sort((a, b) => a.startBeat - b.startBeat);
+    for (const list of this.notesByStaff.values()) list.sort((a, b) => a.startBeat - b.startBeat);
 
-    // Rest gaps depend only on each part's own notes and the piece's total length -- static for
+    // Rest gaps depend only on each staff's own notes and the piece's total length -- static for
     // the life of this score, so computed once here rather than every render.
-    this.restsByPart = new Map();
-    for (const [partId, notes] of this.notesByPart) {
-      this.restsByPart.set(partId, computeRestGaps(notes, score.totalBeats));
+    this.restsByStaff = new Map();
+    for (const [key, notes] of this.notesByStaff) {
+      this.restsByStaff.set(key, computeRestGaps(notes, score.totalBeats));
     }
 
     // Clef per part: see resolveClef -- prefers the actually-notated MusicXML <clef> when present
     // and recognized, falling back to a heuristic from the part's own average pitch for MIDI
     // imports or an unrecognized clef sign.
-    this.layouts = score.parts.map((p) => {
-      const notes = this.notesByPart.get(p.id) ?? [];
-      const avgMidi = notes.length ? notes.reduce((sum, n) => sum + n.midi, 0) / notes.length : 60;
-      // A percussion staff (claps, drums): its notes sit where printed on a treble staff, under a
-      // percussion clef and no key signature.
-      const percussion = p.clef?.sign === 'percussion' || (notes.length > 0 && notes.every((n) => n.unpitched));
-      const { clef, octaveShift } = percussion ? { clef: 'treble' as const, octaveShift: 0 } : resolveClef(p.clef, avgMidi);
-      const lyrics = lyricLines(notes);
-      for (const [note, line] of lyrics.lineOf) this.lyricLineOf.set(note, line);
-      return { partId: p.id, clef, octaveShift, percussion, topY: 0, lyricLines: lyrics.lines };
+    // A part on several staves (a piano's two hands) gets one layout per staff, each with its clef.
+    this.layouts = score.parts.flatMap((p) => {
+      const staves = p.staves && p.staves.length > 1 ? p.staves : [{ clef: p.clef }];
+      return staves.map((staffInfo, i) => {
+        const key = staffKey(p.id, i + 1, staves.length);
+        const notes = this.notesByStaff.get(key) ?? [];
+        const avgMidi = notes.length ? notes.reduce((sum, n) => sum + n.midi, 0) / notes.length : 60;
+        // A percussion staff (claps, drums): its notes sit where printed on a treble staff, under a
+        // percussion clef and no key signature.
+        const percussion = staffInfo.clef?.sign === 'percussion' || (notes.length > 0 && notes.every((n) => n.unpitched));
+        const { clef, octaveShift } = percussion ? { clef: 'treble' as const, octaveShift: 0 } : resolveClef(staffInfo.clef, avgMidi);
+        const lyrics = lyricLines(notes);
+        for (const [note, line] of lyrics.lineOf) this.lyricLineOf.set(note, line);
+        return { partId: p.id, key, staff: i + 1, ofStaves: staves.length, clef, octaveShift, percussion, topY: 0, lyricLines: lyrics.lines };
+      });
     });
     this.updateGutter();
   }
@@ -904,6 +919,15 @@ export class StaffView {
       else ctx.fillText(layout.octaveShift === 1 ? GLYPH.gClef8vb : GLYPH.gClef, clefX, bottomLineY - 2 * HALF_SPACE_PX);
       if (!layout.percussion) this.drawKeySignature(ctx, fifths, layout.clef, bottomLineY, clefX + CLEF_W + 8);
 
+      // A part on several staves: its staves joined at the left edge in its colour, named once.
+      if (layout.ofStaves > 1 && layout.staff < layout.ofStaves) {
+        const next = layouts.find((l) => l.partId === layout.partId && l.staff === layout.staff + 1);
+        if (next) {
+          ctx.fillStyle = this.partColor(layout.partId);
+          ctx.fillRect(3, layout.topY, 2, next.topY + STAFF_HEIGHT_PX - layout.topY);
+        }
+      }
+      if (layout.staff > 1) continue;
       const name = this.score.parts.find((p) => p.id === layout.partId)?.name ?? '';
       // Above the treble clef's top curl (Bravura's G clef reaches ~12.5px above the top line).
       const labelY = layout.topY - 21;
@@ -1017,7 +1041,7 @@ export class StaffView {
     let currentMeasureNumber = -1;
     let impliedAlter: Record<string, number> = {};
     const accidentalMap = new Map<string, number>();
-    const notes = this.notesByPart.get(layout.partId) ?? [];
+    const notes = this.notesByStaff.get(layout.key) ?? [];
     const notesStartIdx = effectiveMeasure ? firstIndexAtOrAfter(notes, effectiveMeasure.startBeat) : 0;
     // The noteheads struck together in this part -- a note's own head, or a tied note's head carried
     // on past a bar line -- are grouped by when they sound and by voice. A voice's heads together are
@@ -1146,7 +1170,7 @@ export class StaffView {
     }
     this.drawBeams(ctx, beamGroups, beamUp, bottomLineY, displayBeat, playheadBeat, color, dimmed);
 
-    const rests = this.restsByPart.get(layout.partId) ?? [];
+    const rests = this.restsByStaff.get(layout.key) ?? [];
     const restsStartIdx = firstIndexAtOrAfter(rests, startBeat - 2);
     // A rest gap starting well before the cursor can still extend into view (a whole-measure rest
     // whose start is far left of startBeat) -- back up to the previous gap too.
@@ -1179,7 +1203,9 @@ export class StaffView {
     const shared = this.marks.lane.filter((m) => m.kind === 'dynamic' || m.kind === 'wedge');
     const sharedWords = this.marks.lane.filter((m) => m.kind === 'words');
     for (const layout of layouts) {
-      const own = [...shared, ...(layout === layouts[0] ? sharedWords : []), ...(this.marks.byPart.get(layout.partId) ?? [])];
+      // A part on several staves: each staff its own marks, the shared ones over its top staff.
+      const ofPart = (this.marks.byPart.get(layout.partId) ?? []).filter((m) => (m.staff ?? 1) === layout.staff || layout.ofStaves === 1);
+      const own = [...(layout.staff === 1 ? shared : []), ...(layout === layouts[0] ? sharedWords : []), ...ofPart];
       const alpha = this.dimmedParts.has(layout.partId) ? 0.35 : 1;
       own.sort((a, b) => a.beat - b.beat);
       let lastEnd = -Infinity; // marks at the same spot are written one after the other

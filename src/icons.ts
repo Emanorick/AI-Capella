@@ -29,6 +29,9 @@ const PATHS = {
   file: `<g ${S} stroke-width="1.8"><path d="M7 3.8h6.5L18 8.3v10.4a1.5 1.5 0 0 1-1.5 1.5h-9.5A1.5 1.5 0 0 1 5.5 18.7V5.3A1.5 1.5 0 0 1 7 3.8z"/><path d="M13.3 4v4.5H18M8.5 13h7M8.5 16.2h5"/></g>`,
   chevronUp: `<path d="M5.5 15L12 8.5 18.5 15" ${S} stroke-width="2"/>`,
   close: `<path d="M6.5 6.5l11 11M17.5 6.5l-11 11" ${S} stroke-width="2"/>`,
+  // A piano's staves made voices of their own (arrows apart), and joined again (arrows together).
+  split: `<g ${S} stroke-width="1.8"><path d="M5 9.5h14M5 14.5h14"/><path d="M12 9.5V3.5M9.6 5.9L12 3.5l2.4 2.4"/><path d="M12 14.5v6M9.6 18.1l2.4 2.4 2.4-2.4"/></g>`,
+  join: `<g ${S} stroke-width="1.8"><path d="M5 12h14"/><path d="M12 3.5V9M9.6 6.6L12 9l2.4-2.4"/><path d="M12 20.5V15M9.6 17.4L12 15l2.4 2.4"/></g>`,
   trash: `<g ${S} stroke-width="1.8"><path d="M4.5 7h15M9.5 7V4.8h5V7M6.5 7l.9 12.2a1.5 1.5 0 0 0 1.5 1.3h6.2a1.5 1.5 0 0 0 1.5-1.3L17.5 7"/></g>`,
   pencil: `<g ${S} stroke-width="1.8"><path d="M4.5 19.5l1-4L15.8 5.2a2 2 0 0 1 2.9 0l.1.1a2 2 0 0 1 0 2.9L8.5 18.5z"/><path d="M13.8 7.2l3 3"/></g>`,
   fork: `<g ${S} stroke-width="1.8"><path d="M8.5 3v7.5a3.5 3.5 0 0 0 7 0V3"/><path d="M12 14v7"/></g>`,

@@ -383,13 +383,21 @@ rehearsal marks never offers hand-added ones.
   ("Unbenannte Partitur", "Untitled score") is named after its file, less its running number; an
   accent typed for an apostrophe ("Don´t") becomes one.
 - **Scores beyond a cappella** (the musical "Stolz und Vorurteil", October 2026: band parts beside
-  the singers): a part printed on several staves -- a piano's two hands, an organ's three -- is
-  read once per staff (`readPart(..., staff)`), each its own voice ("Klavier (oben)", "Klavier
-  (unten)", id `<part>-staff<n>`, `sourceId`/`sourceName` naming the part), so the sheet view
-  draws each staff with its own clef and each hand can be heard alone; the PDF export puts the
-  part back together. Settings stored for such a part while it was one voice (a rename, a
-  removal) carry over to its staves. Percussion -- claps, stamping, drums (`<unpitched>`) -- is
-  read at its printed place (`unpitched`, an `x` notehead where printed so), drawn under a
+  the singers): a part printed on several staves -- a piano's two hands, an organ's three -- is one
+  voice (one player: one row, one mute and solo, one colour). It is read once per staff
+  (`readPart(..., staff)`), each note, slur and mark carrying its staff (`NoteEvent.staff`) and
+  each staff's clef kept (`PartInfo.staves`), so the sheet view draws it as a system of its own:
+  a staff per hand with its clef, the name once, the staves joined at the left edge in the
+  voice's colour (`PartLayout.staff`). Where two people play the hands, the voice menu's **Hände
+  trennen** makes each staff a voice of its own for the whole ensemble (`splitStaves`, stored as
+  the song's `splitParts`; ids `<part>-staff<n>`, "Klavier (oben)" / "(unten)", `sourceId` /
+  `sourceName` naming the part), and **Hände zusammenführen** joins them again. A rename or
+  removal of the whole part carries over to its staves; the PDF export always prints the part
+  whole, in its own clefs (the clef choice isn't offered for a part on several staves).
+  Percussion -- claps, stamping, drums (`<unpitched>`) -- is
+  read at its printed place (`unpitched`, an `x` notehead where printed so; a place an export
+  left empty or nonsensical -- MuseScore wrote octave 1434 for one drum kit -- is taken from the
+  note's printed height, `default-y`, else the middle line: `unpitchedPlace`), drawn under a
   percussion clef without key signature or accidentals, never transposed, played as a short tap
   of filtered noise (higher for notes printed higher), and left out of the starting tones.
   Part names printed over several lines ("Clara\n(Anja)") are joined into one; a voice name too

@@ -6,7 +6,7 @@ import '@fontsource-variable/atkinson-hyperlegible-next/wght.css';
 import '@fontsource-variable/atkinson-hyperlegible-mono/wght.css';
 import '@fontsource/italianno/latin-400.css';
 import './style.css';
-import { parseMusicXML } from './musicxml';
+import { parseMusicXML, splitStaves } from './musicxml';
 import { parseMIDI } from './midi';
 import { AudioEngine, startTonesLeadSec, type PartMixState, type Sound } from './audioEngine';
 import { PianoRoll, RULER_HEIGHT_PX, type LoopRegion } from './pianoRoll';
@@ -69,6 +69,7 @@ interface SongEntry {
   savedConfig?: StoredSong['savedConfig'];
   clefOverrides?: StoredSong['clefOverrides'];
   removedParts?: string[];
+  splitParts?: string[];
   swing?: boolean;
   order?: number; // imported songs: their place in the repertoire (songOrder)
 }
@@ -859,12 +860,12 @@ function openExportSheet(opener: HTMLElement | null) {
   summary.textContent = t('exportVoices');
   const list = document.createElement('ul');
   list.className = 'export-voice-list';
-  // One row per part of the file: a part the app shows as several staves (a piano's two hands)
-  // goes into the PDF whole, under its own name.
-  const sources: { id: string; name: string; color: string; split: boolean }[] = [];
+  // One row per part of the file: a part on several staves (a piano's two hands), even with its
+  // staves made voices of their own, goes into the PDF whole, under its own name and clefs.
+  const sources: { id: string; name: string; color: string; staves: boolean }[] = [];
   score.parts.forEach((part, i) => {
     const id = part.sourceId ?? part.id;
-    if (!sources.some((s) => s.id === id)) sources.push({ id, name: part.sourceName ?? part.name, color: colorForPart(i, score.parts.length), split: !!part.sourceId });
+    if (!sources.some((s) => s.id === id)) sources.push({ id, name: part.sourceName ?? part.name, color: colorForPart(i, score.parts.length), staves: !!part.sourceId || !!part.staves });
   });
   const rows = sources.map((source) => {
     const li = document.createElement('li');
@@ -908,7 +909,7 @@ function openExportSheet(opener: HTMLElement | null) {
         id: source.id,
         name: name.value.trim() || source.name,
         include: check.checked,
-        clef: !source.split && song.clefOverrides?.[source.id] ? CLEF_SPECS[song.clefOverrides[source.id]!] : undefined,
+        clef: !source.staves && song.clefOverrides?.[source.id] ? CLEF_SPECS[song.clefOverrides[source.id]!] : undefined,
       })),
       // Voices removed from the song in the app aren't in it (a split part: once all its staves are).
       ...[...new Set((song.removedParts ?? []).map((id) => id.replace(/-staff\d+$/, '')))].filter((id) => !shown.has(id)).map((id) => ({ id, name: '', include: false })),
@@ -1522,11 +1523,12 @@ const fontsReady = canvasFontsReady();
 async function loadSongLocally(song: SongEntry) {
   stopRenderLoop();
   const score = parseSong(song, await readSongText(song));
+  if (song.splitParts?.length) splitStaves(score, song.splitParts);
   await fontsReady;
   if (song.partNameOverrides) {
     for (const part of score.parts) {
       const override = song.partNameOverrides[part.id];
-      // A part renamed when it was still one voice: its staves keep the new name, each with its suffix.
+      // A part renamed as one voice: its staves, made voices of their own, keep the name with their suffix.
       const whole = part.sourceId ? song.partNameOverrides[part.sourceId] : undefined;
       if (override) part.name = override;
       else if (whole) part.name = whole + part.name.slice((part.sourceName ?? '').length);
@@ -2055,8 +2057,7 @@ const CLEF_SPECS: Record<VoiceClef, NonNullable<Score['parts'][number]['clef']>>
 /** Applies the song's removed voices and clef choices (both stored beside the score, never in it). */
 function applyVoiceSetup(score: Score, song: SongEntry) {
   const stored = new Set(song.removedParts ?? []);
-  // A part removed while it was still one voice (before its staves became voices of their own)
-  // stays removed, all its staves.
+  // A part removed as one voice stays removed when its staves are made voices of their own.
   const removed = new Set(score.parts.filter((p) => stored.has(p.id) || (p.sourceId && stored.has(p.sourceId))).map((p) => p.id));
   // Never leave a song without voices, even if the stored list says otherwise.
   if (removed.size && score.parts.some((p) => !removed.has(p.id))) {
@@ -2066,12 +2067,13 @@ function applyVoiceSetup(score: Score, song: SongEntry) {
   }
   for (const part of score.parts) {
     const choice = song.clefOverrides?.[part.id];
-    if (choice) part.clef = CLEF_SPECS[choice];
+    // A part on several staves keeps its staves' own clefs.
+    if (choice && !part.staves) part.clef = CLEF_SPECS[choice];
   }
 }
 
 function voiceSetupKey(song: SongEntry): string {
-  return JSON.stringify([song.removedParts ?? [], song.clefOverrides ?? {}, !!song.swing]);
+  return JSON.stringify([song.removedParts ?? [], song.splitParts ?? [], song.clefOverrides ?? {}, !!song.swing]);
 }
 
 // Swing (swing.ts): a library song's choice is stored with it, for everyone; the bundled samples
@@ -2131,8 +2133,9 @@ function openVoiceMenu(anchor: HTMLElement, partId: string) {
   const part = currentScore?.parts.find((p) => p.id === partId);
   if (!part || !currentSong?.imported) return;
   const items: Parameters<typeof openMenu>[1] = [{ label: t('renameVoice'), icon: 'pencil', onSelect: () => void renameVoice(partId) }];
-  // Clefs only matter for the sheet music view, which MIDI imports don't have.
-  if (currentSong.format !== 'score') {
+  // Clefs only matter for the sheet music view, which MIDI imports don't have; a part on several
+  // staves keeps theirs.
+  if (currentSong.format !== 'score' && !part.staves) {
     const clef = currentClef(partId);
     for (const [value, label] of [
       ['treble', t('clefTreble')],
@@ -2142,8 +2145,38 @@ function openVoiceMenu(anchor: HTMLElement, partId: string) {
       items.push({ label, icon: 'sheet', checked: clef === value, onSelect: () => void setVoiceClef(partId, value) });
     }
   }
+  // A part on several staves is one voice; its staves can be made voices of their own (two people
+  // playing a piano's two hands), and joined again.
+  const split = currentSong.splitParts ?? [];
+  if (part.staves && part.staves.length > 1) {
+    items.push({ label: t(part.staves.length === 2 ? 'splitHands' : 'splitStaves'), icon: 'split', onSelect: () => void setSplitParts([...split, part.id]) });
+  } else if (part.sourceId) {
+    const source = part.sourceId;
+    const staves = currentScore?.parts.filter((p) => p.sourceId === source).length ?? 2;
+    items.push({ label: t(staves === 2 ? 'joinHands' : 'joinStaves'), icon: 'join', onSelect: () => void setSplitParts(split.filter((id) => id !== source)) });
+  }
   items.push({ label: t('removeVoice'), icon: 'trash', danger: true, onSelect: () => void confirmRemoveVoice(partId) });
   openMenu(anchor, items, part.name);
+}
+
+/** Writes which parts' staves are voices of their own, for everyone, and reloads the open song. */
+async function setSplitParts(splitParts: string[]) {
+  const song = currentSong;
+  if (!song?.imported) return;
+  const previous = song.splitParts;
+  song.splitParts = splitParts;
+  const entry = importedSongs.find((s) => s.id === song.id);
+  if (entry) entry.splitParts = splitParts;
+  closeOverlay();
+  await reloadCurrentSong();
+  try {
+    await updateSongMetadata(song.id, { splitParts });
+  } catch (err) {
+    song.splitParts = previous;
+    if (entry) entry.splitParts = previous;
+    toast(t('changeFailed', { msg: errorText(err) }), 'error');
+    await reloadCurrentSong();
+  }
 }
 
 async function setVoiceClef(partId: string, clef: VoiceClef) {
@@ -3574,6 +3607,7 @@ async function runBootstrap() {
           savedConfig: s.savedConfig,
           clefOverrides: s.clefOverrides,
           removedParts: s.removedParts,
+          splitParts: s.splitParts,
           swing: s.swing,
           order: songOrder(s),
         }));

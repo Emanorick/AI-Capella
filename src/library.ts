@@ -49,6 +49,9 @@ export interface StoredSong {
   // Voices removed in the app (part ids). The stored score itself is never rewritten, so a removed
   // voice can be restored at any time; it is filtered out when the song loads.
   removedParts?: string[];
+  // Parts on several staves whose staves are voices of their own (part ids): a piano whose two
+  // hands two people play. Otherwise such a part is one voice.
+  splitParts?: string[];
   // Played with swing (swing.ts) instead of straight -- a choice for the song, for everyone.
   swing?: boolean;
 }
@@ -75,6 +78,7 @@ function parseSongDoc(id: string, data: Record<string, unknown>): StoredSong {
     savedConfig: data.savedConfig as StoredSong['savedConfig'],
     clefOverrides: data.clefOverrides as StoredSong['clefOverrides'],
     removedParts: Array.isArray(data.removedParts) ? (data.removedParts as string[]) : undefined,
+    splitParts: Array.isArray(data.splitParts) ? (data.splitParts as string[]) : undefined,
     swing: data.swing === true ? true : undefined,
   };
 }
@@ -172,7 +176,7 @@ export async function deleteImportedSong(id: string): Promise<void> {
  */
 export async function updateSongMetadata(
   id: string,
-  patch: { title?: string; ensemble?: string; swing?: boolean; partName?: { partId: string; name: string }; clef?: { partId: string; clef: VoiceClef }; removedParts?: string[] },
+  patch: { title?: string; ensemble?: string; swing?: boolean; partName?: { partId: string; name: string }; clef?: { partId: string; clef: VoiceClef }; removedParts?: string[]; splitParts?: string[] },
 ): Promise<void> {
   if (!db) throw new Error('Firebase is not configured');
   const fields: Record<string, unknown> = {};
@@ -183,6 +187,7 @@ export async function updateSongMetadata(
   // Dot-path for the same reason as partNameOverrides: only this one voice's entry changes.
   if (patch.clef) fields[`clefOverrides.${patch.clef.partId}`] = patch.clef.clef;
   if (patch.removedParts) fields.removedParts = patch.removedParts;
+  if (patch.splitParts) fields.splitParts = patch.splitParts;
   await updateDoc(doc(db, SONGS_COLLECTION, id), fields);
 }
 
