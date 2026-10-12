@@ -127,6 +127,21 @@ await check('point at it', true, () => setDoc(doc(alice, 'ensembles', 'nnb'), { 
 await check('retire the old leaders\' code', true, () => deleteDoc(doc(alice, 'leaderCodes', L_NNB)));
 await check('old leaders\' code no longer leads', false, () => setDoc(doc(carol, 'leaders', 'carol', 'ensembles', 'nnb'), { code: L_NNB }));
 await check('a member cannot retire a leaders\' code', false, () => deleteDoc(doc(bob, 'leaderCodes', L_NNB2)));
+// Stolz und Vorurteil: set up by one person (its first code), led by another (the first
+// leaders' code, set by a member who came in with that code).
+const C_SUV = '6'.repeat(64), L_SUV = '8'.repeat(64);
+const erin = env.authenticatedContext('erin').firestore();
+const fran = env.authenticatedContext('fran').firestore();
+await check('suv: first code', true, () => setDoc(doc(erin, 'ensembleCodes', C_SUV), { ensemble: 'suv' }));
+await check('suv: join', true, () => setDoc(doc(erin, 'members', 'erin', 'ensembles', 'suv'), { code: C_SUV }));
+await check('suv: guard it', true, () => setDoc(doc(erin, 'ensembles', 'suv'), { codeId: C_SUV, name: 'Stolz und Vorurteil' }));
+await check('suv: a stranger cannot claim it now', false, () => setDoc(doc(fran, 'ensembleCodes', '7'.repeat(63) + 'a'), { ensemble: 'suv' }));
+await check('suv: the leader joins with the code', true, () => setDoc(doc(fran, 'members', 'fran', 'ensembles', 'suv'), { code: C_SUV }));
+await check('suv: and sets the first leaders\' code', true, () => setDoc(doc(fran, 'leaderCodes', L_SUV), { ensemble: 'suv' }));
+await check('suv: leads with it', true, () => setDoc(doc(fran, 'leaders', 'fran', 'ensembles', 'suv'), { code: L_SUV }));
+await check('suv: records it', true, () => setDoc(doc(fran, 'ensembles', 'suv'), { leaderCodeId: L_SUV }, { merge: true }));
+await check('suv: the one who set it up cannot change its code now', false, () => setDoc(doc(erin, 'ensembleCodes', '9'.repeat(63) + 'a'), { ensemble: 'suv' }));
+await check('suv: its own session', true, () => getDoc(doc(fran, 'sessions', 'live-suv')));
 console.log(`\n${pass} passed, ${fail} failed`);
 await env.cleanup();
 process.exit(fail ? 1 : 0);

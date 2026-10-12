@@ -446,6 +446,45 @@ function playClick(ctx: AudioContext, destination: AudioNode, startTime: number,
   return { sources: [osc], gain };
 }
 
+// A percussion note (a clap, a stamp, a drum -- NoteEvent.unpitched): a short burst of noise
+// through a band-pass, higher for the notes printed higher on the staff (cymbals, claps) and lower
+// for those printed low (bass drum, stamping). One second of noise per context, reused.
+const noiseBuffers = new WeakMap<BaseAudioContext, AudioBuffer>();
+function playTap(ctx: AudioContext, destination: AudioNode, startTime: number, staffMidi: number, level: number): Voice {
+  let noise = noiseBuffers.get(ctx);
+  if (!noise) {
+    noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const data = noise.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    noiseBuffers.set(ctx, noise);
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = noise;
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'bandpass';
+  // E4 (bottom line) ~ 400 Hz up to F5 (top line) ~ 3 kHz.
+  filter.frequency.setValueAtTime(Math.min(6000, Math.max(150, 400 * Math.pow(2, (staffMidi - 64) / 6))), startTime);
+  filter.Q.setValueAtTime(1.2, startTime);
+  const gain = ctx.createGain();
+  const peak = 0.5 * level;
+  gain.gain.setValueAtTime(0.0001, startTime);
+  gain.gain.exponentialRampToValueAtTime(peak, startTime + 0.004);
+  gain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.09);
+  src.connect(filter).connect(gain).connect(destination);
+  src.start(startTime, Math.random() * 0.5);
+  src.stop(startTime + 0.1);
+  src.addEventListener('ended', () => {
+    for (const node of [src, filter, gain]) {
+      try {
+        node.disconnect();
+      } catch {
+        // already disconnected
+      }
+    }
+  });
+  return { sources: [src], gain };
+}
+
 export type PartMixState = 'normal' | 'muted' | 'solo';
 
 export class AudioEngine {
@@ -799,7 +838,8 @@ export class AudioEngine {
       const gainNode = this.partGains.get(note.partId);
       if (!gainNode) continue;
       try {
-        this.scheduledVoices.push(this.playNote(gainNode, start, dur, note.midi + this.lastTranspose, this.dynamicLevel(note.partId, note.startBeat)));
+        const level = this.dynamicLevel(note.partId, note.startBeat);
+        this.scheduledVoices.push(note.unpitched ? playTap(this.ctx, gainNode, start, note.midi, level) : this.playNote(gainNode, start, dur, note.midi + this.lastTranspose, level));
       } catch (err) {
         console.error('Skipping a note that could not be scheduled:', note, err);
       }

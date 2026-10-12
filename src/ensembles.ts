@@ -31,6 +31,7 @@ export const ENSEMBLES: readonly Ensemble[] = [
   { id: FIRST_ENSEMBLE_ID, defaultName: 'Ensemble n.n.b.', channel: 'live' },
   { id: 'rm', defaultName: 'Relativ männlich', channel: 'live-rm' },
   { id: 'frederick', defaultName: 'Frederick', channel: 'live-frederick' }, // a personal workspace
+  { id: 'suv', defaultName: 'Stolz und Vorurteil', channel: 'live-suv' },
 ];
 
 export function ensembleById(id: string): Ensemble | undefined {

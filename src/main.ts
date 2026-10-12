@@ -317,7 +317,7 @@ let renderPending = false;
 let canvasLeft = 0;
 let canvasTop = 0;
 // Sorted notes per part, for the voice activity lights (who is singing at the playhead).
-let notesByPart = new Map<string, { startBeat: number; durationBeats: number; midi: number }[]>();
+let notesByPart = new Map<string, { startBeat: number; durationBeats: number; midi: number; unpitched?: boolean }[]>();
 
 // Multi-device sync: which song is currently loaded locally, plus bookkeeping so an incoming
 // shared-session update only actually touches AudioEngine when something timing-relevant
@@ -859,17 +859,24 @@ function openExportSheet(opener: HTMLElement | null) {
   summary.textContent = t('exportVoices');
   const list = document.createElement('ul');
   list.className = 'export-voice-list';
-  const rows = score.parts.map((part, i) => {
+  // One row per part of the file: a part the app shows as several staves (a piano's two hands)
+  // goes into the PDF whole, under its own name.
+  const sources: { id: string; name: string; color: string; split: boolean }[] = [];
+  score.parts.forEach((part, i) => {
+    const id = part.sourceId ?? part.id;
+    if (!sources.some((s) => s.id === id)) sources.push({ id, name: part.sourceName ?? part.name, color: colorForPart(i, score.parts.length), split: !!part.sourceId });
+  });
+  const rows = sources.map((source) => {
     const li = document.createElement('li');
-    li.style.setProperty('--c', colorForPart(i, score.parts.length));
+    li.style.setProperty('--c', source.color);
     const check = document.createElement('input');
     check.type = 'checkbox';
     check.checked = true;
-    check.setAttribute('aria-label', part.name);
+    check.setAttribute('aria-label', source.name);
     const name = document.createElement('input');
     name.type = 'text';
     name.className = 'field';
-    name.value = part.name;
+    name.value = source.name;
     name.setAttribute('aria-label', t('renameVoice'));
     li.append(check, name);
     list.appendChild(li);
@@ -877,7 +884,7 @@ function openExportSheet(opener: HTMLElement | null) {
       li.classList.toggle('off', !check.checked);
       describe();
     });
-    return { part, check, name };
+    return { source, check, name };
   });
   details.append(summary, list);
   const status = document.createElement('p');
@@ -895,15 +902,16 @@ function openExportSheet(opener: HTMLElement | null) {
   describe();
   const close = openSheet(t('exportItem'), body, opener);
   go.addEventListener('click', async () => {
+    const shown = new Set(sources.map((s) => s.id));
     const voices: PdfVoice[] = [
-      ...rows.map(({ part, check, name }) => ({
-        id: part.id,
-        name: name.value.trim() || part.name,
+      ...rows.map(({ source, check, name }) => ({
+        id: source.id,
+        name: name.value.trim() || source.name,
         include: check.checked,
-        clef: song.clefOverrides?.[part.id] ? CLEF_SPECS[song.clefOverrides[part.id]!] : undefined,
+        clef: !source.split && song.clefOverrides?.[source.id] ? CLEF_SPECS[song.clefOverrides[source.id]!] : undefined,
       })),
-      // Voices removed from the song in the app aren't in it.
-      ...(song.removedParts ?? []).map((id) => ({ id, name: '', include: false })),
+      // Voices removed from the song in the app aren't in it (a split part: once all its staves are).
+      ...[...new Set((song.removedParts ?? []).map((id) => id.replace(/-staff\d+$/, '')))].filter((id) => !shown.has(id)).map((id) => ({ id, name: '', include: false })),
     ];
     if (!voices.some((v) => v.include)) {
       status.textContent = t('exportNone');
@@ -1300,13 +1308,25 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// What notation programs call a score nobody gave a title: the file's name says more.
+const PLACEHOLDER_TITLES = /^(untitled( score)?|unbenannte partitur|titel|title|partitur|score)$/i;
+
+/** A title from a file's name: without its extension and a leading running number ("7. "). */
+function titleFromFileName(name: string): string {
+  return name.replace(/\.(musicxml|xml|mxl|mid|midi)$/i, '').replace(/^\s*\d+\s*[.)_-]\s*/, '').trim() || name;
+}
+
 async function importFiles(files: FileList | File[]) {
   if (!isFirebaseConfigured) {
     toast(t('notConfigured'), 'error');
     return;
   }
   if (inPublicFolder()) return; // look and listen only
-  const list = Array.from(files).filter((f) => ACCEPTED_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext)));
+  // In the order of their names, numbers counted as numbers ("2." before "10."): a show's
+  // numbered pieces arrive in the repertoire in running order.
+  const list = Array.from(files)
+    .filter((f) => ACCEPTED_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext)))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
   if (!list.length) {
     toast(t('wrongFileType'), 'error');
     return;
@@ -1331,7 +1351,7 @@ async function importFiles(files: FileList | File[]) {
       } else {
         xml = await readScoreFile(file);
         const score = parseMusicXML(xml); // validates the file and gives us a title
-        title = score.title && score.title !== 'Untitled' ? score.title : file.name.replace(/\.(musicxml|xml|mxl)$/i, '');
+        title = score.title && !PLACEHOLDER_TITLES.test(score.title) ? score.title : titleFromFileName(file.name);
         format = 'musicxml';
       }
       const id = await saveImportedSong({ title, xml, format, ensemble: importEnsemble() });
@@ -1506,7 +1526,10 @@ async function loadSongLocally(song: SongEntry) {
   if (song.partNameOverrides) {
     for (const part of score.parts) {
       const override = song.partNameOverrides[part.id];
+      // A part renamed when it was still one voice: its staves keep the new name, each with its suffix.
+      const whole = part.sourceId ? song.partNameOverrides[part.sourceId] : undefined;
       if (override) part.name = override;
+      else if (whole) part.name = whole + part.name.slice((part.sourceName ?? '').length);
     }
   }
   applyVoiceSetup(score, song);
@@ -1855,6 +1878,8 @@ function voiceRow(partId: string, name: string, color: string): HTMLLIElement {
   nameBtn.type = 'button';
   nameBtn.className = 'voice-name';
   nameBtn.textContent = name;
+  // A long name (a role and its singer, "Tillie Synthesizer Patricia (oben)") takes two lines.
+  nameBtn.classList.toggle('long', name.length > 13);
   nameBtn.title = t('onlyVoice', { name });
   li.append(light, nameBtn);
   for (const [mix, letter, label] of [
@@ -2005,7 +2030,10 @@ async function renameVoice(partId: string) {
   if (!value) return;
   const setName = (name: string) => {
     part.name = name;
-    document.querySelectorAll<HTMLElement>(`.voice-row[data-part="${CSS.escape(partId)}"] .voice-name`).forEach((el) => (el.textContent = name));
+    document.querySelectorAll<HTMLElement>(`.voice-row[data-part="${CSS.escape(partId)}"] .voice-name`).forEach((el) => {
+      el.textContent = name;
+      el.classList.toggle('long', name.length > 13);
+    });
     document.querySelectorAll<HTMLElement>(`.chip[data-part="${CSS.escape(partId)}"]`).forEach((chip) => {
       chip.replaceChildren(chip.firstChild!, document.createTextNode(name));
     });
@@ -2026,7 +2054,10 @@ const CLEF_SPECS: Record<VoiceClef, NonNullable<Score['parts'][number]['clef']>>
 
 /** Applies the song's removed voices and clef choices (both stored beside the score, never in it). */
 function applyVoiceSetup(score: Score, song: SongEntry) {
-  const removed = new Set(song.removedParts ?? []);
+  const stored = new Set(song.removedParts ?? []);
+  // A part removed while it was still one voice (before its staves became voices of their own)
+  // stays removed, all its staves.
+  const removed = new Set(score.parts.filter((p) => stored.has(p.id) || (p.sourceId && stored.has(p.sourceId))).map((p) => p.id));
   // Never leave a song without voices, even if the stored list says otherwise.
   if (removed.size && score.parts.some((p) => !removed.has(p.id))) {
     score.parts = score.parts.filter((p) => !removed.has(p.id));
@@ -2358,7 +2389,8 @@ function startingPitches(beat: number): number[] {
   const barEnd = measure ? measure.startBeat + measure.beats * (4 / measure.beatType) : beat + 4;
   const pitches: number[] = [];
   for (const part of currentScore.parts) {
-    const notes = notesByPart.get(part.id);
+    // A percussion part (claps, drums) has no note to sing.
+    const notes = notesByPart.get(part.id)?.filter((n) => !n.unpitched);
     if (!notes?.length) continue;
     const sounding = notes.find((n) => n.startBeat <= beat + 1e-6 && beat < n.startBeat + n.durationBeats);
     const next = sounding ?? notes.find((n) => n.startBeat >= beat - 1e-6 && n.startBeat < barEnd - 1e-6);

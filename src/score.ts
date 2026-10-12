@@ -10,6 +10,11 @@ export interface PartInfo {
   // positioned on the staff as if it sounded where it's written, hanging on many ledger lines
   // below the staff instead of sitting where a real tenor clef actually places it.
   clef?: { sign: string; line?: number; octaveChange?: number };
+  // One staff of a part printed on several (a piano's two hands, an organ's three staves): each
+  // staff becomes a voice of its own here (id "<part>-staff<n>"), and these name the part it came
+  // from -- the file's part id and name, for exporting it as a whole (exportPdf.ts).
+  sourceId?: string;
+  sourceName?: string;
 }
 
 export interface NoteEvent {
@@ -43,6 +48,11 @@ export interface NoteEvent {
   tieSegments?: number[];
   // The MusicXML voice the note was written in (beams join the notes of one voice).
   voice?: string;
+  // A percussion note (MusicXML <unpitched>: a clap, a stamp, a drum): `midi`/`step`/`octave` are
+  // only where it's printed on the staff, not a pitch -- it isn't transposed, and sounds as a tap.
+  unpitched?: boolean;
+  // Its notehead when not the usual oval: 'x' (a cross, as for claps and cymbals).
+  notehead?: 'x';
   // Its beams as engraved (<beam>), per written note -- one entry per tie segment (one for an untied
   // note) -- and per beam level (index 0 = the eighths' beam): 'begin' | 'continue' | 'end' |
   // 'forward hook' | 'backward hook'. Absent where the file has none. Sheet view only.

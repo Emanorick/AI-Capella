@@ -57,6 +57,11 @@ const GLYPH = {
   noteheadWhole: '\uE0A2',
   noteheadHalf: '\uE0A3',
   noteheadBlack: '\uE0A4',
+  // Cross noteheads (claps, cymbals) and the percussion clef.
+  noteheadXWhole: '\uE0A7',
+  noteheadXHalf: '\uE0A8',
+  noteheadXBlack: '\uE0A9',
+  percussionClef: '\uE069',
   dot: '\uE1E7',
   restWhole: '\uE4E3',
   restHalf: '\uE4E4',
@@ -451,6 +456,7 @@ interface PartLayout {
   octaveShift: number; // whole octaves added to a note's diatonic index before staff positioning -- see resolveClef
   topY: number; // css px, y of the staff's top line within the content area (before scroll) -- recomputed for visible staves each frame
   lyricLines: number; // 1, or 2 where two voices on the staff sing different words at once
+  percussion: boolean;
 }
 
 /** A staff's height with the room under it: lines, lyrics, and the next voice's label. */
@@ -598,10 +604,13 @@ export class StaffView {
     this.layouts = score.parts.map((p) => {
       const notes = this.notesByPart.get(p.id) ?? [];
       const avgMidi = notes.length ? notes.reduce((sum, n) => sum + n.midi, 0) / notes.length : 60;
-      const { clef, octaveShift } = resolveClef(p.clef, avgMidi);
+      // A percussion staff (claps, drums): its notes sit where printed on a treble staff, under a
+      // percussion clef and no key signature.
+      const percussion = p.clef?.sign === 'percussion' || (notes.length > 0 && notes.every((n) => n.unpitched));
+      const { clef, octaveShift } = percussion ? { clef: 'treble' as const, octaveShift: 0 } : resolveClef(p.clef, avgMidi);
       const lyrics = lyricLines(notes);
       for (const [note, line] of lyrics.lineOf) this.lyricLineOf.set(note, line);
-      return { partId: p.id, clef, octaveShift, topY: 0, lyricLines: lyrics.lines };
+      return { partId: p.id, clef, octaveShift, percussion, topY: 0, lyricLines: lyrics.lines };
     });
     this.updateGutter();
   }
@@ -691,7 +700,7 @@ export class StaffView {
   /** This note's spelling as actually drawn -- the printed spelling, respelled for the current transpose. */
   private effectiveSpelling(note: NoteEvent): { step: string; alter: number; octave: number } {
     const spelling = spellingFor(note);
-    return this.transpose ? transposeSpelling(spelling, note.midi, this.transpose) : spelling;
+    return this.transpose && !note.unpitched ? transposeSpelling(spelling, note.midi, this.transpose) : spelling;
   }
 
   private transposedFifths(rawFifths: number): number {
@@ -890,9 +899,10 @@ export class StaffView {
       ctx.font = MUSIC_FONT;
       ctx.textBaseline = 'alphabetic';
       const clefX = 12;
-      if (layout.clef === 'bass') ctx.fillText(GLYPH.fClef, clefX, bottomLineY - 6 * HALF_SPACE_PX);
+      if (layout.percussion) ctx.fillText(GLYPH.percussionClef, clefX + 6, bottomLineY - 4 * HALF_SPACE_PX);
+      else if (layout.clef === 'bass') ctx.fillText(GLYPH.fClef, clefX, bottomLineY - 6 * HALF_SPACE_PX);
       else ctx.fillText(layout.octaveShift === 1 ? GLYPH.gClef8vb : GLYPH.gClef, clefX, bottomLineY - 2 * HALF_SPACE_PX);
-      this.drawKeySignature(ctx, fifths, layout.clef, bottomLineY, clefX + CLEF_W + 8);
+      if (!layout.percussion) this.drawKeySignature(ctx, fifths, layout.clef, bottomLineY, clefX + CLEF_W + 8);
 
       const name = this.score.parts.find((p) => p.id === layout.partId)?.name ?? '';
       // Above the treble clef's top curl (Bravura's G clef reaches ~12.5px above the top line).
@@ -1127,8 +1137,9 @@ export class StaffView {
       const spelling = this.effectiveSpelling(note);
       const key = `${spelling.step}${spelling.octave}`;
       const trackedAlter = accidentalMap.has(key) ? accidentalMap.get(key)! : (impliedAlter[spelling.step] ?? 0);
-      const showAccidental = spelling.alter !== trackedAlter;
-      accidentalMap.set(key, spelling.alter);
+      // A percussion note's place is no pitch: never an accidental.
+      const showAccidental = !note.unpitched && spelling.alter !== trackedAlter;
+      if (!note.unpitched) accidentalMap.set(key, spelling.alter);
 
       if (note.startBeat + note.durationBeats < startBeat - 2) continue;
       this.drawNote(ctx, note, bottomLineIndex, bottomLineY, displayBeat, playheadBeat, color, dimmed, showAccidental, segmentsOf.get(note), chords.get(note));
@@ -1395,7 +1406,10 @@ export class StaffView {
       const shape = classifyDuration(seg.durationBeats);
 
       if (onScreen) {
-        const head = shape.name === 'whole' ? GLYPH.noteheadWhole : shape.filled ? GLYPH.noteheadBlack : GLYPH.noteheadHalf;
+        const head =
+          note.notehead === 'x'
+            ? shape.name === 'whole' ? GLYPH.noteheadXWhole : shape.filled ? GLYPH.noteheadXBlack : GLYPH.noteheadXHalf
+            : shape.name === 'whole' ? GLYPH.noteheadWhole : shape.filled ? GLYPH.noteheadBlack : GLYPH.noteheadHalf;
         const headW = shape.name === 'whole' ? WHOLE_HEAD_W : HEAD_W;
         const hx = segX - headW / 2 + shift;
         // Ledger lines (neutral, like the staff) under every head outside the staff -- the heads

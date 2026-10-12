@@ -939,6 +939,22 @@ button:disabled {
   white-space: nowrap;
 }
 
+.voice-name.long {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: break-word;
+  hyphens: auto;
+  font-size: 13.5px;
+  line-height: 1.2;
+  /* No padding above or below: the clamped box would show a sliver of the third line in it. */
+  padding: 0 4px;
+  max-height: 2.4em;
+  margin: 4px 0;
+}
+
 .mix-btn {
   width: 32px;
   height: 32px;

@@ -1,4 +1,5 @@
 import type { MeasureInfo, NoteEvent, PartInfo, RehearsalMark, Score, ScoreMark, SlurArc } from './score';
+import { t } from './i18n';
 
 const STEP_SEMITONES: Record<string, number> = {
   C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11,
@@ -73,9 +74,10 @@ function readBeats(text: string | null | undefined): number | null {
  * Walks one part. Without a plan (pass 1) bars follow each other at whatever length the part's own
  * content has, and only the survey is of use. With a plan (pass 2) every bar starts where the
  * plan says, and a voice whose content overruns the bar (an unmarked tuplet, typically) is fitted
- * into it.
+ * into it. With `staff`, only that staff's notes, clef and directions are kept (a part printed on
+ * several staves is read once per staff; the others' notes still move time along).
  */
-function readPart(partEl: Element, partId: string, plan: BarPlan[] | null, survey: BarSurvey[] | null): PartResult {
+function readPart(partEl: Element, partId: string, plan: BarPlan[] | null, survey: BarSurvey[] | null, staff?: number): PartResult {
   const result: PartResult = { bars: [], notes: [], slurs: [], marks: [], rehearsalMarks: [] };
   let divisions = 1;
   let beats = 4;
@@ -137,9 +139,11 @@ function readPart(partEl: Element, partId: string, plan: BarPlan[] | null, surve
             if (b) beats = b;
             if (bt > 0) beatType = bt;
           }
-          // Only the first (unnumbered, or number="1") <clef> -- a part with more than one staff
-          // (piano grand staff, e.g.) can have several, but this app renders one staff per part.
-          const clefEl = child.querySelector(':scope > clef:not([number]), :scope > clef[number="1"]');
+          // The staff's own <clef> (unnumbered, or number="1", for the first) -- a part read whole
+          // takes its first staff's.
+          const clefEl = child.querySelector(
+            staff && staff > 1 ? `:scope > clef[number="${staff}"]` : ':scope > clef:not([number]), :scope > clef[number="1"]',
+          );
           const clefSign = clefEl?.querySelector('sign')?.textContent;
           if (clefSign && !result.clef) {
             const lineText = clefEl!.querySelector('line')?.textContent;
@@ -194,12 +198,17 @@ function readPart(partEl: Element, partId: string, plan: BarPlan[] | null, surve
           const endBeat = isGrace ? startBeat + durationBeats : place(rawStart + durationBeats, voice);
           const noteBeats = endBeat - startBeat;
 
-          if (!isRest) {
+          const onStaff = !staff || (parseInt(child.querySelector(':scope > staff')?.textContent || '1', 10) || 1) === staff;
+          if (!isRest && onStaff) {
             const pitchEl = child.querySelector(':scope > pitch');
-            if (pitchEl) {
-              const step = pitchEl.querySelector('step')?.textContent || 'C';
-              const alter = parseFloat(pitchEl.querySelector('alter')?.textContent || '0');
-              const octave = parseInt(pitchEl.querySelector('octave')?.textContent || '4', 10);
+            // A percussion note: its place on the staff stands in for a pitch.
+            const unpitchedEl = pitchEl ? null : child.querySelector(':scope > unpitched');
+            if (pitchEl || unpitchedEl) {
+              // (Without a stated place, an unpitched note sits on the middle line: B4 on a treble staff.)
+              const step = (pitchEl ? pitchEl.querySelector('step') : unpitchedEl!.querySelector('display-step'))?.textContent?.trim() || (pitchEl ? 'C' : 'B');
+              const alter = pitchEl ? parseFloat(pitchEl.querySelector('alter')?.textContent || '0') : 0;
+              const octave = parseInt((pitchEl ? pitchEl.querySelector('octave') : unpitchedEl!.querySelector('display-octave'))?.textContent || '4', 10);
+              const notehead = child.querySelector(':scope > notehead')?.textContent?.trim();
               const midi = pitchToMidi(step, alter, octave);
               const lyricEl = child.querySelector(':scope > lyric');
               const lyric = lyricEl?.querySelector(':scope > text')?.textContent?.trim();
@@ -255,6 +264,8 @@ function readPart(partEl: Element, partId: string, plan: BarPlan[] | null, surve
                   tieSegments: tieTypes.has('start') ? [noteBeats] : undefined,
                   voice,
                   beams: beamMarks ? [beamMarks] : undefined,
+                  unpitched: unpitchedEl ? true : undefined,
+                  notehead: notehead === 'x' || notehead === 'cross' ? 'x' : undefined,
                 };
                 result.notes.push(noteEvent);
                 if (tieTypes.has('start')) openTieNotes.set(midi, noteEvent);
@@ -296,6 +307,8 @@ function readPart(partEl: Element, partId: string, plan: BarPlan[] | null, surve
         }
         case 'direction': {
           if (!plan) break;
+          // A direction belongs to its <staff> (the first, without one).
+          if (staff && (parseInt(child.querySelector(':scope > staff')?.textContent || '1', 10) || 1) !== staff) break;
           const voice = child.querySelector(':scope > voice')?.textContent?.trim() || '1';
           const offsetUnits = parseFloat(child.querySelector(':scope > offset')?.textContent ?? '') || 0;
           const beat = place(cursor + (divisions > 0 ? offsetUnits / divisions : 0), voice);
@@ -408,22 +421,51 @@ export function parseMusicXML(xmlText: string): Score {
     throw new Error('Invalid MusicXML: ' + parseError.textContent);
   }
 
-  const title =
+  // An accent typed for an apostrophe ("Don´t") is set as one.
+  const title = (
     doc.querySelector('work > work-title')?.textContent?.trim() ||
     doc.querySelector('movement-title')?.textContent?.trim() ||
-    'Untitled';
+    'Untitled'
+  ).replace(/(\p{L})[´`](\p{L})/gu, '$1’$2');
 
-  const parts: PartInfo[] = Array.from(doc.querySelectorAll('part-list > score-part')).map((el) => ({
+  // Names as printed can run over several lines ("Clara\n(Anja)", "Übe-\nKlavier"): one line here.
+  const fileParts: PartInfo[] = Array.from(doc.querySelectorAll('part-list > score-part')).map((el) => ({
     id: el.getAttribute('id') || '',
-    name: el.querySelector('part-name')?.textContent?.trim() || el.getAttribute('id') || '',
+    name:
+      [el.querySelector('part-name'), el.querySelector('part-abbreviation'), el.querySelector('score-instrument > instrument-name')]
+        .map((n) => n?.textContent?.replace(/([-/])\s*\n\s*/g, '$1').replace(/\s+/g, ' ').trim())
+        .find((n) => n) ||
+      el.getAttribute('id') ||
+      '',
   }));
 
   const partEls = Array.from(doc.querySelectorAll('score-partwise > part'));
-  const ids = partEls.map((el) => el.getAttribute('id') || '');
+  const fileIds = partEls.map((el) => el.getAttribute('id') || '');
   // Pass 1: how long each part's bars are. Pass 2: every part laid on the bars agreed from that.
-  const surveys = partEls.map((el, i) => readPart(el, ids[i], null, null).bars);
+  const surveys = partEls.map((el, i) => readPart(el, fileIds[i], null, null).bars);
   const plan = planBars(surveys);
-  const results = partEls.map((el, i) => readPart(el, ids[i], plan, surveys[i]));
+  // A part printed on several staves (a piano's two hands) is read once per staff, each a voice of
+  // its own: one staff per voice is what the sheet view draws, and each hand can be heard alone.
+  const parts: PartInfo[] = [];
+  const ids: string[] = [];
+  const results: PartResult[] = [];
+  partEls.forEach((el, i) => {
+    const info = fileParts.find((p) => p.id === fileIds[i]) ?? { id: fileIds[i], name: fileIds[i] };
+    const staves = Math.max(1, ...Array.from(el.querySelectorAll(':scope > measure > attributes > staves')).map((s) => parseInt(s.textContent || '1', 10) || 1));
+    if (staves === 1) {
+      parts.push(info);
+      ids.push(info.id);
+      results.push(readPart(el, info.id, plan, surveys[i]));
+      return;
+    }
+    for (let staff = 1; staff <= staves; staff++) {
+      const id = `${info.id}-staff${staff}`;
+      const label = staves === 2 ? t(staff === 1 ? 'staffUpper' : 'staffLower') : String(staff);
+      parts.push({ id, name: `${info.name} (${label})`, sourceId: info.id, sourceName: info.name });
+      ids.push(id);
+      results.push(readPart(el, id, plan, surveys[i], staff));
+    }
+  });
 
   const notes = results.flatMap((r) => r.notes).sort((a, b) => a.startBeat - b.startBeat);
   const slurs = results.flatMap((r) => r.slurs);

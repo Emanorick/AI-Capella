@@ -80,7 +80,7 @@ samples), **Relativ männlich** (`rm`) and **Frederick** (`frederick`, a persona
   `ensemble`. Rehearsing together has one session document per ensemble (`sessions/live` for
   n.n.b., as before; `sessions/live-rm`).
 - **The rules** (all closed unless listed): only the known ensembles (`known()`: nnb, rm,
-  frederick -- a new one is added there and in `ENSEMBLES`) can have codes, members, songs or a
+  frederick, suv -- a new one is added there and in `ENSEMBLES`) can have codes, members, songs or a
   session, so nobody can make up an ensemble and store things in it. A code document's id must be
   a SHA-256 (64 hex digits); it can be fetched by id but never listed, created only by the
   ensemble's members (or for an ensemble nobody guards yet, i.e. without `codeId`), never
@@ -375,12 +375,24 @@ rehearsal marks never offers hand-added ones.
 - Imported scores are gzip-compressed and written to a shared Firestore collection, so
   everyone using the app (any device, any browser) sees the same library in real time via a
   live `onSnapshot` subscription — no manual refresh, no per-device storage.
-- A soft **PIN gate** blocks the library behind a single shared PIN, checked against a SHA-256
-  hash stored in Firestore (never the plaintext). This is explicitly *not* real access
-  control — Firestore's actual security boundary is "any anonymously authenticated client can
-  read/write," which the PIN doesn't change. It exists purely to keep a shared link from being
-  casually forwarded outside the group; see the code comment in `pinGate.ts` for the exact
-  reasoning and its limits.
+- Several files at once arrive in the order of their names, numbers counted as numbers ("2." before
+  "10."), so a show's numbered pieces land in running order. A score without a real title
+  ("Unbenannte Partitur", "Untitled score") is named after its file, less its running number; an
+  accent typed for an apostrophe ("Don´t") becomes one.
+- **Scores beyond a cappella** (the musical "Stolz und Vorurteil", October 2026: band parts beside
+  the singers): a part printed on several staves -- a piano's two hands, an organ's three -- is
+  read once per staff (`readPart(..., staff)`), each its own voice ("Klavier (oben)", "Klavier
+  (unten)", id `<part>-staff<n>`, `sourceId`/`sourceName` naming the part), so the sheet view
+  draws each staff with its own clef and each hand can be heard alone; the PDF export puts the
+  part back together. Settings stored for such a part while it was one voice (a rename, a
+  removal) carry over to its staves. Percussion -- claps, stamping, drums (`<unpitched>`) -- is
+  read at its printed place (`unpitched`, an `x` notehead where printed so), drawn under a
+  percussion clef without key signature or accidentals, never transposed, played as a short tap
+  of filtered noise (higher for notes printed higher), and left out of the starting tones.
+  Part names printed over several lines ("Clara\n(Anja)") are joined into one; a voice name too
+  long for the sidebar takes two smaller lines.
+- (Before ensembles, a soft **PIN gate** stood in front of the library -- see Ensembles for what
+  guards it now.)
 - Song titles and voice names come from a library anyone with the PIN can write to, so they are
   always rendered as text (DOM `textContent`), never parsed as HTML — the old library list used
   `innerHTML` with raw titles, which let a crafted title run script on every choir member's

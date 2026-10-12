@@ -22,7 +22,7 @@ service cloud.firestore {
 
     // The ensembles there are (src/ensembles.ts ENSEMBLES): nothing else can be set up or stored.
     function known(ensemble) {
-      return ensemble in ['nnb', 'rm', 'frederick'];
+      return ensemble in ['nnb', 'rm', 'frederick', 'suv'];
     }
 
     // A code document that opens the ensemble.
