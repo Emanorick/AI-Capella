@@ -563,7 +563,6 @@ export class StaffView {
   private lyricLineOf = new Map<NoteEvent, number>(); // see lyricLines; absent: the first line
   private hiddenParts = new Set<string>();
   private dimmedParts = new Set<string>();
-  private measureByNumber: Map<number, MeasureInfo>;
   private signatureAt: Map<number, SignatureChange>; // by bar start beat
   private marks: MarkLayout | null; // dynamics, tempo and words in gold ink (goldInk.ts)
   private restsByStaff: Map<string, { startBeat: number; durationBeats: number }[]>;
@@ -585,7 +584,6 @@ export class StaffView {
     if (!ctx) throw new Error('Canvas 2D context unavailable');
     this.ctx2d = ctx;
 
-    this.measureByNumber = new Map(score.measures.map((m) => [m.number, m]));
     this.signatureAt = new Map(signatureChanges(score.measures).map((c) => [c.beat, c]));
     this.marks = MARKS_ON ? layoutMarks(score) : null;
 
@@ -1038,6 +1036,11 @@ export class StaffView {
     // notes are startBeat-sorted, so a binary search skips straight there and the loop breaks once
     // past the visible range -- O(notes near the viewport) per frame, not O(whole piece).
     const effectiveMeasure = this.measureAtOrBefore(startBeat);
+    // The bar a note is in: by its printed number, among the bars at its place -- a repeated bar is
+    // played (and drawn) again under the same number, its accidentals starting afresh.
+    const measures = this.score.measures;
+    let at = Math.max(0, effectiveMeasure ? measures.indexOf(effectiveMeasure) : 0);
+    let currentMeasure: MeasureInfo | undefined;
     let currentMeasureNumber = -1;
     let impliedAlter: Record<string, number> = {};
     const accidentalMap = new Map<string, number>();
@@ -1153,10 +1156,14 @@ export class StaffView {
     for (let i = notesStartIdx; i < notes.length; i++) {
       const note = notes[i];
       if (note.startBeat > endBeat) break;
-      if (note.measureNumber !== currentMeasureNumber) {
+      while (at + 1 < measures.length && measures[at + 1].startBeat <= note.startBeat + 1e-6) at++;
+      // (A grace note just before its bar's first beat already belongs to that bar.)
+      const own = measures[at]?.number === note.measureNumber || measures[at + 1]?.number !== note.measureNumber ? measures[at] : measures[at + 1];
+      if (own !== currentMeasure || note.measureNumber !== currentMeasureNumber) {
+        currentMeasure = own;
         currentMeasureNumber = note.measureNumber;
         accidentalMap.clear();
-        impliedAlter = impliedAlterForFifths(this.transposedFifths(this.measureByNumber.get(currentMeasureNumber)?.fifths ?? 0));
+        impliedAlter = impliedAlterForFifths(this.transposedFifths(own?.fifths ?? 0));
       }
       const spelling = this.effectiveSpelling(note);
       const key = `${spelling.step}${spelling.octave}`;

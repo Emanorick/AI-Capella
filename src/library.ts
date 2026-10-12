@@ -43,7 +43,9 @@ export interface StoredSong {
   // only when the user explicitly asks to remember the current setup. sections is only ever
   // populated here for a song whose MusicXML has no <rehearsal> marks of its own (see
   // Score.rehearsalMarks) -- when it does, those are used directly and nothing needs saving.
-  savedConfig?: { transpose?: number; bpm?: number; sections?: { label: string; beat: number }[] };
+  // played: the sections' beats count a piece's repeats as played (saved since repeats are played
+  // out); older ones count each printed bar once (main.ts carries them over, score.ts playedBeat).
+  savedConfig?: { transpose?: number; bpm?: number; sections?: { label: string; beat: number }[]; played?: boolean };
   // Per-voice clef chosen in the app (keyed by part id), overriding the file's own <clef>.
   clefOverrides?: Record<string, VoiceClef>;
   // Voices removed in the app (part ids). The stored score itself is never rewritten, so a removed
@@ -201,7 +203,7 @@ export async function updateSongMetadata(
  */
 export async function saveSongConfig(id: string, config: { transpose: number; bpm: number; sections: { label: string; beat: number }[] }): Promise<void> {
   if (!db) throw new Error('Firebase is not configured');
-  await updateDoc(doc(db, SONGS_COLLECTION, id), { savedConfig: config });
+  await updateDoc(doc(db, SONGS_COLLECTION, id), { savedConfig: { ...config, played: true } });
 }
 
 /**
@@ -210,7 +212,7 @@ export async function saveSongConfig(id: string, config: { transpose: number; bp
  */
 export async function saveSongSections(id: string, sections: { label: string; beat: number }[]): Promise<void> {
   if (!db) throw new Error('Firebase is not configured');
-  await updateDoc(doc(db, SONGS_COLLECTION, id), { 'savedConfig.sections': sections });
+  await updateDoc(doc(db, SONGS_COLLECTION, id), { 'savedConfig.sections': sections, 'savedConfig.played': true });
 }
 
 /** Reads a .musicxml/.xml file as-is, or unzips a compressed .mxl (MuseScore's default export format). */

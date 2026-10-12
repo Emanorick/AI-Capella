@@ -1063,9 +1063,9 @@ export class PianoRoll {
           // A rehearsal letter as printed in the score: bold serif capital in a square box.
           rctx.strokeStyle = PAPER;
           rctx.lineWidth = 1.3;
+          rctx.font = `700 12px ${FONT_DISPLAY}`;
           const boxW = Math.max(17, rctx.measureText(section.label).width + 8);
           rctx.strokeRect(x + 5.5, 5.5, boxW, 17);
-          rctx.font = `700 12px ${FONT_DISPLAY}`;
           rctx.fillStyle = PAPER;
           rctx.textAlign = 'center';
           rctx.fillText(section.label, x + 5.5 + boxW / 2, 18.5);

@@ -13,7 +13,7 @@ import { PianoRoll, RULER_HEIGHT_PX, type LoopRegion } from './pianoRoll';
 import { StaffView } from './staffView';
 import { OverviewStrip } from './overview';
 import { colorForPart } from './palette';
-import { measureAtBeat, type Score } from './score';
+import { measureAtBeat, playedBeat, type Score } from './score';
 import { deleteImportedSong, readScoreFile, saveSongOrder, songOrder, saveImportedSong, saveSongConfig, saveSongSections, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong, type VoiceClef } from './library';
 import { ensureSignedIn, isFirebaseConfigured } from './firebase';
 import { animateRibbons, coverDataFromScore, drawCover, drawMark, prepareCanvas, type CoverData } from './artwork';
@@ -1053,6 +1053,11 @@ function normalizeStoredScore(raw: Partial<Score>): Score {
   };
 }
 
+/** How many bars the piece has as printed (played out, a repeated bar comes again under its number). */
+function barCount(score: Score): number {
+  return score.measures.reduce((max, m) => Math.max(max, m.number), 0) || score.measures.length;
+}
+
 /** The piece's time signatures in order of appearance, e.g. "12/8, 5/8, 6/8" for a changing metre. */
 function timeSignatureList(score: Score): string {
   return [...new Set(score.measures.map((m) => `${m.beats}/${m.beatType}`))].join(', ');
@@ -1073,7 +1078,7 @@ function songMeta(song: SongEntry): Promise<SongMeta | null> {
               resolve({
                 tempo: score.tempo,
                 voices: score.parts.length,
-                bars: score.measures.at(-1)?.number ?? score.measures.length,
+                bars: barCount(score),
                 // MIDI imports carry no key signature (older ones not even a fifths field), so no key is named for them.
                 key: first && song.format !== 'score' ? keyName(first.fifths, first.mode) : '',
                 time: timeSignatureList(score),
@@ -1545,7 +1550,9 @@ async function loadSongLocally(song: SongEntry) {
   // Only relevant when the source has no rehearsal marks of its own (see renderSections) --
   // reloaded fresh from this song's saved config every time, never carried over from whatever the
   // previously-open song had.
-  manualSections = score.rehearsalMarks.length ? [] : (song.savedConfig?.sections ?? []).slice();
+  // Sections saved before repeats were played out are where their bar is first played.
+  const saved = song.savedConfig;
+  manualSections = score.rehearsalMarks.length ? [] : (saved?.sections ?? []).map((s) => ({ ...s, beat: saved?.played ? s.beat : playedBeat(score, s.beat) }));
   zoomOf.roll = 1;
   zoomOf.staff = 1;
   zoomValueEl.textContent = '100%';
@@ -1589,7 +1596,7 @@ async function loadSongLocally(song: SongEntry) {
   songTitleEl.title = song.imported ? t('renameSong') : '';
   const first = score.measures[0];
   songMetaEl.textContent = first
-    ? [song.format === 'score' ? '' : keyName(first.fifths, first.mode), timeSignatureList(score), countLabel(score.measures.at(-1)?.number ?? score.measures.length, 'barsOne', 'barsMany')]
+    ? [song.format === 'score' ? '' : keyName(first.fifths, first.mode), timeSignatureList(score), countLabel(barCount(score), 'barsOne', 'barsMany')]
         .filter(Boolean)
         .join(' · ')
     : '';
@@ -2575,7 +2582,7 @@ function effectiveSections(): { label: string; beat: number }[] {
 function sectionButton(label: string, index: number): HTMLButtonElement {
   const b = document.createElement('button');
   b.type = 'button';
-  b.className = 'rmark';
+  b.className = label.length > 2 ? 'rmark word' : 'rmark';
   b.dataset.action = 'section-jump';
   b.dataset.index = String(index);
   b.textContent = label;
@@ -2602,7 +2609,7 @@ function sectionsChanged() {
   const song = currentSong;
   if (!song?.imported) return;
   const saved = manualSections.map((s) => ({ ...s }));
-  song.savedConfig = { ...song.savedConfig, sections: saved };
+  song.savedConfig = { ...song.savedConfig, sections: saved, played: true };
   saveSongSections(song.id, saved).catch((err) => toast(t('saveDefaultsFailed', { msg: errorText(err) }), 'error'));
 }
 
@@ -2683,7 +2690,11 @@ function renderSections() {
   sectionMarksEl.replaceChildren(
     ...sections.map((s, i) => {
       const b = sectionButton(s.label, i);
-      b.style.left = `calc(16px + (100% - 32px) * ${Math.max(0, Math.min(1, s.beat / total))})`;
+      const at = Math.max(0, Math.min(1, s.beat / total));
+      b.style.left = `calc(16px + (100% - 32px) * ${at})`;
+      // A mark that is a word ends before the next one (cut short with an ellipsis).
+      const room = Math.max(0, Math.min(1, (sections[i + 1]?.beat ?? total) / total) - at);
+      b.style.maxWidth = `max(18px, calc((100% - 32px) * ${room} - 3px))`;
       return b;
     }),
   );

@@ -54,9 +54,18 @@ interface BarPlan {
   length: number;
 }
 
+/** A note's words in one verse (a passage printed once and sung twice has two lines of words). */
+interface Verse {
+  lyric?: string;
+  lyricJoin?: boolean;
+  lyricExtend?: boolean;
+}
+
 interface PartResult {
   bars: BarSurvey[];
   notes: NoteEvent[];
+  noteBars: number[]; // the bar (index into the part's bars) each of `notes` starts in
+  verses: Map<NoteEvent, Verse[]>; // a note's words per verse, where it has more than one line
   slurs: SlurArc[];
   marks: ScoreMark[];
   rehearsalMarks: RehearsalMark[];
@@ -99,7 +108,7 @@ function unpitchedPlace(unpitched: Element, note: Element): { step: string; octa
  * several staves is read once per staff; the others' notes still move time along).
  */
 function readPart(partEl: Element, partId: string, plan: BarPlan[] | null, survey: BarSurvey[] | null, staff?: number): PartResult {
-  const result: PartResult = { bars: [], notes: [], slurs: [], marks: [], rehearsalMarks: [] };
+  const result: PartResult = { bars: [], notes: [], noteBars: [], verses: new Map(), slurs: [], marks: [], rehearsalMarks: [] };
   let divisions = 1;
   let beats = 4;
   let beatType = 4;
@@ -231,9 +240,26 @@ function readPart(partEl: Element, partId: string, plan: BarPlan[] | null, surve
               const alter = pitchEl ? parseFloat(pitchEl.querySelector('alter')?.textContent || '0') : 0;
               const notehead = child.querySelector(':scope > notehead')?.textContent?.trim();
               const midi = pitchToMidi(step, alter, octave);
-              const lyricEl = child.querySelector(':scope > lyric');
+              // The first line of words; every line, by verse number, where there are more.
+              const lyricEls = Array.from(child.querySelectorAll(':scope > lyric'));
+              const verseOf = (el: Element | undefined): Verse => {
+                const text = el?.querySelector(':scope > text')?.textContent?.trim();
+                const syl = el?.querySelector(':scope > syllabic')?.textContent?.trim();
+                return text
+                  ? { lyric: text, lyricJoin: syl === 'begin' || syl === 'middle' ? true : undefined, lyricExtend: el?.querySelector(':scope > extend') ? true : undefined }
+                  : {};
+              };
+              const lyricEl = lyricEls[0];
               const lyric = lyricEl?.querySelector(':scope > text')?.textContent?.trim();
               const syllabic = lyricEl?.querySelector(':scope > syllabic')?.textContent?.trim();
+              let verses: Verse[] | undefined;
+              if (lyricEls.some((el) => (parseInt(el.getAttribute('number') || '1', 10) || 1) > 1)) {
+                verses = [];
+                for (const el of lyricEls) {
+                  const n = parseInt(el.getAttribute('number') || '1', 10) || 1;
+                  if (n >= 1 && n <= 12 && !verses[n - 1]) verses[n - 1] = verseOf(el);
+                }
+              }
 
               // Tools vary in which element they emit for a tie: <tie> is the sound-level element,
               // <notations><tied> the notation-level one; OMR files sometimes carry only one.
@@ -289,6 +315,8 @@ function readPart(partEl: Element, partId: string, plan: BarPlan[] | null, surve
                   notehead: notehead === 'x' || notehead === 'cross' ? 'x' : undefined,
                 };
                 result.notes.push(noteEvent);
+                result.noteBars.push(index);
+                if (verses) result.verses.set(noteEvent, verses);
                 if (tieTypes.has('start')) openTieNotes.set(midi, noteEvent);
               }
 
@@ -511,8 +539,241 @@ export function parseMusicXML(xmlText: string): Score {
   const rehearsalMarks = (lead?.rehearsalMarks ?? []).sort((a, b) => a.beat - b.beat);
   const last = plan.at(-1);
   const totalBeats = last ? last.start + last.length : 0;
+  const score: Score = { title, parts, notes, measures, slurs, totalBeats, rehearsalMarks, tempo: readTempo(doc), marks };
 
-  return { title, parts, notes, measures, slurs, totalBeats, rehearsalMarks, tempo: readTempo(doc), marks };
+  // Repeats, endings and jumps: the bars laid out in the order they're played.
+  const order = playOrder(mergeRepeats(partEls.map(readRepeats)), plan.length);
+  if (order.length === plan.length && order.every((o, k) => o.bar === k)) return score;
+  const noteBar = new Map<NoteEvent, number>();
+  const verses = new Map<NoteEvent, Verse[]>();
+  for (const r of results) {
+    r.notes.forEach((n, k) => noteBar.set(n, r.noteBars[k]));
+    for (const [n, v] of r.verses) verses.set(n, v);
+  }
+  return unroll(score, plan, order, noteBar, verses);
+}
+
+/** A bar's repeat signs, endings and jumps, as printed (MusicXML <barline> and <sound>). */
+interface BarRepeats {
+  forward?: boolean; // |: at its start
+  backward?: number; // :| at its end: how often the passage is played, all told (2 unless stated)
+  ending?: { numbers: number[]; start: boolean; stop: boolean }; // a volta bracket begins / ends here
+  segno?: boolean;
+  coda?: boolean; // the coda begins here
+  dacapo?: boolean; // D.C. at its end
+  dalsegno?: boolean; // D.S. at its end
+  tocoda?: boolean; // "To Coda" at its end (taken after a D.C. or D.S.)
+  fine?: boolean; // "Fine": the end, after a D.C. or D.S.
+}
+
+function readRepeats(partEl: Element): BarRepeats[] {
+  return Array.from(partEl.querySelectorAll(':scope > measure')).map((measure) => {
+    const bar: BarRepeats = {};
+    for (const line of Array.from(measure.querySelectorAll(':scope > barline'))) {
+      const repeat = line.querySelector(':scope > repeat');
+      const direction = repeat?.getAttribute('direction');
+      if (direction === 'forward') bar.forward = true;
+      if (direction === 'backward') bar.backward = Math.max(1, parseInt(repeat!.getAttribute('times') || '2', 10) || 2);
+      const ending = line.querySelector(':scope > ending');
+      if (ending) {
+        const type = ending.getAttribute('type');
+        const numbers = (ending.getAttribute('number') || '').split(/[^0-9]+/).map(Number).filter((n) => n > 0);
+        bar.ending = {
+          numbers: numbers.length ? numbers : (bar.ending?.numbers ?? []),
+          start: !!bar.ending?.start || type === 'start',
+          stop: !!bar.ending?.stop || type === 'stop' || type === 'discontinue',
+        };
+      }
+    }
+    for (const sound of Array.from(measure.querySelectorAll('sound'))) {
+      if (sound.hasAttribute('segno')) bar.segno = true;
+      if (sound.hasAttribute('coda')) bar.coda = true;
+      if (sound.hasAttribute('dacapo') && sound.getAttribute('dacapo') !== 'no') bar.dacapo = true;
+      if (sound.hasAttribute('dalsegno')) bar.dalsegno = true;
+      if (sound.hasAttribute('tocoda')) bar.tocoda = true;
+      if (sound.hasAttribute('fine')) bar.fine = true;
+    }
+    return bar;
+  });
+}
+
+/** Every part's repeats, together: the first part's endings, any part's signs and jumps. */
+function mergeRepeats(parts: BarRepeats[][]): BarRepeats[] {
+  const count = Math.max(0, ...parts.map((p) => p.length));
+  return Array.from({ length: count }, (_, i) => {
+    const bars = parts.map((p) => p[i]).filter((b): b is BarRepeats => !!b);
+    const backward = Math.max(0, ...bars.map((b) => b.backward ?? 0));
+    return {
+      forward: bars.some((b) => b.forward) || undefined,
+      backward: backward || undefined,
+      ending: bars.find((b) => b.ending)?.ending,
+      segno: bars.some((b) => b.segno) || undefined,
+      coda: bars.some((b) => b.coda) || undefined,
+      dacapo: bars.some((b) => b.dacapo) || undefined,
+      dalsegno: bars.some((b) => b.dalsegno) || undefined,
+      tocoda: bars.some((b) => b.tocoda) || undefined,
+      fine: bars.some((b) => b.fine) || undefined,
+    };
+  });
+}
+
+/**
+ * The bars in the order they're played, each with its pass through a repeat (1, 2, ...): a
+ * passage between |: and :| as often as the repeat says, its volta brackets on their passes, D.C.
+ * and D.S. once each -- after which repeats aren't taken again, the last volta is played, "To
+ * Coda" jumps to the coda and "Fine" ends -- as an engraved part is read. `count` bars in all.
+ */
+function playOrder(bars: BarRepeats[], count: number): { bar: number; pass: number }[] {
+  // Each bar's volta numbers, and the last bar of its volta.
+  const voltaOf: (number[] | null)[] = [];
+  const voltaEnd: number[] = [];
+  let open: number[] | null = null;
+  let openStart = 0;
+  for (let i = 0; i < count; i++) {
+    const ending = bars[i]?.ending;
+    if (ending?.start) {
+      open = ending.numbers;
+      openStart = i;
+    }
+    voltaOf[i] = open;
+    if (open && (ending?.stop || i === count - 1)) {
+      for (let j = openStart; j <= i; j++) voltaEnd[j] = i;
+      open = null;
+    }
+  }
+  const lastVolta = (i: number) => !(voltaEnd[i] + 1 < count && voltaOf[voltaEnd[i] + 1]);
+  const segno = bars.findIndex((b) => b.segno);
+  const coda = bars.findIndex((b) => b.coda);
+
+  const order: { bar: number; pass: number }[] = [];
+  const jumpsTaken = new Set<number>();
+  let i = 0;
+  let pass = 1;
+  let from = 0; // where the passage being repeated begins
+  let jumped = false; // past a D.C. or D.S.
+  let inVolta = false;
+  const limit = count * 16 + 64; // a malformed file never plays forever
+  while (i < count && order.length < limit) {
+    const bar = bars[i] ?? {};
+    const volta = voltaOf[i];
+    if (!volta && inVolta) {
+      // Past the voltas: a new passage.
+      pass = 1;
+      from = i;
+    }
+    if (bar.forward && i !== from) {
+      from = i;
+      pass = 1;
+    }
+    inVolta = !!volta;
+    if (volta && !(jumped ? lastVolta(i) : volta.includes(pass))) {
+      i = voltaEnd[i] + 1;
+      continue;
+    }
+    order.push({ bar: i, pass });
+    if (jumped && bar.fine) break;
+    if (jumped && bar.tocoda && coda > i) {
+      i = coda;
+      continue;
+    }
+    if (bar.backward && !jumped) {
+      if (pass < bar.backward) {
+        pass++;
+        i = from;
+        inVolta = false;
+        continue;
+      }
+      if (!volta) {
+        pass = 1;
+        from = i + 1;
+      }
+    }
+    if ((bar.dacapo || (bar.dalsegno && segno >= 0)) && !jumpsTaken.has(i)) {
+      jumpsTaken.add(i);
+      jumped = true;
+      i = bar.dacapo ? 0 : segno;
+      pass = 1;
+      from = i;
+      inVolta = false;
+      continue;
+    }
+    i++;
+  }
+  return order;
+}
+
+/**
+ * The score with its bars in playing order: each bar's notes, slurs and marks once per time it's
+ * played, under its printed number; on a passage's second pass the second verse's words, where it
+ * has them; rehearsal marks at their first pass only. `playOrder` maps the printed layout to it.
+ */
+function unroll(score: Score, plan: BarPlan[], order: { bar: number; pass: number }[], noteBar: Map<NoteEvent, number>, verses: Map<NoteEvent, Verse[]>): Score {
+  const passes: { bar: number; pass: number; start: number }[] = [];
+  let at = 0;
+  for (const o of order) {
+    passes.push({ ...o, start: at });
+    at += plan[o.bar].length;
+  }
+  const playedAt: number[][] = plan.map(() => []); // per printed bar, its passes (indices into passes)
+  passes.forEach((p, k) => playedAt[p.bar].push(k));
+  // The printed bar a beat falls in.
+  const barAt = (beat: number) => {
+    let lo = 0;
+    let hi = plan.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (plan[mid].start <= beat + EPS) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  };
+
+  const notes: NoteEvent[] = [];
+  for (const n of score.notes) {
+    const bar = noteBar.get(n) ?? barAt(n.startBeat);
+    const lines = playedAt[bar].length > 1 ? verses.get(n) : undefined;
+    for (const k of playedAt[bar]) {
+      const copy: NoteEvent = { ...n, startBeat: n.startBeat - plan[bar].start + passes[k].start };
+      if (lines) {
+        // This pass's verse; one printed only once is sung every time.
+        const verse = lines[passes[k].pass - 1] ?? (passes[k].pass > 1 ? lines[0] : undefined) ?? {};
+        copy.lyric = verse.lyric;
+        copy.lyricJoin = verse.lyricJoin;
+        copy.lyricExtend = verse.lyricExtend;
+      }
+      notes.push(copy);
+    }
+  }
+  notes.sort((a, b) => a.startBeat - b.startBeat);
+
+  const shifted = <T extends { beat?: number; startBeat?: number }>(items: T[], beatOf: (item: T) => number, move: (item: T, by: number) => T): T[] =>
+    items.flatMap((item) => {
+      const bar = barAt(beatOf(item));
+      return playedAt[bar].map((k) => move(item, passes[k].start - plan[bar].start));
+    });
+  const slurs = shifted(score.slurs, (sl) => sl.startBeat, (sl, by) => ({ ...sl, startBeat: sl.startBeat + by, endBeat: sl.endBeat + by }));
+  const marks = score.marks
+    ? shifted(score.marks, (m) => m.beat, (m, by) => ({ ...m, beat: m.beat + by, endBeat: m.endBeat !== undefined ? m.endBeat + by : undefined })).sort((a, b) => a.beat - b.beat)
+    : undefined;
+  const rehearsalMarks = score.rehearsalMarks.flatMap((r) => {
+    const bar = barAt(r.beat);
+    const first = playedAt[bar][0];
+    return first === undefined ? [] : [{ ...r, beat: r.beat - plan[bar].start + passes[first].start }];
+  });
+  const measures = passes.flatMap((p) => {
+    const m = score.measures[p.bar];
+    return m ? [{ ...m, startBeat: p.start }] : [];
+  });
+  return {
+    ...score,
+    notes,
+    slurs,
+    marks,
+    rehearsalMarks,
+    measures,
+    totalBeats: at,
+    playOrder: passes.map((p) => ({ start: p.start, writtenStart: plan[p.bar].start, length: plan[p.bar].length })),
+  };
 }
 
 /**

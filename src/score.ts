@@ -123,6 +123,9 @@ export interface Score {
   // main.ts falls back to letting the user mark their own section boundaries instead (persisted
   // per-song via library.ts's savedConfig, not part of this parsed-from-source Score at all).
   rehearsalMarks: RehearsalMark[];
+  // A piece with repeats is laid out as it's played (musicxml.ts unroll): each played bar's start,
+  // and where that bar starts and how long it is in the piece as printed. Absent without repeats.
+  playOrder?: { start: number; writtenStart: number; length: number }[];
   // The first tempo the file states, in quarter-note beats per minute (MusicXML <sound tempo> or a
   // metronome mark, MIDI set-tempo) -- the starting tempo when a song is opened without a saved
   // default. Absent when the file states none.
@@ -160,4 +163,16 @@ export function measureAtBeat(score: Score, beat: number): MeasureInfo | undefin
     else break;
   }
   return current;
+}
+
+/**
+ * Where a position in the piece as printed (each bar once) is played: in a piece with repeats, its
+ * bar's first pass. Positions saved before repeats were played out are carried over with it.
+ */
+export function playedBeat(score: Score, writtenBeat: number): number {
+  const order = score.playOrder;
+  if (!order) return writtenBeat;
+  const EPS = 1e-6;
+  const pass = order.find((p) => writtenBeat >= p.writtenStart - EPS && writtenBeat < p.writtenStart + p.length - EPS);
+  return pass ? pass.start + (writtenBeat - pass.writtenStart) : writtenBeat;
 }

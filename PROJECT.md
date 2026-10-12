@@ -369,7 +369,12 @@ Tempo & key sheet → jump there / remove this section / remove all; the player 
 **Remove all sections** (with a confirmation). Letters printed in the file itself can't be removed.
 **Save tempo, key and sections as default** (player ⋯ menu, laptop only, library songs only) still
 snapshots transpose and tempo together with the letters (`saveSongConfig`). A file with its own
-rehearsal marks never offers hand-added ones.
+rehearsal marks never offers hand-added ones. A rehearsal mark that is a word ("Refrain", "Intro
+4 Takte Bass+Drums vom Band") gets a box as wide as it in smaller type (`.rmark.word`); on the
+whole-piece strip it ends before the next mark, cut short with an ellipsis (its full text in the
+tooltip). Since repeats are played out (§4.2), saved letters are positions in the piece as played
+(`savedConfig.played`); letters saved before then are carried over to where their bar is first
+played (`playedBeat`).
 
 ### Import & shared library
 - Drop files anywhere on the repertoire page, or use **Add arrangement**, to import `.musicxml`, `.xml`, `.mxl` (MuseScore's
@@ -754,6 +759,24 @@ in the piece (matching a reported bug: voices drifting out of alignment with eac
 certain point onward). A grace note is still added as a real (if very short,
 `GRACE_NOTE_DURATION_BEATS`) audible/visible `NoteEvent`, ending exactly at the position the next
 real note starts — just never allowed to move `cursor` itself.
+
+**Repeats are played as written.** Repeat signs (`<repeat direction="forward|backward"
+times="n">`, `times` meaning how often the passage is played all told), volta brackets
+(`<ending number="1, 2" type="start|stop|discontinue">`) and jumps (`<sound segno coda dacapo
+dalsegno tocoda fine>`) are read per bar from every part (`readRepeats`, `mergeRepeats`), and
+`playOrder()` lists the bars as they're played, each with its pass: a passage as often as its
+repeat says, a volta on its passes, D.C. and D.S. once each -- after which repeats aren't taken
+again, the last volta is played, "To Coda" jumps to the coda and "Fine" ends. `unroll()` then lays
+the piece out in that order: each bar's notes, slurs and marks once per pass, under its printed
+number (the ruler shows 8, 5, 6, … after a repeat; going to bar 5 goes to its first pass; the bar
+count shown is the printed one), on a passage's second pass the second verse's words where the
+notes have them (`<lyric number="2">`; a line printed once is sung every time), rehearsal marks at
+their first pass only. The sheet view then draws the passage again as it's played, accidentals
+starting afresh in each played bar (by position, not by number). `Score.playOrder` keeps where
+each played bar is in the printed piece (`playedBeat`). Printed-only jumps (the words "D.C. al
+Fine" without a `<sound>`) aren't followed. The PDF export engraves the file as printed, repeats
+and all. Of the musical's 21 files, 9 have repeats ("Always On My Mind": the intro four times, 46
+printed bars, 63 played); "Evening Rise" is played twice through, as its repeat says.
 
 **Bar lengths are agreed across all parts, in two passes.** Pass 1 walks every part and notes,
 per bar, how far its content reaches (overall and per `<voice>`). `planBars()` then lays the bars
