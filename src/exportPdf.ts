@@ -154,6 +154,19 @@ function fitToWidth(root: SVGSVGElement, drawing: SVGGElement) {
   drawing.setAttribute('transform', `scale(${edge / right}) ${drawing.getAttribute('transform') ?? ''}`);
 }
 
+/**
+ * A music symbol inside text -- a dynamic, or the note of a tempo mark -- in the embedded music
+ * font, in its one style even where the text around it is italic (dynamics) or bold (tempo marks).
+ * A tempo mark's note is set a quarter smaller than Verovio sets it: at its full size it stands
+ * twice as tall as the digits beside it.
+ */
+function musicInText(tspan: string, glyphs: string): string {
+  const note = /^[\uE1D0-\uE1EF\uECA0-\uECBF]+$/.test(glyphs);
+  return tspan
+    .replace(/font-family="(?:Bravura|Leipzig)"/, 'font-family="LightScoreMusicText" font-weight="normal" font-style="normal"')
+    .replace(/font-size="([\d.]+)px"/, (size, px: string) => (note ? `font-size="${Math.round(Number(px) * 0.75)}px"` : size));
+}
+
 async function fontBase64(url: string): Promise<string> {
   const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
   let binary = '';
@@ -222,7 +235,7 @@ export async function makePdf(req: PdfRequest, progress: (step: 'engraver' | 'en
       const svgText = toolkit
         .renderToSVG(page)
         .replace(/font-family="Times, serif"/g, 'font-family="LiberationSerif"')
-        .replace(/font-family="(Bravura|Leipzig)"/g, 'font-family="LightScoreMusicText"');
+        .replace(/(<tspan\b[^>]*font-family="(?:Bravura|Leipzig)"[^>]*>)([^<]*)/g, (_, tspan: string, glyphs: string) => musicInText(tspan, glyphs) + glyphs);
       host.innerHTML = svgText;
       const svg = host.querySelector('svg')!;
       const drawing = flattenInnerSvg(svg);

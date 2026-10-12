@@ -334,8 +334,11 @@ and a clef chosen in the app is used. `exportPdf.ts`, loaded only when asked for
 - **PDF:** jsPDF + svg2pdf.js (MIT) draw each page's SVG as vectors. Verovio draws the music as
   paths and only text as text; that is set in Liberation Serif (Times' metric twin, OFL, embedded,
   so every language's letters come out -- Latvian included) and, for the odd music symbol in text
-  (a metronome mark's note), "LightScore Music Text", a 48 KB TrueType subset of Bravura
-  (renamed, as its OFL asks of a modified version). Verovio's page is an inner `<svg>` without a
+  (a metronome mark's note, a dynamic), "LightScore Music Text", a 48 KB TrueType subset of Bravura
+  (renamed, as its OFL asks of a modified version). That font has one style, so its symbols are set
+  upright and regular even inside bold or italic text (a tempo mark is bold: the note otherwise
+  fell back to a standard font and came out as two stray letters), and a tempo mark's note a
+  quarter smaller than Verovio sets it (`musicInText`). Verovio's page is an inner `<svg>` without a
   size of its own, which svg2pdf doesn't scale; it's flattened into a scaled group first. A bar
   wider than a line runs past the right edge in Verovio's layout; such a page is drawn slightly
   smaller (`fitToWidth`). Page numbers from page 2 on.
