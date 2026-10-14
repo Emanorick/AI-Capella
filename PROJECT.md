@@ -1030,13 +1030,14 @@ Two playback sounds, chosen per device in the player ⋯ menu (`ai-capella-sound
   the dynamic printed at their end (or ×1.2 / ×0.83 when none is). Before a part's first
   dynamic it plays at mf; a part with no dynamics of its own follows the others'. Enough to hear
   the shape of a phrase without losing a quiet voice in the mix.
-- **`pause()` suspends the `AudioContext` *and* clears every scheduled-but-not-yet-fired
-  oscillator.** Suspending alone freezes the clock but doesn't cancel already-scheduled
-  `.start()`/`.stop()` calls — they just wait. Since clicking a note to preview its pitch
-  (`previewNote()`) unconditionally resumes the context, a paused-but-still-scheduled note
-  would fire in a burst the moment you clicked anything, sounding like playback had resumed on
-  its own. Clearing the schedule on pause removes that risk entirely; resuming always goes
-  through `play()` again, which reschedules everything from the current position anyway.
+- **`pause()` clears every scheduled-but-not-yet-fired oscillator**, and the context keeps
+  running (it rests -- is suspended -- only after a 90 s pause, so the next Play, here or on
+  another device of a rehearsal, starts on time; see §4.7 "Keeping devices together"). Clearing
+  matters for the suspended case too: suspending alone freezes the clock but doesn't cancel
+  already-scheduled `.start()`/`.stop()` calls — they just wait, and since clicking a note to
+  preview its pitch (`previewNote()`) resumes the context, a paused-but-still-scheduled note
+  would fire in a burst the moment you clicked anything. Resuming always goes through `play()`
+  again, which reschedules everything from the current position anyway.
 - Changing BPM, transpose, or the metronome toggle mid-playback all just call `play()` again
   from the current beat — full re-schedule, not an incremental patch — which is simple and, in
   practice, imperceptible. **Exception**: a metronome toggle that arrives while a count-in is
@@ -1291,16 +1292,19 @@ exceed normal propagation latency without feeling laggy.
 clock" requires knowing the offset between this device's `Date.now()` and true server time —
 device clocks aren't perfectly synced, and can drift or jump (laptop sleep, mobile tab
 suspension). `calibrateClockOffset()` does an NTP-style round-trip measurement: write a
-per-*device* Firestore doc (keyed by a `crypto.randomUUID()` persisted in `localStorage` — a
-*shared* calibration doc would let two devices' concurrent writes corrupt each other's
-round-trip reading) with a `serverTimestamp()`, read it straight back from the server
-(`getDocFromServer`, bypassing the local cache, which would just echo the write instantly and
-defeat the measurement), and estimate the server clock at the midpoint of the round trip. A
-single sample's error is bounded by roughly half its round-trip time, and real network latency is
-rarely symmetric, so this repeats the measurement `CALIBRATION_SAMPLES` (5) times and keeps
-whichever sample had the lowest round-trip time — the standard NTP-client mitigation, since the
-fastest round trip hit the least queuing/congestion in either direction. `startPeriodicCalibration()`
-runs this on load, every 5 minutes, and on `visibilitychange`. Every
+per-device Firestore doc (`sessions/clockPing_<uid>` — a *shared* calibration doc would let two
+devices' concurrent writes corrupt each other's readings) with a `serverTimestamp()` and time
+that write's round trip: the server stamps the document while handling the write, so its clock
+then is estimated at the write's midpoint. The stamp is read back afterwards
+(`getDocFromServer`, bypassing the local cache), outside the timing — counting the read in, as
+this did until October 2026, put every device's estimate about half a read late, tens of
+milliseconds that differed from device to device and network to network. A single sample's
+error is bounded by roughly half its round-trip time, and real network latency is rarely
+symmetric, so this repeats the measurement `CALIBRATION_SAMPLES` (6) times and keeps whichever
+sample had the lowest round-trip time — the standard NTP-client mitigation. `startPeriodicCalibration()`
+runs this on load, every 5 minutes, and on `visibilitychange`; after a round where every sample
+failed it tries again in 10 s rather than 5 minutes. When a new round moves the offset by more
+than 30 ms (`onOffsetChange`), a playing device lays its schedule again (below). Every
 synced "start playing" write (Play, seek/BPM/transpose while playing) awaits
 `ensureCalibrated()` first, which resolves once that first attempt has finished — otherwise the
 very first Play right after the app loads could race the initial calibration and broadcast
@@ -1350,12 +1354,44 @@ is listening for.
   hears the full mix), without affecting anyone else's playback. It resets to all-`normal`
   whenever `loadSongLocally()` runs (a fresh song, on this device, gets a fresh mix), driven
   directly by the mute/solo/true-solo click handlers rather than `pushState()`.
-- **Loop/end-of-piece wraparound** stays fully local per device (each device is already
-  clock-synced to the same anchor, so they cross a boundary within a couple of animation frames
-  of each other regardless — good enough for a rehearsal tool without the real complexity of
-  anchor-based drift-free loop math).
+- **Loop/end-of-piece wraparound** isn't written to the shared doc either, but in a rehearsal
+  every device works out the same instant for it from the shared start (`sharedAnchor()`: the
+  last start, or the latest round of the loop since), so they come round together. (It used to be
+  local, each device wrapping when its 200 ms tick noticed — up to 200 ms apart.)
 - **Zoom, scroll position, and solo-ducking volume** remain personal per-device preferences,
   never written to the shared doc at all.
+
+**Keeping devices together (October 2026).** Devices in a rehearsal started up to a second apart,
+and now and then one hung. The causes and what now guards against each:
+- **A new audio context per song.** A browser lets a context make sound only once the page has
+  been touched, and a fresh one takes a moment to get its output going; a device following the
+  rehearsal got its song (and context) from someone else's tap, so it sounded late by that
+  moment -- or, on an iPhone, not at all until touched, its light frozen with it. There is now
+  one context for the page's life (`audioContext()` in `audioEngine.ts`), unlocked by the first
+  touch, click or key anywhere (`unlockAudio`); song engines share it and only disconnect their
+  output when replaced.
+- **A schedule laid on a clock that stood still.** Pause used to suspend the context, and Play
+  resumed it without waiting -- `play()` read the frozen `currentTime` and laid the music on it,
+  late by however long the output took to wake. Pause now keeps the context running (it rests
+  only after 90 s, `IDLE_SUSPEND_MS`), and `play()`, finding it not running, lays the schedule
+  the moment it runs (`statechange`), from the shared instant -- a late start joins at the right
+  place. Until then the light follows the wall clock (`wallBeat`), and after 0.7 s a button
+  "Tippen, um den Ton einzuschalten" offers the touch the browser wants (`#sound-prompt`).
+- **States applied out of order.** `applyPlaybackState()` is async (loading a song takes a
+  while); a second state arriving meanwhile could finish first and the older land last --
+  stopping a device that should play, or loading the song twice. States are now applied one at
+  a time, the newest winning (each is the whole session).
+- **Nothing noticed a device falling out of step.** Once a second, a playing device in a
+  rehearsal holds its audio clock against the page's (`clockDrift()`, from
+  `getOutputTimestamp()` where there is one); parted by more than 50 ms twice running -- the
+  output stalled, the audio clock runs off -- it lays its schedule again from the shared timeline
+  (`relaySchedule()`).
+Tested with two browsers against the emulator (start, a 700 ms output stall, Play after a rest, a
+song chosen by the other device, a loop coming round, a Safari-like device whose sound only a
+touch can start): within 20 ms of each other throughout, the stall caught within two seconds. Two
+devices' real offsets on different networks add the calibration's error (above, typically 10-30
+ms). Many loudspeakers in one room stay audible as an echo from about 10 ms apart -- sound itself
+takes 9 ms over 3 m -- so for a room one device playing aloud is still the cleanest.
 
 ### 4.8 Sheet music view (`staffView.ts`)
 

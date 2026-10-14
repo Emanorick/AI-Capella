@@ -73,9 +73,19 @@ export function getDeviceId(): string {
 // (see calibrateClockOffset) and refreshed periodically -- device clocks can drift, and a laptop
 // sleep/mobile tab suspension can jump one noticeably.
 let offsetMs = 0;
+let measured = false; // a calibration has succeeded at least once
 
 export function getServerTimeOffsetMs(): number {
   return offsetMs;
+}
+
+// A playing device lays its schedule again when its idea of the server's clock moves by more than
+// this (main.ts) -- a smaller change is the measurement's own scatter, not worth a hiccup.
+const OFFSET_MOVE_MS = 30;
+let offsetListener: (() => void) | null = null;
+/** Calls `listener` when a new calibration moves the offset notably. */
+export function onOffsetChange(listener: () => void) {
+  offsetListener = listener;
 }
 
 // A single round-trip measurement's error is bounded by roughly half its round-trip time, and
@@ -83,16 +93,22 @@ export function getServerTimeOffsetMs(): number {
 // easily be 100-300ms off. Taking several and keeping the one with the lowest round-trip time --
 // the sample that hit the least queuing/congestion in either direction -- is the standard NTP-
 // client mitigation and meaningfully tightens the estimate without adding real complexity.
-const CALIBRATION_SAMPLES = 5;
+const CALIBRATION_SAMPLES = 6;
+// After a calibration where every sample failed (offline for a moment), the next try comes this
+// soon rather than in CALIBRATION_INTERVAL_MS.
+const CALIBRATION_RETRY_MS = 10_000;
 
 /**
- * NTP-style round-trip offset estimate: write a per-device doc with a serverTimestamp(), read it
- * straight back from the server (bypassing the local cache, which would just echo our own write
- * instantly and defeat the measurement), and estimate the server clock at the midpoint of the
- * round trip. Keyed by the device's own (anonymous) user id rather than a shared doc -- two devices calibrating
- * concurrently against the same doc would corrupt each other's round-trip reading. Repeats this
- * CALIBRATION_SAMPLES times and keeps the lowest-round-trip-time sample (see the constant's
- * comment); one bad sample doesn't abort the rest, only a doc that never once resolves does.
+ * NTP-style round-trip offset estimate: write a per-device doc with a serverTimestamp() and time
+ * that write's round trip -- the server stamps the document while handling the write, so its clock
+ * then is estimated at the round trip's midpoint. The stamp is read back afterwards (from the
+ * server, bypassing the local cache, which would just echo our own write); that read is not part of
+ * the timing -- counting it in, as this once did, put the estimate half a read late, tens of
+ * milliseconds that differed from device to device and network to network. Keyed by the device's
+ * own (anonymous) user id rather than a shared doc -- two devices calibrating concurrently against
+ * the same doc would corrupt each other's readings. Repeats this CALIBRATION_SAMPLES times and keeps
+ * the lowest-round-trip-time sample (see the constant's comment); one bad sample doesn't abort the
+ * rest.
  */
 export async function calibrateClockOffset(): Promise<void> {
   if (!db) return;
@@ -103,8 +119,8 @@ export async function calibrateClockOffset(): Promise<void> {
       const ref = doc(db, 'sessions', `clockPing_${currentUid()}`);
       const t0 = Date.now();
       await setDoc(ref, { ts: serverTimestamp() });
-      const snap = await getDocFromServer(ref);
       const t1 = Date.now();
+      const snap = await getDocFromServer(ref);
       const ts = snap.data()?.ts as Timestamp | undefined;
       if (!ts) continue;
       const rttMs = t1 - t0;
@@ -114,9 +130,13 @@ export async function calibrateClockOffset(): Promise<void> {
     }
   }
   if (best) {
+    const moved = measured && Math.abs(best.offsetMs - offsetMs) > OFFSET_MOVE_MS;
     offsetMs = best.offsetMs;
+    measured = true;
+    if (moved) offsetListener?.();
     return;
   }
+  setTimeout(() => void calibrateClockOffset(), CALIBRATION_RETRY_MS);
   // Leave the previous (or default zero) offset in place; every sample failing outright is the
   // dangerous case though -- a *default* (never-succeeded) offset of 0 makes
   // computeFutureOriginServerTimeMs silently substitute this device's raw, unmeasured clock skew
@@ -146,6 +166,11 @@ export function startPeriodicCalibration() {
  */
 export async function ensureCalibrated(): Promise<void> {
   if (calibrationAttempted) await calibrationAttempted;
+}
+
+/** Whether this device knows the server's clock (a calibration has succeeded). */
+export function isCalibrated(): boolean {
+  return measured;
 }
 
 /**

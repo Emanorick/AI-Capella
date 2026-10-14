@@ -1996,6 +1996,37 @@ button.stepper-value:hover {
   appearance: textfield;
 }
 
+/* While a rehearsal plays here but the browser holds the sound up until the screen is touched. */
+#sound-prompt {
+  position: fixed;
+  left: 50%;
+  top: calc(72px + var(--safe-t, 0px));
+  z-index: 1100;
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink-0);
+  font: 600 15px/1.2 var(--f-text, inherit);
+  white-space: nowrap;
+  max-width: calc(100vw - 32px);
+  box-shadow: 0 0 0 6px rgba(200, 161, 90, 0.25), 0 16px 40px rgba(0, 0, 0, 0.5);
+  transform: translateX(-50%);
+  cursor: pointer;
+}
+
+#sound-prompt.show {
+  display: inline-flex;
+}
+
+#sound-prompt svg {
+  width: 18px;
+  height: 18px;
+}
+
 #toast {
   position: fixed;
   left: 50%;

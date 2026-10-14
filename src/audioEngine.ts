@@ -487,8 +487,47 @@ function playTap(ctx: AudioContext, destination: AudioNode, startTime: number, s
 
 export type PartMixState = 'normal' | 'muted' | 'solo';
 
+// One audio context for the page's whole life, shared by every song's engine. A context may only
+// make sound once the page has been touched (the browsers' autoplay rule) and takes a moment to get
+// its output going; a new one per song started silent on a device following a rehearsal -- the
+// song chosen on another device, nothing touched on this one -- and so sounded late by however
+// long that took (up to a second), or not at all until someone tapped (iPhones).
+let sharedContext: AudioContext | null = null;
+let restingByChoice = false; // suspended on purpose after a long pause (see pause())
+let activeEngine: AudioEngine | null = null;
+
+function audioContext(): AudioContext {
+  if (!sharedContext || sharedContext.state === 'closed') sharedContext = new AudioContext();
+  return sharedContext;
+}
+
+/** Lets the sound start: browsers allow it only in answer to a touch, click or key -- called from those. */
+export function unlockAudio() {
+  const ctx = audioContext();
+  if (ctx.state !== 'running' && !restingByChoice) void ctx.resume().catch(() => {});
+}
+
+/** Calls `listener` whenever the sound starts or stops being able to play. */
+export function onAudioStateChange(listener: () => void) {
+  audioContext().addEventListener('statechange', listener);
+}
+
+// After a pause this long the context rests (saving battery); the next Play wakes it.
+const IDLE_SUSPEND_MS = 90_000;
+
 export class AudioEngine {
-  private ctx = new AudioContext();
+  private ctx = audioContext();
+  private output: AudioNode;
+  private idleTimer: number | null = null;
+  // Play() waiting for the context to run (see play()); and every play/pause/stop/dispose moves this
+  // on, so a wait that has been overtaken does nothing when it ends.
+  private waiting = false;
+  private layToken = 0;
+  // Where the music is on the wall clock: the local instant fromBeat sounds -- what the light
+  // follows while the sound is held up (waiting).
+  private wallStart = { ms: 0, beat: 0 };
+  // The context's clock and the page's at the moment the schedule was laid (see clockDrift()).
+  private anchor: { ctx: number; perf: number } | null = null;
   private masterGain: GainNode;
   private compressor: DynamicsCompressorNode;
   private metronomeGain: GainNode;
@@ -510,6 +549,7 @@ export class AudioEngine {
   private scheduledUpToBeat = 0; // notes/clicks with a beat before this have already been scheduled for the current play() session
 
   constructor(score: Score, sound: Sound = 'piano') {
+    activeEngine = this;
     this.score = score;
     this.sound = sound;
     if (sound === 'piano') void loadPianoSamples(this.ctx);
@@ -537,6 +577,7 @@ export class AudioEngine {
     limiter.attack.value = 0.003;
     limiter.release.value = 0.1;
     this.compressor.connect(limiter).connect(this.ctx.destination);
+    this.output = limiter;
 
     // The room: a reverb send from the master bus straight into the compressor. The metronome
     // bypasses it (a click in a room just smears the beat).
@@ -709,7 +750,34 @@ export class AudioEngine {
   play(fromBeat: number, bpm: number, transposeSemitones: number, startAtEpochMs?: number, countInBeats = 0, countInPulseBeats = 1, startTones: number[] = []) {
     this.pendingMetronomeReschedule = false; // this call is itself a full reschedule -- nothing left deferred
     this.clearSchedule();
-    if (this.ctx.state === 'suspended') this.ctx.resume();
+    this.cancelIdleRest();
+    const token = ++this.layToken;
+    if (this.ctx.state !== 'running') {
+      // The context isn't running (not yet allowed, waking from a rest, or interrupted by the
+      // system): its clock stands still until it does, so a schedule laid now would sound late by
+      // however long that takes. It is laid once the context runs, from the shared instant -- a
+      // late start joins at the right place. Meanwhile the light follows the wall clock.
+      restingByChoice = false;
+      this.secPerBeat = Number.isFinite(bpm) && bpm > 0 ? 60 / bpm : this.secPerBeat;
+      // (Alone, without a shared instant, the music starts when the sound can -- the light waits.)
+      this.wallStart = { ms: startAtEpochMs ?? Number.POSITIVE_INFINITY, beat: fromBeat };
+      this.playing = true;
+      this.waiting = true;
+      this.anchor = null;
+      // Laid the moment the context runs, whatever lets it: this resume(), or a later one from a
+      // touch (a resume() asked for without a touch may never settle).
+      const lay = () => {
+        if (token !== this.layToken || !this.playing) this.ctx.removeEventListener('statechange', lay);
+        else if (this.ctx.state === 'running') {
+          this.ctx.removeEventListener('statechange', lay);
+          this.play(fromBeat, bpm, transposeSemitones, startAtEpochMs, countInBeats, countInPulseBeats, startTones);
+        }
+      };
+      this.ctx.addEventListener('statechange', lay);
+      void this.ctx.resume().then(lay).catch(() => {});
+      return;
+    }
+    this.waiting = false;
     // A non-finite/non-positive bpm would make every downstream time calculation NaN/Infinity;
     // fall back to the last known-good tempo rather than propagating that into the scheduling
     // below (see scheduleRange()'s per-note guard for why a single bad value must never abort the
@@ -733,6 +801,8 @@ export class AudioEngine {
       this.playStartBeat = fromBeat;
     }
     this.playing = true;
+    this.wallStart = { ms: Date.now() + (this.playStartCtxTime - now) * 1000 + this.outputDelay() * 1000, beat: this.playStartBeat };
+    this.anchor = this.clockPair();
     this.visualClock = null; // the context may have been suspended in between: measure afresh
     this.scheduledUpToBeat = this.playStartBeat;
     this.startTonesEndCtxTime = 0;
@@ -783,12 +853,12 @@ export class AudioEngine {
 
   /** True while the starting tones of the most recent play() are still sounding. */
   isPlayingStartTones(): boolean {
-    return this.playing && this.heardTime() < this.startTonesEndCtxTime;
+    return this.playing && !this.waiting && this.heardTime() < this.startTonesEndCtxTime;
   }
 
   /** True while a count-in (or starting tones) scheduled by the most recent play() is still sounding, before the actual music starts. */
   isCountingIn(): boolean {
-    return this.playing && this.lastCountInBeats > 0 && this.heardTime() < this.playStartCtxTime;
+    return this.playing && !this.waiting && this.lastCountInBeats > 0 && this.heardTime() < this.playStartCtxTime;
   }
 
   /**
@@ -797,7 +867,7 @@ export class AudioEngine {
    * actually schedules anything once the already-scheduled horizon gets close.
    */
   tick() {
-    if (!this.playing) return;
+    if (!this.playing || this.waiting) return;
     if (this.pendingMetronomeReschedule && !this.isCountingIn()) {
       // The count-in that blocked this in setMetronomeEnabled() has now actually finished --
       // apply the deferred toggle with a full reschedule, same as the normal (not-counting-in)
@@ -868,15 +938,30 @@ export class AudioEngine {
     // playback had resumed on its own. Clearing the schedule here removes that risk entirely; the
     // resume-from-pause path always goes through play(), which reschedules from scratch anyway.
     this.clearSchedule();
-    // ctx.suspend() halts rendering almost immediately (the next render quantum), which would cut
-    // clearSchedule()'s FADE_SEC-long gain ramp short -- defer it just past the fade so Pause
-    // still fades cleanly instead of clicking.
-    setTimeout(() => this.ctx.suspend(), FADE_SEC * 1000 + 5);
+    this.layToken++;
+    this.waiting = false;
+    // The context keeps running through a pause, so the next Play (here, or another device's in a
+    // rehearsal) starts right on time; it only rests after a long one, to save the battery.
+    this.cancelIdleRest();
+    this.idleTimer = window.setTimeout(() => {
+      this.idleTimer = null;
+      if (activeEngine === this && !this.playing) {
+        restingByChoice = true;
+        void this.ctx.suspend().catch(() => {});
+      }
+    }, IDLE_SUSPEND_MS);
     this.playing = false;
+  }
+
+  private cancelIdleRest() {
+    if (this.idleTimer !== null) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
   }
 
   stop() {
     this.clearSchedule();
+    this.layToken++;
+    this.waiting = false;
     this.pausedBeat = 0;
     this.playing = false;
   }
@@ -885,11 +970,44 @@ export class AudioEngine {
     return this.playing;
   }
 
-  /** Stops everything and releases the AudioContext -- called when another song replaces this one. */
+  /** Stops everything and lets go of the output -- called when another song replaces this one. */
   dispose() {
     this.clearSchedule();
+    this.layToken++;
+    this.cancelIdleRest();
+    this.waiting = false;
     this.playing = false;
-    void this.ctx.close().catch(() => {});
+    this.output.disconnect();
+    if (activeEngine === this) activeEngine = null;
+  }
+
+  /** Playing, but the browser holds the sound up (it needs a touch to let it start). */
+  isHeldUp(): boolean {
+    return this.playing && this.waiting;
+  }
+
+  /**
+   * How far the context's clock has moved from the page's since the schedule was laid, in seconds
+   * (negative: the sound has fallen behind -- its output stalled, or its clock runs slow). The
+   * schedule assumes the two move together; a rehearsal re-lays it when they part (main.ts).
+   */
+  clockDrift(): number {
+    if (!this.playing || this.waiting || !this.anchor) return 0;
+    const now = this.clockPair();
+    return now.ctx - this.anchor.ctx - (now.perf - this.anchor.perf) / 1000;
+  }
+
+  /** The context's time and the page's (ms) at one moment -- as the output reports them, where it does. */
+  private clockPair(): { ctx: number; perf: number } {
+    const c = this.ctx as AudioContext & { getOutputTimestamp?: () => AudioTimestamp };
+    const ts = c.getOutputTimestamp?.();
+    if (ts && ts.contextTime && ts.performanceTime) return { ctx: ts.contextTime, perf: ts.performanceTime };
+    return { ctx: this.ctx.currentTime, perf: performance.now() };
+  }
+
+  /** While the sound is held up: the beat on the wall clock, from the shared start. */
+  private wallBeat(): number {
+    return this.wallStart.beat + Math.max(0, Date.now() - this.wallStart.ms) / 1000 / this.secPerBeat;
   }
 
   getPausedBeat() {
@@ -907,12 +1025,14 @@ export class AudioEngine {
    */
   getCurrentBeat(): number {
     if (!this.playing) return this.pausedBeat;
+    if (this.waiting) return this.wallBeat();
     return this.beatAt(this.heardTime());
   }
 
   /** The beat whose audio is being handed to the output right now (the scheduler's clock). */
   private scheduledBeat(): number {
     if (!this.playing) return this.pausedBeat;
+    if (this.waiting) return this.wallBeat();
     return this.beatAt(this.ctx.currentTime);
   }
 
@@ -933,6 +1053,7 @@ export class AudioEngine {
    */
   visualBeat(atMs: number): number {
     if (!this.playing) return this.pausedBeat;
+    if (this.waiting) return this.wallBeat();
     const nowSec = performance.now() / 1000;
     const offset = this.ctx.currentTime - nowSec;
     const delay = this.outputDelay();

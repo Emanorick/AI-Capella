@@ -8,7 +8,7 @@ import '@fontsource/italianno/latin-400.css';
 import './style.css';
 import { parseMusicXML, splitStaves } from './musicxml';
 import { parseMIDI } from './midi';
-import { AudioEngine, startTonesLeadSec, type PartMixState, type Sound } from './audioEngine';
+import { AudioEngine, onAudioStateChange, startTonesLeadSec, unlockAudio, type PartMixState, type Sound } from './audioEngine';
 import { PianoRoll, RULER_HEIGHT_PX, type LoopRegion } from './pianoRoll';
 import { StaffView } from './staffView';
 import { OverviewStrip } from './overview';
@@ -1693,11 +1693,42 @@ if (import.meta.env.DEV) {
       leaderId = id;
       renderModeControls();
     },
+    // For the sync tests: where playback is on this device, against the wall clock.
+    position: () => ({ at: Date.now(), beat: engineBeat(), playing: !!audioEngine?.isPlaying(), heldUp: !!audioEngine?.isHeldUp(), drift: audioEngine?.clockDrift() ?? 0, offset: sync.getServerTimeOffsetMs(), bpm, applying: applying !== null, song: loadedSongId }),
   };
 }
 
-/** The single place that applies shared-session state locally -- see pushState()'s doc comment. */
-async function applyPlaybackState(state: PlaybackState) {
+/**
+ * The single place that applies shared-session state locally -- see pushState()'s doc comment.
+ * One state at a time, the latest winning: applying one can take a while (loading the song), and a
+ * second started meanwhile could finish first -- the older state then landing last, stopping a
+ * device that should play or loading the song twice. Each state is the whole session, so the ones
+ * that arrive while another is being applied are skipped for the newest.
+ */
+let applying: Promise<void> | null = null;
+let nextState: PlaybackState | null = null;
+function applyPlaybackState(state: PlaybackState): Promise<void> {
+  nextState = state;
+  applying ??= (async () => {
+    try {
+      while (nextState) {
+        const s = nextState;
+        nextState = null;
+        try {
+          await applyPlaybackStateNow(s);
+        } catch (err) {
+          // One state failing (a song that won't load) mustn't stop the ones after it.
+          console.error('Could not apply the rehearsal state:', err);
+        }
+      }
+    } finally {
+      applying = null;
+    }
+  })();
+  return applying;
+}
+
+async function applyPlaybackStateNow(state: PlaybackState) {
   if (state.songId !== loadedSongId) {
     if (!state.songId) return; // nothing selected yet (fresh/empty session)
     const song = allSongs().find((s) => s.id === state.songId);
@@ -3347,7 +3378,11 @@ function audioTick() {
   if (beat < boundary) return;
 
   if (loopEnabled) {
-    audioEngine.play(loopRegion ? loopRegion.start : 0, bpm, transpose);
+    // In a rehearsal the loop comes round at the same instant on every device (sharedAnchor);
+    // alone, from where this device is.
+    const shared = sharedAnchor(boundary);
+    if (shared) audioEngine.play(shared.beat, bpm, transpose, shared.atMs);
+    else audioEngine.play(loopRegion ? loopRegion.start : 0, bpm, transpose);
     return;
   }
 
@@ -3360,6 +3395,91 @@ function audioTick() {
   stopRenderLoop();
   renderNow();
 }
+/**
+ * Where the rehearsal's shared timeline is: a beat and the instant it sounds, on this device's
+ * clock -- the last start, or, once the loop (or the whole piece, with Loop on) has come round since,
+ * its latest round. The same on every device, so they wrap together. Null alone (nothing shared).
+ */
+function sharedAnchor(reached = 0): { beat: number; atMs: number } | null {
+  const t = lastAppliedTiming;
+  if (!t?.playing || !(t.originServerTimeMs > 0) || !currentScore) return null;
+  const atMs = t.originServerTimeMs - sync.getServerTimeOffsetMs();
+  const msPerBeat = 60_000 / t.bpm;
+  const start = loopRegion ? loopRegion.start : 0;
+  const end = loopRegion ? loopRegion.end : currentScore.totalBeats;
+  // (At the loop's end, `reached`: the sound got there a hair before this device's wall clock did.)
+  const raw = Math.max(reached, t.originBeat + (Date.now() - atMs) / msPerBeat);
+  if (!loopEnabled || end - start <= 0 || t.originBeat >= end || raw < end) return { beat: t.originBeat, atMs };
+  const rounds = Math.floor((raw - end) / (end - start));
+  return { beat: start, atMs: atMs + (end - t.originBeat + rounds * (end - start)) * msPerBeat };
+}
+
+/**
+ * Lays this device's schedule again from the shared timeline -- after its sound fell out of step
+ * (see the check below) or its idea of the server's clock moved. Before the start, with the start's
+ * count-in and starting tones.
+ */
+function relaySchedule() {
+  const t = lastAppliedTiming;
+  const shared = sharedAnchor();
+  if (!audioEngine || !t || !shared) return;
+  const before = shared.beat === t.originBeat && shared.atMs > Date.now();
+  audioEngine.play(shared.beat, t.bpm, t.transpose, shared.atMs, before ? t.countInBeats : 0, before ? t.countInPulseBeats : 1, before ? t.startTones : []);
+}
+
+// A rehearsal keeps every device on the shared timeline: once a second the sound's clock is held
+// against the page's, and when they've parted by more than DRIFT_LIMIT_SEC twice running (the
+// output started late or stalled, the device's audio clock runs off) the schedule is laid again.
+const DRIFT_LIMIT_SEC = 0.05;
+let driftStrikes = 0;
+let heldUpSince = 0;
+window.setInterval(() => {
+  updateSoundPrompt();
+  if (!audioEngine?.isPlaying() || !sharedAnchor()) {
+    driftStrikes = 0;
+    return;
+  }
+  driftStrikes = Math.abs(audioEngine.clockDrift()) > DRIFT_LIMIT_SEC ? driftStrikes + 1 : 0;
+  if (driftStrikes >= 2) {
+    driftStrikes = 0;
+    relaySchedule();
+  }
+}, 1000);
+sync.onOffsetChange(() => {
+  if (audioEngine?.isPlaying() && sharedAnchor()) relaySchedule();
+});
+
+// Browsers let sound start only in answer to a touch, click or key: any of them lets it (and a
+// device that follows a rehearsal untouched gets a button for it, below).
+for (const type of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) document.addEventListener(type, unlockAudio, { capture: true, passive: true });
+
+/** "Tap for sound": shown while the music plays here but the browser holds its sound up. */
+function updateSoundPrompt() {
+  const held = !!audioEngine?.isHeldUp();
+  heldUpSince = held ? heldUpSince || performance.now() : 0;
+  let el = document.getElementById('sound-prompt');
+  const show = held && performance.now() - heldUpSince > 700;
+  if (!show) {
+    el?.classList.remove('show');
+    return;
+  }
+  if (!el) {
+    const button = document.createElement('button');
+    button.id = 'sound-prompt';
+    button.type = 'button';
+    button.innerHTML = `${icon('play')}<span></span>`;
+    button.addEventListener('click', () => {
+      unlockAudio();
+      button.classList.remove('show');
+    });
+    document.body.appendChild(button);
+    el = button;
+  }
+  el.querySelector('span')!.textContent = t('tapForSound');
+  el.classList.add('show');
+}
+onAudioStateChange(updateSoundPrompt);
+
 function startAudioTick() {
   if (audioTickIntervalId == null) audioTickIntervalId = window.setInterval(audioTick, AUDIO_TICK_INTERVAL_MS);
 }
