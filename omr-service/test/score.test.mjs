@@ -12,10 +12,12 @@ test('compact notation reads parts, measures and lyrics', () => {
   assert.ok(parts.length >= 4);
   assert.equal(measures.length, 2);
   assert.equal(measures[0].m, 1);
-  const first = measures[0].parts[parts[0].id];
-  assert.ok(first.length > 0);
-  assert.ok(first.some((n) => n.lyric), 'some lyric in bar 1');
-  assert.match(first[0].p, /^([A-G](#|b)?\d|rest)$/);
+  assert.equal(measures[0].time, '4/4');
+  assert.equal(measures[0].fifths, 1);
+  const [voice] = measures[0].parts[parts[0].id];
+  assert.deepEqual([voice.v, voice.staff], [1, 1]);
+  assert.equal(voice.notes[0], 'E4 1/2 :Eve-');
+  assert.ok(voice.notes.every((n) => /^\+?(r|x?[A-G](#|b)*-?\d) \d+(\/\d+)?~?( :.*)?$/.test(n)));
 });
 
 test('writing a measure back unchanged keeps it identical', () => {
@@ -30,13 +32,13 @@ test('a pitch correction is applied, the rest of the piece untouched', () => {
   const doc = fresh();
   const { parts, measures } = compactPage(doc, [0, 1]);
   const pid = parts[0].id;
-  const notes = measures[0].parts[pid].map((n) => ({ ...n }));
-  const i = notes.findIndex((n) => n.p !== 'rest');
-  notes[i].p = 'C#5';
-  applyMeasure(doc, pid, 1, notes);
+  const voices = structuredClone(measures[0].parts[pid]);
+  voices[0].notes[0] = voices[0].notes[0].replace(/^E4/, 'C#5');
+  applyMeasure(doc, pid, 1, voices);
   const after = compactPage(parseXml(serializeXml(doc)), [0, 1]);
-  assert.equal(after.measures[0].parts[pid][i].p, 'C#5');
+  assert.equal(after.measures[0].parts[pid][0].notes[0], 'C#5 1/2 :Eve-');
   assert.deepEqual(after.measures[1], measures[1]);
+  assert.match(serializeXml(doc), /<step>C<\/step><alter>1<\/alter><octave>5<\/octave>/);
 });
 
 test('a correction that no longer fills the bar is refused and changes nothing', () => {
@@ -44,37 +46,41 @@ test('a correction that no longer fills the bar is refused and changes nothing',
   const before = serializeXml(doc);
   const { parts, measures } = compactPage(doc, [1]);
   const pid = parts[0].id;
-  const notes = measures[0].parts[pid].slice(0, -1);
-  assert.throws(() => applyMeasure(doc, pid, 2, notes), CorrectionError);
+  const voices = structuredClone(measures[0].parts[pid]);
+  voices[0].notes.pop();
+  assert.throws(() => applyMeasure(doc, pid, 2, voices), CorrectionError);
+  // Finer durations that still don't add up: refused before the part is rescaled.
+  assert.throws(() => applyMeasure(doc, pid, 2, [{ v: 1, staff: 1, notes: ['C5 1/3', 'C5 1'] }]), /lasts/);
   assert.equal(serializeXml(doc), before);
 });
 
-test('bad pitches and unwritable durations are refused', () => {
+test('bad notes and unknown parts are refused', () => {
   const doc = fresh();
   const { parts, measures } = compactPage(doc, [1]);
   const pid = parts[0].id;
-  const bad = measures[0].parts[pid].map((n) => ({ ...n }));
-  bad[0].p = 'H4';
-  assert.throws(() => applyMeasure(doc, pid, 2, bad), /bad pitch/);
+  assert.throws(() => applyMeasure(doc, pid, 2, [{ v: 1, staff: 1, notes: ['H4 4'] }]), /can't read/);
   assert.throws(() => applyMeasure(doc, 'nope', 2, measures[0].parts[pid]), /unknown part/);
 });
 
-test('lyrics with hyphens become begin/middle/end syllables', () => {
+test('triplets in a part written in eighths: the divisions are made finer', () => {
   const doc = fresh();
-  const { parts, measures } = compactPage(doc, [0]);
-  const pid = parts[0].id;
-  const notes = measures[0].parts[pid].map((n) => ({ ...n, lyric: '' }));
-  const sung = notes.map((n, i) => (n.p === 'rest' || n.chord ? -1 : i)).filter((i) => i >= 0);
-  if (sung.length >= 3) {
-    notes[sung[0]].lyric = 'Hal-';
-    notes[sung[1]].lyric = 'le-';
-    notes[sung[2]].lyric = 'lu';
-    applyMeasure(doc, pid, 1, notes);
-    const xml = serializeXml(doc);
-    assert.match(xml, /<syllabic>begin<\/syllabic><text>Hal<\/text>/);
-    assert.match(xml, /<syllabic>middle<\/syllabic><text>le<\/text>/);
-    assert.match(xml, /<syllabic>end<\/syllabic><text>lu<\/text>/);
-  }
+  const pid = compactPage(doc, [0]).parts[0].id;
+  applyMeasure(doc, pid, 2, [{ v: 1, staff: 1, notes: ['B4 1/3 :spi-', 'A4 1/3', 'G4 1/3', 'A4 1 :rit', 'A4 2 :come,'] }]);
+  const again = parseXml(serializeXml(doc));
+  const { measures } = compactPage(again, [0, 1]);
+  assert.deepEqual(measures[1].parts[pid][0].notes, ['B4 1/3 :spi-', 'A4 1/3', 'G4 1/3', 'A4 1 :rit', 'A4 2 :come,']);
+  assert.equal(measures[0].parts[pid][0].notes[0], 'E4 1/2 :Eve-', 'the bar before reads the same');
+});
+
+test('words with hyphens become begin/middle/end syllables, verses numbered', () => {
+  const doc = fresh();
+  const pid = compactPage(doc, [0]).parts[0].id;
+  applyMeasure(doc, pid, 1, [{ v: 1, staff: 1, notes: ['E4 1 :Hal-|Glo-', 'F#4 1 :le-|ri-', 'G4 1 :lu|a', 'A4 1 :ja|_'] }]);
+  const xml = serializeXml(doc);
+  assert.match(xml, /<lyric number="1"><syllabic>begin<\/syllabic><text>Hal<\/text>/);
+  assert.match(xml, /<lyric number="1"><syllabic>middle<\/syllabic><text>le<\/text>/);
+  assert.match(xml, /<lyric number="1"><syllabic>end<\/syllabic><text>lu<\/text>/);
+  assert.match(xml, /<lyric number="2"><syllabic>begin<\/syllabic><text>Glo<\/text>/);
 });
 
 test('page breaks split measures into pages; no breaks spread evenly', () => {

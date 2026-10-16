@@ -2513,6 +2513,154 @@ button.stepper-value:hover {
   color: var(--live);
 }
 
+/* The scan's questions: an excerpt of the page with the bar lit, the readings to choose from, or
+   one's own words (scan.ts renderQuestions). The same cards list a song's places to check. */
+.scan-q-list,
+.scan-mark-list {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.scan-q,
+.scan-mark {
+  padding: 12px 12px 14px;
+  border-radius: var(--r-md);
+  background: var(--ink-1);
+  border: 1px solid var(--hair);
+}
+
+.scan-q-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+
+.scan-q-head span {
+  color: var(--paper-dim);
+}
+
+.scan-q-head .scan-q-page {
+  margin-left: auto;
+  font: 500 12px/1 var(--f-mono);
+  color: var(--muted);
+}
+
+.scan-crop {
+  position: relative;
+  margin: 0 0 10px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f4f1ea;
+  min-height: 72px;
+}
+
+.scan-crop canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.scan-crop.is-whole canvas {
+  max-height: 70dvh;
+  width: auto;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.scan-crop.is-loading {
+  animation: pulse 1.2s ease-in-out infinite alternate;
+}
+
+.scan-crop-toggle {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 5px 10px;
+  border-radius: 14px;
+  border: 0;
+  background: rgba(13, 12, 22, 0.82);
+  color: var(--paper);
+  font: 600 12px/1 var(--f-text);
+  cursor: pointer;
+}
+
+.scan-crop-missing {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: #4a4658;
+}
+
+.scan-q-text {
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
+
+.scan-options {
+  display: grid;
+  gap: 6px;
+}
+
+.scan-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--hair);
+  cursor: pointer;
+}
+
+.scan-option:has(input:checked) {
+  border-color: var(--live);
+  background: rgba(134, 217, 168, 0.08);
+}
+
+.scan-option input {
+  accent-color: var(--live);
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex: none;
+}
+
+.scan-option span {
+  flex: 1;
+  min-width: 0;
+}
+
+.scan-option .scan-own {
+  flex: 1 1 100%;
+  min-height: 0;
+  resize: vertical;
+  font: inherit;
+}
+
+.scan-questions > .btn.ghost,
+.scan-result > .btn.ghost {
+  margin: -6px 0 16px;
+}
+
+.scan-mark-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  background: #f4f1ea;
+}
+
+.scan-mark .scan-actions .btn {
+  flex: 1 1 0;
+}
+
 @keyframes pulse {
   from {
     opacity: 1;
@@ -2523,6 +2671,7 @@ button.stepper-value:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .scan-crop.is-loading,
   .scan-page.skeleton,
   .scan-steps .is-active .scan-dot,
   .scan-chip.busy::before {

@@ -5,12 +5,15 @@
 //   POST /jobs                   {kind: "pdf" | "images", files: n, name, lang: "de" | "en"}  -> {id, maxPages}
 //   PUT  /jobs/:id/files/:index  raw file body (application/pdf, image/jpeg, image/png)
 //   POST /jobs/:id/start
-//   GET  /jobs/:id               status, progress, report
+//   GET  /jobs/:id               status, progress, report, questions, places to check ("marks")
 //   GET  /jobs/:id/result        the MusicXML
+//   GET  /jobs/:id/pages/:n      the image of page n (0-based), for showing a question's measure
+//   POST /jobs/:id/answers       {answers: [{id, choice?: n, text?: "...", skip?: true}]}
+import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
-import { activeJobs, createJob, getJob, restoreJobs, MAX_PAGES, REVIEW_ENABLED, startJob, storeFile, type Job, type JobKind } from './pipeline.js';
+import { activeJobs, answerQuestions, createJob, ENGINE, getJob, marksOf, mediaTypeOf, restoreJobs, MAX_PAGES, READY, REVIEW_ENABLED, startJob, storeFile, type AnswerIn, type Job, type JobKind } from './pipeline.js';
 
 const PORT = Number(process.env.PORT) || 8080;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
@@ -37,7 +40,7 @@ class HttpError extends Error {
 
 function send(res: ServerResponse, status: number, body: unknown, type = 'application/json') {
   res.writeHead(status, { 'Content-Type': type });
-  res.end(type === 'application/json' ? JSON.stringify(body) : String(body));
+  res.end(type === 'application/json' ? JSON.stringify(body) : Buffer.isBuffer(body) ? body : String(body));
 }
 
 function cors(req: IncomingMessage, res: ServerResponse) {
@@ -97,6 +100,9 @@ function publicJob(job: Job) {
     reviewed: job.reviewed,
     reports: job.reports,
     notes: job.notes,
+    // The questions without the readings behind their options (the app shows the labels).
+    questions: job.questions.map(({ options, partId: _, ...q }) => ({ ...q, options: options.map((o) => o.label) })),
+    marks: marksOf(job),
     uploaded: job.files.filter(Boolean).length,
     expectedFiles: job.expectedFiles,
   };
@@ -112,7 +118,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url ?? '/', 'http://x');
   const parts = url.pathname.split('/').filter(Boolean);
 
-  if (req.method === 'GET' && url.pathname === '/healthz') return send(res, 200, { ok: true, review: REVIEW_ENABLED, maxPages: MAX_PAGES });
+  if (req.method === 'GET' && url.pathname === '/healthz') return send(res, 200, { ok: READY, engine: ENGINE, review: REVIEW_ENABLED, maxPages: MAX_PAGES });
 
   const uid = await userId(req);
 
@@ -124,6 +130,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     if (!Number.isInteger(files) || files < 1 || (kind === 'pdf' ? files !== 1 : files > MAX_PAGES)) {
       throw new HttpError(400, kind === 'pdf' ? 'One PDF per scan' : `Between 1 and ${MAX_PAGES} images`);
     }
+    if (!READY) throw new HttpError(503, 'The scan service is not set up (no OpenAI key)');
     if (activeJobs(uid) >= MAX_ACTIVE_JOBS_PER_USER) throw new HttpError(429, 'Two scans from this device are still running -- wait for one to finish');
     const job = await createJob(uid, kind, files, String(body.name ?? ''), body.lang === 'de' ? 'de' : 'en');
     return send(res, 201, { id: job.id, maxPages: MAX_PAGES, review: REVIEW_ENABLED });
@@ -159,6 +166,22 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     return send(res, 200, job.result, 'application/vnd.recordare.musicxml+xml; charset=utf-8');
   }
 
+  if (req.method === 'GET' && parts.length === 4 && parts[2] === 'pages') {
+    const n = Number(parts[3]);
+    const path = Number.isInteger(n) ? job.pageFiles[n] : undefined;
+    if (!path) throw new HttpError(404, 'No such page');
+    res.setHeader('Cache-Control', 'private, max-age=21600');
+    return send(res, 200, await readFile(path), mediaTypeOf(path));
+  }
+
+  if (req.method === 'POST' && parts.length === 3 && parts[2] === 'answers') {
+    if (job.status !== 'done') throw new HttpError(409, job.status === 'answering' ? 'The answers are still being written' : 'Not finished yet');
+    const body = JSON.parse((await readBody(req, 64 * 1024)).toString() || '{}');
+    if (!Array.isArray(body.answers)) throw new HttpError(400, 'answers must be a list');
+    answerQuestions(job, body.answers as AnswerIn[]);
+    return send(res, 202, publicJob(job));
+  }
+
   throw new HttpError(404, 'Not found');
 }
 
@@ -170,5 +193,5 @@ createServer((req, res) => {
     if (status === 500) console.error(err);
     if (!res.headersSent) send(res, status, { error: err instanceof Error ? err.message : 'Server error' });
   });
-}).listen(PORT, () => console.log(`AI-Capella OMR service on :${PORT} (GPT check ${REVIEW_ENABLED ? 'on' : 'off'})`));
+}).listen(PORT, () => console.log(`AI-Capella OMR service on :${PORT} (reading: ${ENGINE}, GPT ${REVIEW_ENABLED ? 'on' : 'off'}${READY ? '' : ' -- NOT READY: no OPENAI_API_KEY'})`));
 

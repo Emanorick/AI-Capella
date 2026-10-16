@@ -426,18 +426,52 @@ played (`playedBeat`).
   the camera on a phone, or chosen from the device — shown as numbered thumbnails that can be
   reordered and removed. Photos are scaled to ≤ 3000 px (EXIF orientation applied) and sent as JPEG.
 - The service (`omr-service/`, a Node server in a Docker container — on the choir's own server
-  via Docker Compose with Caddy for HTTPS, or on Google Cloud Run; its README covers both) runs **Audiveris** over all pages as one book, then asks **GPT** (OpenAI
-  Responses API, model configurable) about every page: the page image next to what Audiveris read
-  from it, in a compact JSON notation (per measure and part: voice, staff, chord, pitch as "F#4",
-  duration as a quarter-note fraction, tie, lyric syllable). GPT answers with the complete
-  corrected note list of each measure it would change (structured output with a strict JSON
-  schema), plus voice names and the title. A correction is only written back when every voice
-  still fills its bar (the time signature, or what the original measure had for pickups);
-  otherwise Audiveris' reading stays and the report lists the suggestion as not applied.
-- Progress (upload → reading → checking page n of N → done) shows in the sheet and, once it's
-  closed, as a chip next to Add arrangement. The job id is kept per device, so a reload picks the
-  scan back up. The result shows a per-page report (corrections, confidence, remarks), an editable
-  title, **Add to repertoire** (imported like a MusicXML file) and **Download MusicXML**.
+  via Docker Compose with Caddy for HTTPS, or on Google Cloud Run; its README covers both) lets
+  **GPT read the pages itself** (OpenAI Responses API, `gpt-6.1-sol` unless `OPENAI_MODEL` says
+  otherwise; Audiveris only with `OMR_ENGINE=audiveris` and `Dockerfile.audiveris`):
+  1. **Reading** (`transcribe.ts`): page 1 first — it names the parts (ids, names, staves, clefs) —
+     then the other pages, a few at a time, with that list. Per page GPT returns, under a strict
+     JSON schema, every measure of every part in a **compact notation** (`notation.ts`: one string
+     per note, `"F#4 1/2~ :Eve-|Come"` = pitch as it sounds, duration in quarters, tie, the words of
+     each verse), time and key signatures where printed, repeat signs with "3x", volta brackets,
+     rehearsal letters, tempo (with metronome mark), segno/coda/D.C./D.S./Fine, where each measure
+     and each part's row stands on the page (fractions of the image), passages with **several
+     verses stacked** under the same notes, and its own doubts.
+  2. **Putting it together** (`stitch`, then `build.ts` `buildScore` → MusicXML): measure numbers
+     where none are printed, stacked verses that have no repeat signs of their own get a repeat
+     around them **played as often as there are verses** (verse n under pass n — the app plays
+     repeats out, see "Repeats"); a voice whose notes can't be read becomes a whole-bar rest and a
+     hint. The builder works out divisions, note types/dots/tuplets, accidentals against the key,
+     beams by beat, ties (also across voices at a bar line), lyrics with syllabic/extend.
+  3. **Plausibility checks** (`checks.ts`, no GPT): bars that don't add up (not the first and last),
+     notes outside the usual range of a part by its name (soprano … bass — a clef or octave
+     misread), leaps over an octave in sung parts, ties to a different pitch, words broken off
+     before a rest.
+  4. **Second run** (`review.ts`): every page image again, next to what was read, with the hints
+     from 2 and 3 as "lookAt". GPT answers with complete corrected measures, misread words (typical
+     OCR slips: "ii" for "ü"), missed repeat signs/voltas/marks, part names, the title — and, where
+     it still can't tell, up to three **questions** per page (2–4 readings, each the complete
+     measure) and **doubts**. A correction is only written back when every voice still fills its
+     bar; otherwise the reading stays and the report lists it as not applied.
+  5. **Questions after the scan** (`POST /jobs/:id/answers`): a chosen reading is written as it is;
+     an answer in one's own words goes to GPT with the page image and the measure, which turns it
+     into notes (`voicesFromAnswer`) — also only if the bar adds up. What stays open (doubts,
+     questions left or not usable) are the **places to check**.
+- Progress (upload → reading the notes → second run → questions → done) shows in the sheet and, once
+  it's closed, as a chip next to Add arrangement (also "questions (n)" while some wait). The job id
+  is kept per device, so a reload picks the scan back up. **Questions** come as cards: the excerpt
+  of the page (fetched from `GET /jobs/:id/pages/:n` with the token, cropped on a canvas to the
+  bar and its part's row with some context, the bar outlined in gold, the rest dimmed; "Whole page"
+  shows all of it), the question, the readings as choices, **Something else:** with a text field,
+  and **Don't know – leave it**. *Apply answers* sends what was chosen; *Continue without
+  answering* leaves them open. The result shows a per-page report (corrections, confidence,
+  remarks), how many questions were answered, the places to check, an editable title, **Add to
+  repertoire** and **Download MusicXML**.
+- The places to check go with the song (`scanMarks` on its document: bar, voice, note, a small JPEG
+  of the bar for the first twelve — only as far as they fit beside the score under Firestore's
+  1 MB). In the player, the bar numbers in both rulers get a gold **?** (`drawQueryMark`), and ⋯ →
+  **Places to check (n)** lists them with their picture: **Go there** jumps to the bar, **It's
+  right** takes it off the list for everyone.
 - Requests carry the device's Firebase ID token (checked by the service with firebase-admin);
   a job is only visible to the device that started it. The older `functions/` spike (Claude
   vision only, one page) is superseded by this and isn't used by the app.
@@ -663,10 +697,10 @@ AI-Capella/
 │   ├── firebase.ts            # Firebase app/auth/Firestore initialization, anonymous sign-in
 │   ├── firebaseConfig.ts      # Firebase web app config (not secret; see file comment)
 │   ├── pinGate.ts             # the PIN screen
-│   ├── scan.ts                # "Scan sheet music" sheet: pages, upload, progress, result
+│   ├── scan.ts                # "Scan sheet music" sheet: pages, upload, progress, questions, result
 │   ├── backdrop.ts            # the velvet wave backdrop behind the whole app
 │   └── style.css              # all styling
-├── omr-service/            # scan service (Docker: own server or Cloud Run): Audiveris + GPT check
+├── omr-service/            # scan service (Docker: own server or Cloud Run): GPT reads, checks, asks back
 ├── .github/workflows/deploy.yml   # builds and deploys dist/ to GitHub Pages on every push
 ├── vite.config.ts             # sets base: '/AI-Capella/' for GitHub Pages' subpath hosting
 ├── tsconfig.json

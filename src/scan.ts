@@ -1,10 +1,13 @@
-// "Scan sheet music": a PDF or up to 40 photos go to the scan service (omr-service/: Audiveris
-// recognition, then a GPT check of every page against its image), and the checked MusicXML comes
-// back into the repertoire. A running scan survives closing the sheet and reloading the page: its
-// id is kept per device, and the library shows its progress.
+// "Scan sheet music": a PDF or up to 40 photos go to the scan service (omr-service/: GPT reads
+// every page, checks it in a second run, and asks back where it still isn't sure), and the
+// MusicXML comes back into the repertoire. The questions are shown with an excerpt of the page,
+// the bar highlighted: a choice of readings, or an answer in one's own words. What stays unsure
+// goes with the song as places to check (library.ts scanMarks). A running scan survives closing
+// the sheet and reloading the page: its id is kept per device, and the library shows its progress.
 import { getIdToken } from './firebase';
 import { icon } from './icons';
 import { lang, t } from './i18n';
+import type { ScanMark } from './library';
 import { closeOverlay, openSheet, toast } from './ui';
 
 export const OMR_URL: string = (import.meta.env.VITE_OMR_URL ?? '').replace(/\/+$/, '');
@@ -16,7 +19,41 @@ const MAX_PDF_BYTES = 30 * 1024 * 1024;
 const JOB_KEY = 'ai-capella-scan-job';
 const POLL_MS = 2000;
 
-type Status = 'uploading' | 'queued' | 'recognizing' | 'reviewing' | 'done' | 'failed';
+type Status = 'uploading' | 'queued' | 'recognizing' | 'reviewing' | 'done' | 'answering' | 'failed';
+
+/** Where a bar stands on its page, as fractions of the page's width (x) and height (y). */
+interface Box {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+}
+
+interface Question {
+  id: string;
+  page: number; // 0-based
+  m: number;
+  measure: string;
+  part: string;
+  question: string;
+  options: string[];
+  status: 'open' | 'answered' | 'skipped' | 'failed';
+  answer: string;
+  note: string;
+  box: Box | null;
+}
+
+/** A place the singers should check (a doubt, or a question left unanswered). */
+interface Mark {
+  m: number;
+  measure: string;
+  part: string;
+  note: string;
+  page: number;
+  box: Box | null;
+}
+
+type Answer = { choice: number } | { text: string } | { skip: true };
 
 interface PageReport {
   page: number;
@@ -37,6 +74,8 @@ interface JobState {
   reviewed: boolean;
   reports: PageReport[];
   notes: string[];
+  questions: Question[];
+  marks: Mark[];
 }
 
 interface Page {
@@ -55,10 +94,17 @@ let failure = ''; // an error before the service had the job (upload, start)
 let pollTimer: number | null = null;
 let preparing = 0;
 let sheetBody: HTMLElement | null = null;
-let onImport: (title: string, xml: string) => Promise<void> = async () => {};
+let onImport: (title: string, xml: string, marks: ScanMark[]) => Promise<void> = async () => {};
 let onStatusChange: () => void = () => {};
+// The questions: what is chosen so far, and whether they're behind us (answered, or put off).
+let answers = new Map<string, Answer>();
+let questionsDone = false;
+const pageImages = new Map<number, Promise<ImageBitmap>>();
 
-function readStoredJob(): { id: string; name: string } | null {
+const openQuestions = (j: JobState) => j.questions.filter((q) => q.status === 'open');
+const asksNow = (j: JobState) => j.status === 'done' && !questionsDone && openQuestions(j).length > 0;
+
+function readStoredJob(): { id: string; name: string; questionsDone?: boolean } | null {
   try {
     const raw = localStorage.getItem(JOB_KEY);
     return raw ? JSON.parse(raw) : null;
@@ -67,7 +113,7 @@ function readStoredJob(): { id: string; name: string } | null {
   }
 }
 
-function storeJob(value: { id: string; name: string } | null) {
+function storeJob(value: { id: string; name: string; questionsDone?: boolean } | null) {
   try {
     if (value) localStorage.setItem(JOB_KEY, JSON.stringify(value));
     else localStorage.removeItem(JOB_KEY);
@@ -77,16 +123,20 @@ function storeJob(value: { id: string; name: string } | null) {
 }
 
 /** Wires the module to the app; picks up a scan that was still running when the page was left. */
-export function initScan(opts: { onImport: (title: string, xml: string) => Promise<void>; onStatusChange: () => void }) {
+export function initScan(opts: { onImport: (title: string, xml: string, marks: ScanMark[]) => Promise<void>; onStatusChange: () => void }) {
   onImport = opts.onImport;
   onStatusChange = opts.onStatusChange;
   const stored = readStoredJob();
   if (stored && scanAvailable()) {
     name = stored.name;
-    job = { id: stored.id, status: 'queued', progress: { done: 0, total: 0 }, error: '', pages: 0, title: '', reviewed: false, reports: [], notes: [] };
+    questionsDone = !!stored.questionsDone;
+    job = { id: stored.id, status: 'queued', progress: { done: 0, total: 0 }, error: '', pages: 0, title: '', reviewed: false, reports: [], notes: [], questions: [], marks: [] };
     void poll();
   }
 }
+
+/** A job as the service reports it (an older service: no questions). */
+const jobFrom = (raw: JobState): JobState => ({ ...raw, questions: raw.questions ?? [], marks: raw.marks ?? [] });
 
 /** A one-line summary for the library while a scan exists, or null. */
 export function scanStatusLine(): { text: string; busy: boolean } | null {
@@ -94,7 +144,7 @@ export function scanStatusLine(): { text: string; busy: boolean } | null {
   if (!job) return null;
   switch (job.status) {
     case 'done':
-      return { text: t('scanReady'), busy: false };
+      return { text: asksNow(job) ? t('scanQuestionsWaiting', { n: openQuestions(job).length }) : t('scanReady'), busy: false };
     case 'failed':
       return { text: t('scanFailedShort'), busy: false };
     default:
@@ -105,6 +155,7 @@ export function scanStatusLine(): { text: string; busy: boolean } | null {
 function stepText(j: JobState): string {
   if (j.status === 'recognizing') return t('scanRecognizing', { done: Math.min(j.progress.done + 1, j.progress.total || 1), total: j.progress.total || '…' });
   if (j.status === 'reviewing') return t('scanReviewing', { done: Math.min(j.progress.done + 1, j.progress.total), total: j.progress.total });
+  if (j.status === 'answering') return t('scanAnswering', { done: Math.min(j.progress.done + 1, j.progress.total), total: j.progress.total });
   return t('scanQueued');
 }
 
@@ -130,8 +181,8 @@ async function poll() {
   if (pollTimer != null) clearTimeout(pollTimer);
   pollTimer = null;
   try {
-    const next = (await (await api(`/jobs/${job.id}`)).json()) as JobState;
-    const finished = next.status === 'done' && job.status !== 'done';
+    const next = jobFrom((await (await api(`/jobs/${job.id}`)).json()) as JobState);
+    const finished = next.status === 'done' && job.status !== 'done' && job.status !== 'answering';
     job = next;
     if (finished && !sheetBody) toast(t('scanReadyToast'));
   } catch (err) {
@@ -217,7 +268,9 @@ async function start() {
       upload.done = i + 1;
       render();
     }
-    job = (await (await api(`/jobs/${created.id}/start`, { method: 'POST' })).json()) as JobState;
+    job = jobFrom((await (await api(`/jobs/${created.id}/start`, { method: 'POST' })).json()) as JobState);
+    answers = new Map();
+    questionsDone = false;
     storeJob({ id: created.id, name });
     upload = null;
     pollTimer = window.setTimeout(() => void poll(), POLL_MS);
@@ -234,6 +287,9 @@ function reset(keepPages: boolean) {
   pollTimer = null;
   job = null;
   failure = '';
+  answers = new Map();
+  questionsDone = false;
+  pageImages.clear();
   storeJob(null);
   if (!keepPages) {
     clearPages();
@@ -311,6 +367,7 @@ function render() {
   if (!body) return;
   body.replaceChildren();
   if (upload) body.appendChild(renderProgress());
+  else if (job && asksNow(job)) body.appendChild(renderQuestions(job));
   else if (job?.status === 'done') body.appendChild(renderResult(job));
   else if (job?.status === 'failed') body.appendChild(renderFailure(job.error));
   else if (job) body.appendChild(renderProgress());
@@ -409,12 +466,13 @@ function renderCompose(): HTMLElement {
 function renderProgress(): HTMLElement {
   const wrap = el('div', 'scan-progress');
   const status: Status | 'uploading' = upload ? 'uploading' : (job?.status ?? 'queued');
-  const order: Status[] = ['uploading', 'recognizing', 'reviewing', 'done'];
+  const order: Status[] = ['uploading', 'recognizing', 'reviewing', 'answering', 'done'];
   const reached = status === 'queued' ? 1 : order.indexOf(status);
   const steps: [Status, string, string][] = [
     ['uploading', t('scanStepUpload'), upload ? `${upload.done} / ${upload.total}` : ''],
     ['recognizing', t('scanStepRecognize'), status === 'queued' ? t('scanQueued') : status === 'recognizing' && job ? `${Math.min(job.progress.done + 1, job.progress.total || 1)} / ${job.progress.total || '…'}` : ''],
     ['reviewing', t('scanStepReview'), status === 'reviewing' && job ? `${job.progress.done} / ${job.progress.total}` : ''],
+    ['answering', t('scanStepQuestions'), status === 'answering' && job ? `${job.progress.done} / ${job.progress.total}` : ''],
     ['done', t('scanStepDone'), ''],
   ];
   const list = el('ol', 'scan-steps');
@@ -451,7 +509,27 @@ function renderResult(j: JobState): HTMLElement {
   const summary = el('p', 'scan-summary');
   summary.textContent = j.reviewed ? t('scanSummary', { pages: j.pages, fixes: applied }) + (rejected ? ' ' + t('scanSummaryRejected', { n: rejected }) : '') : t('scanSummaryUnchecked', { pages: j.pages });
   wrap.appendChild(summary);
+  if (j.questions.length) {
+    const answered = j.questions.filter((q) => q.status === 'answered').length;
+    summary.textContent += ' ' + t('scanAnsweredSummary', { answered, total: j.questions.length });
+  }
   for (const note of j.notes) wrap.appendChild(el('p', 'scan-note', note));
+  if (j.marks.length) {
+    const marks = el('details', 'scan-report scan-marks');
+    marks.appendChild(el('summary', '', j.marks.length === 1 ? t('scanMarksSummary1') : t('scanMarksSummary', { n: j.marks.length })));
+    const list = el('ul', 'scan-fixes');
+    for (const mk of j.marks) list.appendChild(el('li', '', `${t('scanBarShort', { n: mk.measure })}${mk.part ? ` · ${mk.part}` : ''}: ${mk.note}`));
+    marks.appendChild(list);
+    wrap.appendChild(marks);
+  }
+  if (openQuestions(j).length) {
+    const back = button(t('scanBackToQuestions'), 'ghost', () => {
+      questionsDone = false;
+      storeJob({ id: j.id, name, questionsDone });
+      render();
+    });
+    wrap.appendChild(back);
+  }
 
   if (j.reports.length) {
     const details = el('details', 'scan-report');
@@ -490,7 +568,7 @@ function renderResult(j: JobState): HTMLElement {
     add.disabled = true;
     try {
       const xml = await fetchResult();
-      await onImport(input.value.trim() || j.title || name || t('scanUntitled'), xml);
+      await onImport(input.value.trim() || j.title || name || t('scanUntitled'), xml, await songMarks(j));
       reset(false);
       closeOverlay();
     } catch (err) {
@@ -516,4 +594,198 @@ function renderResult(j: JobState): HTMLElement {
   actions.append(add, download, button(t('scanDiscard'), 'ghost', () => reset(false)));
   wrap.appendChild(actions);
   return wrap;
+}
+
+// ---- the questions --------------------------------------------------------------------------------
+
+/** A page of the scan, as the service has it (fetched once per scan). */
+function pageImage(page: number): Promise<ImageBitmap> {
+  let p = pageImages.get(page);
+  if (!p) {
+    const id = job?.id;
+    p = (async () => createImageBitmap(await (await api(`/jobs/${id}/pages/${page}`)).blob()))();
+    p.catch(() => pageImages.delete(page));
+    pageImages.set(page, p);
+  }
+  return p;
+}
+
+/** The part of a page shown for a bar: the bar and some of its neighbours, its system's height. */
+function cropRegion(box: Box | null, whole: boolean): Box {
+  if (!box || whole) return { x0: 0, x1: 1, y0: 0, y1: 1 };
+  const half = Math.max(0.22, (box.x1 - box.x0) / 2 + 0.12);
+  let x0 = (box.x0 + box.x1) / 2 - half;
+  let x1 = x0 + 2 * half;
+  if (x0 < 0) [x0, x1] = [0, x1 - x0];
+  if (x1 > 1) [x0, x1] = [x0 - (x1 - 1), 1];
+  return { x0: Math.max(0, x0), x1: Math.min(1, x1), y0: Math.max(0, box.y0 - 0.03), y1: Math.min(1, box.y1 + 0.03) };
+}
+
+/** Draws the excerpt into `canvas` (at most `width` pixels wide), the bar itself lit, the rest dimmed. */
+function drawCrop(canvas: HTMLCanvasElement, page: ImageBitmap, box: Box | null, whole: boolean, width: number) {
+  const r = cropRegion(box, whole);
+  const sx = r.x0 * page.width;
+  const sy = r.y0 * page.height;
+  const sw = Math.max(1, (r.x1 - r.x0) * page.width);
+  const sh = Math.max(1, (r.y1 - r.y0) * page.height);
+  const scale = Math.min(1, width / sw);
+  canvas.width = Math.round(sw * scale);
+  canvas.height = Math.round(sh * scale);
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(page, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  if (!box) return;
+  const bx = ((box.x0 - r.x0) / (r.x1 - r.x0)) * canvas.width;
+  const bw = ((box.x1 - box.x0) / (r.x1 - r.x0)) * canvas.width;
+  const by = ((box.y0 - r.y0) / (r.y1 - r.y0)) * canvas.height;
+  const bh = ((box.y1 - box.y0) / (r.y1 - r.y0)) * canvas.height;
+  ctx.fillStyle = 'rgba(20, 16, 30, 0.32)';
+  ctx.fillRect(0, 0, canvas.width, by);
+  ctx.fillRect(0, by + bh, canvas.width, canvas.height - by - bh);
+  ctx.fillRect(0, by, bx, bh);
+  ctx.fillRect(bx + bw, by, canvas.width - bx - bw, bh);
+  ctx.strokeStyle = '#D9A93A';
+  ctx.lineWidth = Math.max(2, canvas.width / 300);
+  ctx.strokeRect(bx, by, bw, bh);
+}
+
+function renderQuestions(j: JobState): HTMLElement {
+  const wrap = el('div', 'scan-questions');
+  const open = openQuestions(j);
+  wrap.appendChild(el('p', 'scan-lead', open.length === 1 ? t('scanQuestionsLead1') : t('scanQuestionsLead', { n: open.length })));
+  const list = el('ol', 'scan-q-list');
+  const send = button(t('scanSendAnswers'), 'primary', () => void sendAnswers(open));
+  const refresh = () => (send.disabled = !open.some((q) => answers.has(q.id)));
+
+  for (const q of open) {
+    const li = el('li', 'scan-q');
+    const head = el('div', 'scan-q-head');
+    head.append(el('b', '', t('scanBarShort', { n: q.measure })), el('span', '', q.part), el('span', 'scan-q-page', t('scanPageN', { n: q.page + 1 })));
+    li.appendChild(head);
+
+    // The excerpt of the page, the bar lit; the whole page on request.
+    const figure = el('figure', 'scan-crop is-loading');
+    const canvas = el('canvas');
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('aria-label', `${t('scanBarShort', { n: q.measure })}, ${t('scanPageN', { n: q.page + 1 })}`);
+    figure.appendChild(canvas);
+    let whole = false;
+    const toggle = el('button', 'scan-crop-toggle', t('scanWholePage'));
+    toggle.type = 'button';
+    toggle.hidden = true;
+    figure.appendChild(toggle);
+    void pageImage(q.page).then(
+      (bitmap) => {
+        drawCrop(canvas, bitmap, q.box, false, 1100);
+        figure.classList.remove('is-loading');
+        toggle.hidden = !q.box;
+        toggle.addEventListener('click', () => {
+          whole = !whole;
+          drawCrop(canvas, bitmap, q.box, whole, 1100);
+          figure.classList.toggle('is-whole', whole);
+          toggle.textContent = whole ? t('scanJustBar') : t('scanWholePage');
+        });
+      },
+      () => {
+        figure.classList.remove('is-loading');
+        figure.replaceChildren(el('figcaption', 'scan-crop-missing', t('scanCropMissing')));
+      },
+    );
+    li.appendChild(figure);
+    li.appendChild(el('p', 'scan-q-text', q.question));
+
+    // The readings it hesitates between, one's own words, or leaving it.
+    const options = el('div', 'scan-options');
+    options.setAttribute('role', 'radiogroup');
+    options.setAttribute('aria-label', q.question);
+    const group = `scan-q-${q.id}`;
+    const previous = answers.get(q.id);
+    const radio = (label: string, value: string, checked: boolean, onPick: () => void, extra?: HTMLElement) => {
+      const row = el('label', 'scan-option');
+      const input = el('input');
+      input.type = 'radio';
+      input.name = group;
+      input.value = value;
+      input.checked = checked;
+      input.addEventListener('change', () => {
+        if (!input.checked) return;
+        onPick();
+        refresh();
+      });
+      row.append(input, el('span', '', label));
+      if (extra) row.appendChild(extra);
+      options.appendChild(row);
+      return input;
+    };
+    q.options.forEach((label, i) => radio(label, String(i), !!previous && 'choice' in previous && previous.choice === i, () => answers.set(q.id, { choice: i })));
+    const text = el('textarea', 'field scan-own');
+    text.rows = 2;
+    text.maxLength = 500;
+    text.placeholder = t('scanOwnPlaceholder');
+    text.value = previous && 'text' in previous ? previous.text : '';
+    const own = radio(t('scanOwnAnswer'), 'own', !!previous && 'text' in previous, () => (text.value.trim() ? answers.set(q.id, { text: text.value.trim() }) : answers.delete(q.id)), text);
+    own.closest('label')!.classList.add('own');
+    text.addEventListener('input', () => {
+      own.checked = true;
+      if (text.value.trim()) answers.set(q.id, { text: text.value.trim() });
+      else answers.delete(q.id);
+      refresh();
+    });
+    radio(t('scanLeaveIt'), 'skip', !!previous && 'skip' in previous, () => answers.set(q.id, { skip: true }));
+    li.appendChild(options);
+    list.appendChild(li);
+  }
+  wrap.appendChild(list);
+
+  const actions = el('div', 'scan-actions');
+  const later = button(t('scanAnswerLater'), 'ghost', () => {
+    questionsDone = true;
+    storeJob({ id: j.id, name, questionsDone });
+    render();
+  });
+  actions.append(send, later);
+  wrap.appendChild(actions);
+  refresh();
+  return wrap;
+}
+
+async function sendAnswers(open: Question[]) {
+  if (!job) return;
+  const list = open.flatMap((q) => {
+    const a = answers.get(q.id);
+    return a ? [{ id: q.id, ...a }] : [];
+  });
+  if (!list.length) return;
+  try {
+    job = jobFrom((await (await api(`/jobs/${job.id}/answers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answers: list }) })).json()) as JobState);
+    questionsDone = true;
+    storeJob({ id: job.id, name, questionsDone });
+    pollTimer = window.setTimeout(() => void poll(), 800);
+  } catch (err) {
+    toast(t('scanAnswerFailed', { msg: err instanceof Error ? err.message : String(err) }), 'error');
+  }
+  render();
+}
+
+// ---- the places to check, for the song --------------------------------------------------------------
+
+const MARK_IMAGES = 12;
+
+/** The scan's places to check, each with a small picture of its bar (the first few). */
+async function songMarks(j: JobState): Promise<ScanMark[]> {
+  const out: ScanMark[] = [];
+  for (const [i, mk] of j.marks.slice(0, 60).entries()) {
+    const mark: ScanMark = { m: mk.m, measure: mk.measure, part: mk.part, note: mk.note.slice(0, 300) };
+    if (i < MARK_IMAGES && mk.box) {
+      try {
+        const canvas = document.createElement('canvas');
+        drawCrop(canvas, await pageImage(mk.page), mk.box, false, 420);
+        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.7));
+        if (blob) mark.img = new Uint8Array(await blob.arrayBuffer());
+      } catch {
+        // without its picture, then
+      }
+    }
+    out.push(mark);
+  }
+  return out;
 }

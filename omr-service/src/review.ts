@@ -1,67 +1,116 @@
-// The GPT check: each page image next to what Audiveris read from it, in a compact notation; GPT
-// answers with the measures it would change (complete, per part), and each one is only written
-// back when it still fills its bar (see applyMeasure).
-import OpenAI from 'openai';
+// The second run: each page image next to what was read from it (in the compact notation,
+// notation.ts), with what the automatic checks found odd. GPT answers with the measures it would
+// change (complete, per part), marks and repeat signs that were missed, and -- where it still can't
+// tell -- a question for the person who scanned, with the readings it hesitates between. A
+// correction is only written back when it still fills its bar (score.ts applyMeasure).
 import type { Document } from '@xmldom/xmldom';
-import { applyMeasure, compactPage, CorrectionError, partsOf, setPartName, type CompactNote } from './score.js';
+import { addMarks, setBarlines, type Box, type Mark } from './build.js';
+import { imageInput, openai, MODEL, REASONING, type PageImage } from './ai.js';
+import type { Voice } from './notation.js';
+import { applyMeasure, compactPage, CorrectionError, measureEl, partsOf, setPartName } from './score.js';
 
-const MODEL = process.env.OPENAI_MODEL || 'gpt-5';
-const REASONING_EFFORT = process.env.OPENAI_REASONING_EFFORT as 'low' | 'medium' | 'high' | undefined;
+const LANGUAGE = { de: 'German', en: 'English' } as const;
 
-const INSTRUCTIONS = `You check the output of an optical music recognition program (Audiveris) against the printed page it was read from. The music is a choir score (usually a cappella, e.g. SATB or SSAATTBB, sometimes with a piano part).
+export const NOTATION_HELP = `Music is written in a compact notation, one string per note, each voice a list of them:
+- "C5 1": pitch and duration. Durations in quarter notes as a fraction: "1/2" eighth, "1" quarter, "3/2" dotted quarter, "2" half, "4" whole, "1/4" sixteenth, "1/3" triplet eighth, "2/3" triplet quarter.
+- Pitches as they SOUND with the key signature applied (in G major an F on the page is "F#4"); octave 4 starts at middle C; "Bb3", "F##4". A tenor part in a treble clef with an 8 below sounds an octave lower than written ("G3" for the G on the second line).
+- "r 2": a rest. A whole-bar rest is a rest as long as the bar ("r 3" in 3/4).
+- "C5 2~": tied to the next note of the same pitch in this voice (also across the bar line).
+- "+E5 1": sounds together with the previous note of the same voice (a chord).
+- "C5 1 :Eve-|Come": the words under the note, verse by verse, separated by "|"; a trailing "-" means the word goes on with the voice's next syllable; a trailing "_" ("ah_") that the syllable is held over the following notes (a melisma line); "_" alone that the previous syllable is still held here; leave a verse empty where it has no syllable ("C5 1 :|day").
+- "xF5 1/2": a percussion note (clap, drum) printed where F5 would be.
+A voice is {"v": voice number, "staff": staff number (1 unless the part has several staves), "notes": [...]}. Each voice of a measure must add up to the full bar of the time signature (a pickup or a short last bar: what is printed). Leave out grace notes.`;
 
-You get the page image and, as JSON, what the program read for every measure on that page, per part:
-- "m": the measure's position in the piece (use it to refer to the measure), "number": its printed number
-- per note: "v" voice, "staff" (1 unless the part has several staves), "chord" (true = sounds together with the previous note of the same voice), "p" pitch as step + accidental + octave ("F#4", "Bb3", "C5"; octave 4 starts at middle C) or "rest", "d" duration in quarter notes as a fraction ("1" quarter, "1/2" eighth, "3/2" dotted quarter, "1/3" triplet eighth, "4" whole), "tie" (none/start/stop/both), "lyric" (the syllable under the note, with a trailing "-" when the word continues on the next syllable, e.g. "Eve-", "ning"; "" for none).
+const INSTRUCTIONS = `You check a choir score that was read from the printed page shown in the image (a second, careful look -- the first reading was done without you). You get the image and, as JSON, what was read for every measure on that page, per part ("m" is the measure's position in the piece -- use it to refer to it; "number" is its printed number).
 
-Compare carefully, measure by measure, part by part, with the image. Typical recognition errors: wrong pitch (off by a line/space, missed or wrong accidental, missed key-signature effect is NOT an error because pitches are written as sounding with the key applied), wrong rhythm (missed dot, flag or beam), missing or extra notes/rests, notes assigned to the wrong part or voice, wrong or missing lyric syllables, wrong clef effects (e.g. a tenor part in treble-8 clef read an octave too high).
+${NOTATION_HELP}
 
-Report ONLY measures that need a change. For each, give the part id, "m", a short reason, and the COMPLETE corrected note list of that part in that measure (not just the changed notes), in the same notation. Each voice must add up to the full measure length of the time signature (or exactly what the original had, for a pickup or a short last bar). Keep pitches written as they sound with the key signature applied (in G major an F on the page is "F#4"). Don't change anything you can't see clearly on the page -- when in doubt, leave the measure as it is.
+Compare carefully, measure by measure, part by part, with the image. Look especially at the measures listed under "lookAt" (the automatic checks or the first reading found something odd there). Typical errors: wrong pitch (a line or space off, a missed accidental, a clef's effect), wrong rhythm (a missed dot, flag, beam or triplet), missing or extra notes or rests, notes in the wrong part or voice, wrong or missing words, a verse missing.
 
-Also: "partNames" -- the voice names printed at the start of the systems (e.g. "Sopran", "Alt", "Tenor", "Bass") for parts whose current name is missing or clearly wrong, otherwise []; "title" -- the piece's title if printed on this page, else ""; "confidence" -- how sure you are the page is now correct (high/medium/low); "remarks" -- one or two sentences on anything the singers should double-check, else "".`;
+Report:
+- "corrections": ONLY measures that need a change: the part id, "m", a short reason, and the COMPLETE corrected voices of that part in that measure, every verse of the words included. Don't change anything you can't see clearly.
+- Words: fix syllables that were clearly misread (letters confused -- "ii" for "ü", "B" for "ß", "rn" for "m"), but only where the page shows the right word plainly; keep the language and spelling of the page. When several verses stand under the notes, every verse goes into the notes in order (verse 1 first).
+- "barlines": repeat signs, volta brackets (1. / 2. endings) and final bars that were missed or misread, per measure ("m"): "start" is "repeat" for a |: at its beginning, else "none"; "end" is "repeat" for :| at its end, "final" for the final bar, "double" for a double bar, else "normal"; "times" is how often a repeated passage is played in all when printed (e.g. 3 for "3x"), else 0; "endingNumbers" the numbers of a volta bracket over this measure ("1", "1, 2"; "" for none) with "endingStart"/"endingStop" for where the bracket begins and ends. When several verses stand under one passage that has no repeat signs (a strophic song), add a repeat around that passage with "times" = the number of verses. Leave out measures whose bar lines are right.
+- "marks": rehearsal letters or numbers (kind "rehearsal"), tempo marks ("tempo", with "bpm" for a metronome mark in quarter notes per minute, else 0), segno, coda, D.C. ("dc"), D.S. ("ds"), Fine ("fine"), To Coda ("tocoda"), and other directions for everyone ("words") that are printed but missing; "part" "" for marks over the whole system. Leave out marks that are already there.
+- "questions": where you still can't tell what is printed after looking closely (a smudge, an ambiguous accidental, cramped notes), ask the person who scanned -- at most 3 per page, only for things that matter for singing: the part id, "m", the question (short, plain, for a singer, naming the voice and what to look at), and 2 to 4 "options", each a label and the COMPLETE voices of that part in that measure for that reading.
+- "doubts": measures you left as they are but aren't sure about (the singers should look at them), with a short note.
+- "partNames": the voice names printed at the start of the systems (e.g. "Sopran", "Alt", "Tenor", "Bass") for parts whose current name is missing or clearly wrong, otherwise [].
+- "title": the piece's title if printed on this page, else "".
+- "confidence": how sure you are the page is now correct (high/medium/low); "remarks": one or two sentences on anything the singers should double-check, else "".`;
 
-const NOTE_SCHEMA = {
+const VOICE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['v', 'staff', 'chord', 'p', 'd', 'tie', 'lyric'],
-  properties: {
-    v: { type: 'integer' },
-    staff: { type: 'integer' },
-    chord: { type: 'boolean' },
-    p: { type: 'string' },
-    d: { type: 'string' },
-    tie: { type: 'string', enum: ['none', 'start', 'stop', 'both'] },
-    lyric: { type: 'string' },
-  },
+  required: ['v', 'staff', 'notes'],
+  properties: { v: { type: 'integer' }, staff: { type: 'integer' }, notes: { type: 'array', items: { type: 'string' } } },
 };
+
+export const MARK_KINDS = ['rehearsal', 'tempo', 'words', 'dynamic', 'segno', 'coda', 'dc', 'ds', 'fine', 'tocoda'] as const;
 
 const RESPONSE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['corrections', 'partNames', 'title', 'confidence', 'remarks'],
+  required: ['corrections', 'barlines', 'marks', 'questions', 'doubts', 'partNames', 'title', 'confidence', 'remarks'],
   properties: {
     corrections: {
       type: 'array',
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['part', 'm', 'reason', 'notes'],
-        properties: {
-          part: { type: 'string' },
-          m: { type: 'integer' },
-          reason: { type: 'string' },
-          notes: { type: 'array', items: NOTE_SCHEMA },
-        },
+        required: ['part', 'm', 'reason', 'voices'],
+        properties: { part: { type: 'string' }, m: { type: 'integer' }, reason: { type: 'string' }, voices: { type: 'array', items: VOICE_SCHEMA } },
       },
     },
-    partNames: {
+    barlines: {
       type: 'array',
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['part', 'name'],
-        properties: { part: { type: 'string' }, name: { type: 'string' } },
+        required: ['m', 'start', 'end', 'times', 'endingNumbers', 'endingStart', 'endingStop'],
+        properties: {
+          m: { type: 'integer' },
+          start: { type: 'string', enum: ['none', 'repeat'] },
+          end: { type: 'string', enum: ['normal', 'double', 'final', 'repeat'] },
+          times: { type: 'integer' },
+          endingNumbers: { type: 'string' },
+          endingStart: { type: 'boolean' },
+          endingStop: { type: 'boolean' },
+        },
       },
+    },
+    marks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['m', 'kind', 'text', 'part', 'bpm'],
+        properties: { m: { type: 'integer' }, kind: { type: 'string', enum: [...MARK_KINDS] }, text: { type: 'string' }, part: { type: 'string' }, bpm: { type: 'number' } },
+      },
+    },
+    questions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['part', 'm', 'question', 'options'],
+        properties: {
+          part: { type: 'string' },
+          m: { type: 'integer' },
+          question: { type: 'string' },
+          options: {
+            type: 'array',
+            items: { type: 'object', additionalProperties: false, required: ['label', 'voices'], properties: { label: { type: 'string' }, voices: { type: 'array', items: VOICE_SCHEMA } } },
+          },
+        },
+      },
+    },
+    doubts: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: false, required: ['part', 'm', 'note'], properties: { part: { type: 'string' }, m: { type: 'integer' }, note: { type: 'string' } } },
+    },
+    partNames: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: false, required: ['part', 'name'], properties: { part: { type: 'string' }, name: { type: 'string' } } },
     },
     title: { type: 'string' },
     confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
@@ -70,11 +119,47 @@ const RESPONSE_SCHEMA = {
 };
 
 interface ReviewAnswer {
-  corrections: { part: string; m: number; reason: string; notes: CompactNote[] }[];
+  corrections: { part: string; m: number; reason: string; voices: Voice[] }[];
+  barlines: { m: number; start: 'none' | 'repeat'; end: 'normal' | 'double' | 'final' | 'repeat'; times: number; endingNumbers: string; endingStart: boolean; endingStop: boolean }[];
+  marks: { m: number; kind: Mark['kind']; text: string; part: string; bpm: number }[];
+  questions: { part: string; m: number; question: string; options: { label: string; voices: Voice[] }[] }[];
+  doubts: { part: string; m: number; note: string }[];
   partNames: { part: string; name: string }[];
   title: string;
   confidence: 'high' | 'medium' | 'low';
   remarks: string;
+}
+
+/** A measure the checks (or the first reading) found odd, for the second look. */
+export interface Hint {
+  part: string; // "" for all
+  m: number;
+  note: string;
+}
+
+export interface Question {
+  id: string;
+  page: number; // 0-based
+  m: number;
+  measure: string; // printed number
+  part: string; // the voice's name (see nameVoices)
+  partId: string;
+  question: string;
+  options: { label: string; voices: Voice[] }[];
+  status: 'open' | 'answered' | 'skipped' | 'failed';
+  answer: string; // what was chosen or typed
+  note: string; // what came of it (a typed answer: what was changed; failed: why not)
+  box: Box | null; // where the measure stands on its page (filled in by the pipeline)
+}
+
+export interface Doubt {
+  page: number;
+  m: number;
+  measure: string;
+  part: string;
+  partId: string;
+  note: string;
+  box: Box | null;
 }
 
 export interface PageReport {
@@ -88,25 +173,18 @@ export interface PageReport {
   remarks: string;
 }
 
-let client: OpenAI | null = null;
-function openai(): OpenAI {
-  // OPENAI_API_KEY (and OPENAI_BASE_URL, for tests) are read from the environment by the SDK.
-  client ??= new OpenAI({ maxRetries: 3, timeout: 10 * 60 * 1000 });
-  return client;
-}
-
 /** Asks GPT about one page; returns its parsed answer. */
-async function askPage(image: { mediaType: string; base64: string }, payload: unknown, lang: 'de' | 'en'): Promise<ReviewAnswer> {
+async function askPage(image: PageImage, payload: unknown, lang: 'de' | 'en'): Promise<ReviewAnswer> {
   const response = await openai().responses.create({
     model: MODEL,
-    ...(REASONING_EFFORT ? { reasoning: { effort: REASONING_EFFORT } } : {}),
-    instructions: `${INSTRUCTIONS}\n\nWrite "reason" and "remarks" in ${lang === 'de' ? 'German' : 'English'}, briefly, for choir singers.`,
+    ...REASONING,
+    instructions: `${INSTRUCTIONS}\n\nWrite "reason", "question", option labels, "note" and "remarks" in ${LANGUAGE[lang]}, briefly, for choir singers.`,
     input: [
       {
         role: 'user',
         content: [
-          { type: 'input_image', image_url: `data:${image.mediaType};base64,${image.base64}`, detail: 'high' },
-          { type: 'input_text', text: `What the recognition program read from this page:\n${JSON.stringify(payload)}` },
+          imageInput(image),
+          { type: 'input_text', text: `What was read from this page:\n${JSON.stringify(payload)}` },
         ],
       },
     ],
@@ -118,16 +196,17 @@ async function askPage(image: { mediaType: string; base64: string }, payload: un
 }
 
 /**
- * Checks one page and writes its accepted corrections into `doc`. A page whose check fails (API
- * error, unreadable answer) keeps Audiveris' reading and is reported as unchecked.
+ * Checks one page and writes its accepted corrections, bar lines and marks into `doc`. A page whose
+ * check fails (API error, unreadable answer) keeps the first reading and is reported as unchecked.
  */
 export async function reviewPage(
   doc: Document,
   pageIndex: number,
   measureIdx: number[],
-  image: { mediaType: string; base64: string },
+  image: PageImage,
   lang: 'de' | 'en' = 'en',
-): Promise<{ report: PageReport; title: string }> {
+  hints: Hint[] = [],
+): Promise<{ report: PageReport; title: string; questions: Question[]; doubts: Doubt[] }> {
   const { parts, measures } = compactPage(doc, measureIdx);
   const numberOf = new Map(measures.map((m) => [m.m, m.number]));
   const report: PageReport = {
@@ -138,14 +217,14 @@ export async function reviewPage(
     confidence: 'unchecked',
     remarks: '',
   };
-  if (!measures.length) return { report, title: '' };
+  if (!measures.length) return { report, title: '', questions: [], doubts: [] };
 
   let answer: ReviewAnswer;
   try {
-    answer = await askPage(image, { parts, measures }, lang);
+    answer = await askPage(image, { parts, measures, lookAt: hints }, lang);
   } catch (err) {
     report.remarks = `Check failed: ${err instanceof Error ? err.message : String(err)}`;
-    return { report, title: '' };
+    return { report, title: '', questions: [], doubts: [] };
   }
 
   const known = new Set(parts.map((p) => p.id));
@@ -153,26 +232,108 @@ export async function reviewPage(
   const onPage = new Set(measureIdx.map((i) => i + 1));
   for (const c of answer.corrections) {
     const measure = numberOf.get(c.m) ?? String(c.m);
-    const part = c.part;
     if (!onPage.has(c.m)) {
-      report.rejected.push({ part, partId: part, measure, reason: c.reason, detail: 'not on this page' });
+      report.rejected.push({ part: c.part, partId: c.part, measure, reason: c.reason, detail: 'not on this page' });
       continue;
     }
     try {
-      applyMeasure(doc, c.part, c.m, c.notes);
-      report.applied.push({ part, partId: part, measure, reason: c.reason });
+      applyMeasure(doc, c.part, c.m, c.voices);
+      report.applied.push({ part: c.part, partId: c.part, measure, reason: c.reason });
     } catch (err) {
       if (!(err instanceof CorrectionError)) throw err;
-      report.rejected.push({ part, partId: part, measure, reason: c.reason, detail: err.message });
+      report.rejected.push({ part: c.part, partId: c.part, measure, reason: c.reason, detail: err.message });
     }
   }
+  // Repeat signs and voltas belong to every part's bar lines.
+  for (const b of answer.barlines) {
+    if (!onPage.has(b.m)) continue;
+    const numbers = b.endingNumbers.split(/[^0-9]+/).map(Number).filter((n) => n > 0);
+    const ending = numbers.length && (b.endingStart || b.endingStop) ? { numbers, start: b.endingStart, stop: b.endingStop } : null;
+    for (const p of partsOf(doc)) {
+      const el = measureEl(p.el, b.m - 1);
+      if (el) setBarlines(el, { barStart: b.start, barEnd: b.end, repeatTimes: Math.max(0, b.times), ending });
+    }
+  }
+  const first = partsOf(doc)[0];
+  for (const mk of answer.marks) {
+    if (!onPage.has(mk.m)) continue;
+    const target = mk.part && known.has(mk.part) ? partsOf(doc).find((p) => p.ref.id === mk.part) : first;
+    const el = target && measureEl(target.el, mk.m - 1);
+    if (el) addMarks(el, [{ kind: mk.kind, text: mk.text, part: mk.part, bpm: mk.bpm }]);
+  }
+  const questions: Question[] = answer.questions
+    .filter((q) => onPage.has(q.m) && known.has(q.part) && q.options.length >= 2)
+    .slice(0, 3)
+    .map((q, i) => ({
+      id: `p${pageIndex + 1}q${i + 1}`,
+      page: pageIndex,
+      m: q.m,
+      measure: numberOf.get(q.m) ?? String(q.m),
+      part: q.part,
+      partId: q.part,
+      question: q.question,
+      options: q.options.slice(0, 4),
+      status: 'open',
+      answer: '',
+      note: '',
+      box: null,
+    }));
+  const doubts: Doubt[] = answer.doubts
+    .filter((d) => onPage.has(d.m))
+    .map((d) => ({ page: pageIndex, m: d.m, measure: numberOf.get(d.m) ?? String(d.m), part: d.part, partId: d.part, note: d.note, box: null }));
   report.confidence = answer.confidence;
   report.remarks = answer.remarks;
-  return { report, title: answer.title.trim() };
+  return { report, title: answer.title.trim(), questions, doubts };
 }
 
-/** Names the voices in the reports the way the singers know them (after every page's name fixes). */
-export function nameVoices(doc: Document, reports: PageReport[]) {
+/** Names the voices in the reports and questions the way the singers know them (after every page's name fixes). */
+export function nameVoices(doc: Document, reports: PageReport[], questions: Question[] = [], doubts: Doubt[] = []) {
   const names = new Map(partsOf(doc).map((p) => [p.ref.id, p.ref.name]));
   for (const r of reports) for (const e of [...r.applied, ...r.rejected]) e.part = names.get(e.partId) ?? e.partId;
+  for (const q of questions) q.part = names.get(q.partId) ?? q.partId;
+  for (const d of doubts) d.part = d.partId ? (names.get(d.partId) ?? d.partId) : '';
+}
+
+// ---- an answer typed in for a question ------------------------------------------------------------
+
+const ANSWER_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['understood', 'voices', 'note'],
+  properties: { understood: { type: 'boolean' }, voices: { type: 'array', items: VOICE_SCHEMA }, note: { type: 'string' } },
+};
+
+/**
+ * Turns what someone typed in answer to a question into the measure it describes: the page image,
+ * the measure as it stands, the question and the answer. Null when the answer can't be made into
+ * notes (then the measure stays as it is).
+ */
+export async function voicesFromAnswer(
+  image: PageImage,
+  payload: { part: string; m: number; question: string; current: Voice[]; time: string; fifths: number; answer: string },
+  lang: 'de' | 'en',
+): Promise<{ voices: Voice[]; note: string } | null> {
+  const response = await openai().responses.create({
+    model: MODEL,
+    ...REASONING,
+    instructions: `A choir score was read from the printed page in the image. For one measure of one part, the person who scanned it was asked a question, and answered in their own words. Write that measure of that part as the answer describes it, using the page to fill in what the answer doesn't say.
+
+${NOTATION_HELP}
+
+Answer with "understood" (false if the answer doesn't say what the measure should be, or contradicts the page in a way you can't resolve), the COMPLETE voices of that part in that measure, and a short "note" in ${LANGUAGE[lang]} on what you changed.`,
+    input: [
+      {
+        role: 'user',
+        content: [
+          imageInput(image),
+          { type: 'input_text', text: JSON.stringify(payload) },
+        ],
+      },
+    ],
+    text: { format: { type: 'json_schema', name: 'omr_answer', schema: ANSWER_SCHEMA, strict: true } },
+  });
+  const raw = response.output_text;
+  if (!raw) return null;
+  const out = JSON.parse(raw) as { understood: boolean; voices: Voice[]; note: string };
+  return out.understood && out.voices.length ? { voices: out.voices, note: out.note } : null;
 }

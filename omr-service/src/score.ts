@@ -1,28 +1,18 @@
 // MusicXML handling for the scan pipeline: reading Audiveris' .mxl output, splitting a score into
-// the printed pages it came from, a compact per-page notation for the GPT check, and writing the
-// checked measures back -- only when they still add up to a full bar.
+// the printed pages it came from, the compact notation (notation.ts) of a page for the GPT checks,
+// and writing checked measures back -- only when they still add up to a full bar.
 import { DOMParser, XMLSerializer, type Document, type Element } from '@xmldom/xmldom';
 import { unzipSync, strFromU8 } from 'fflate';
+import { beatOf, divisionsFor, emptyCarry, writeMeasureNotes, type CarryOver } from './build.js';
+import { formatNote, parseVoices, voiceLength, type NoteEv, type Voice } from './notation.js';
 
-export type Tie = 'none' | 'start' | 'stop' | 'both';
-
-/** One note or rest in the compact notation the GPT check reads and answers in. */
-export interface CompactNote {
-  v: number; // voice
-  staff: number; // 1 unless the part has several staves
-  chord: boolean; // sounds together with the previous note of the same voice
-  p: string; // "F#4", "Bb3", "C5", or "rest"
-  d: string; // duration in quarter notes, as a fraction: "1", "1/2", "3/2", "1/3"
-  tie: Tie;
-  lyric: string; // syllable, "-" at the end when the word continues ("Eve-"); "" for none
-}
-
+/** One measure of every part, in the compact notation (notation.ts) the GPT checks read and answer in. */
 export interface CompactMeasure {
   m: number; // 1-based position in the part (measure numbers in files can repeat or skip)
   number: string; // the printed measure number
   time: string; // "4/4"
   fifths: number;
-  parts: Record<string, CompactNote[]>;
+  parts: Record<string, Voice[]>;
 }
 
 export interface PartRef {
@@ -66,6 +56,11 @@ const kids = (el: Element, name?: string): Element[] => {
 };
 const kid = (el: Element, name: string): Element | undefined => kids(el, name)[0];
 const text = (el: Element | undefined): string => (el?.textContent ?? '').trim();
+
+/** A part's measure at a position (0-based), if it has one. */
+export function measureEl(part: Element, index: number): Element | undefined {
+  return kids(part, 'measure')[index];
+}
 
 export function partsOf(doc: Document): { ref: PartRef; el: Element }[] {
   const names = new Map<string, string>();
@@ -113,20 +108,6 @@ export function measuresByPage(doc: Document, pageCount: number): number[][] {
 
 // ---- fractions -------------------------------------------------------------------------------
 
-function gcd(a: number, b: number): number {
-  a = Math.abs(a);
-  b = Math.abs(b);
-  while (b) [a, b] = [b, a % b];
-  return a || 1;
-}
-
-function fraction(num: number, den: number): string {
-  const g = gcd(num, den);
-  const n = num / g;
-  const d = den / g;
-  return d === 1 ? String(n) : `${n}/${d}`;
-}
-
 /** "3/2" -> 1.5; null when not a positive fraction. */
 export function parseFraction(s: string): { num: number; den: number } | null {
   const m = String(s).trim().match(/^(\d+)(?:\/(\d+))?$/);
@@ -172,39 +153,97 @@ function partStates(part: Element): PartState[] {
   });
 }
 
-function pitchName(note: Element): string {
-  const pitch = kid(note, 'pitch');
-  if (!pitch) return 'rest';
-  const alter = Math.round(Number(text(kid(pitch, 'alter'))) || 0);
-  const acc = alter > 0 ? '#'.repeat(alter) : 'b'.repeat(-alter);
-  return `${text(kid(pitch, 'step'))}${acc}${text(kid(pitch, 'octave'))}`;
+/**
+ * A measure's notes as voices in the compact notation (grace and cue notes left out). A voice that
+ * starts later than the bar, or pauses, behind an invisible <forward>, gets a rest there.
+ */
+function compactVoices(measure: Element, divisions: number, barDiv: number): Voice[] {
+  const voices = new Map<string, Voice>();
+  const ends = new Map<string, number>(); // where each voice has got to, in divisions
+  const frac = (dur: number) => {
+    const g = gcdInt(dur, divisions);
+    return g ? `${dur / g}${divisions / g === 1 ? '' : `/${divisions / g}`}` : '0';
+  };
+  let cursor = 0;
+  let lastStart = 0;
+  for (const el of kids(measure)) {
+    if (el.nodeName === 'backup' || el.nodeName === 'forward') {
+      const d = Number(text(kid(el, 'duration'))) || 0;
+      cursor = Math.max(0, cursor + (el.nodeName === 'backup' ? -d : d));
+      continue;
+    }
+    if (el.nodeName !== 'note') continue;
+    const note = el;
+    const chord = !!kid(note, 'chord');
+    const dur = Number(text(kid(note, 'duration'))) || 0;
+    if (kid(note, 'grace')) continue;
+    const start = chord ? lastStart : cursor;
+    if (!chord) {
+      lastStart = cursor;
+      cursor += dur;
+    }
+    if (kid(note, 'cue') || !dur) continue;
+    const vKey = text(kid(note, 'voice')) || '1';
+    const staff = Number(text(kid(note, 'staff'))) || 1;
+    let voice = voices.get(vKey);
+    if (!voice) voices.set(vKey, (voice = { v: Number(vKey) || 1, staff, notes: [] }));
+    const end = ends.get(vKey) ?? 0;
+    if (!chord && start > end) voice.notes.push(`r ${frac(start - end)}`);
+    if (!chord) ends.set(vKey, start + dur);
+    const pitch = kid(note, 'pitch');
+    const unpitched = kid(note, 'unpitched');
+    // A whole-bar rest is as long as the bar (some files give it a 4/4 bar's length in any metre).
+    const restDur = !pitch && !unpitched && kid(note, 'rest')?.getAttribute('measure') === 'yes' && barDiv > 0 ? barDiv : dur;
+    const verses: string[] = [];
+    // (Words under a rest -- a misplaced syllable in some files -- aren't read: a rest has none.)
+    for (const lyric of pitch || unpitched ? kids(note, 'lyric') : []) {
+      const k = Math.max(1, Number(lyric.getAttribute('number')) || 1) - 1;
+      const t = text(kid(lyric, 'text'));
+      const syl = text(kid(lyric, 'syllabic'));
+      const held = !!kid(lyric, 'extend');
+      verses[k] = t ? t + (syl === 'begin' || syl === 'middle' ? '-' : held ? '_' : '') : held ? '_' : '';
+    }
+    const place = unpitched ? unpitchedPlace(unpitched, note) : null;
+    const octaveText = pitch ? text(kid(pitch, 'octave')) : '';
+    const g = gcdInt(restDur, divisions);
+    const ev: NoteEv = {
+      chord,
+      rest: !pitch && !unpitched,
+      unpitched: !!unpitched,
+      step: pitch ? text(kid(pitch, 'step')) : (place?.step ?? ''),
+      alter: pitch ? Math.round(Number(text(kid(pitch, 'alter'))) || 0) : 0,
+      octave: pitch ? (/^-?\d+$/.test(octaveText) ? Number(octaveText) : 4) : (place?.octave ?? 0),
+      num: restDur / g,
+      den: divisions / g,
+      tie: kids(note, 'tie').some((t) => t.getAttribute('type') === 'start'),
+      verses: Array.from(verses, (v) => v ?? ''),
+    };
+    voice.notes.push(formatNote(ev));
+  }
+  return [...voices.values()];
 }
 
-function compactNotes(measure: Element, divisions: number): CompactNote[] {
-  const out: CompactNote[] = [];
-  for (const note of kids(measure, 'note')) {
-    if (kid(note, 'grace') || kid(note, 'cue')) continue;
-    const dur = Number(text(kid(note, 'duration'))) || 0;
-    const ties = kids(note, 'tie').map((t) => t.getAttribute('type'));
-    const tie: Tie = ties.includes('start') && ties.includes('stop') ? 'both' : ties.includes('start') ? 'start' : ties.includes('stop') ? 'stop' : 'none';
-    const lyricEl = kid(note, 'lyric');
-    let lyric = '';
-    if (lyricEl) {
-      lyric = text(kid(lyricEl, 'text'));
-      const syl = text(kid(lyricEl, 'syllabic'));
-      if (lyric && (syl === 'begin' || syl === 'middle')) lyric += '-';
-    }
-    out.push({
-      v: Number(text(kid(note, 'voice'))) || 1,
-      staff: Number(text(kid(note, 'staff'))) || 1,
-      chord: !!kid(note, 'chord'),
-      p: pitchName(note),
-      d: fraction(dur, divisions),
-      tie,
-      lyric,
-    });
+/**
+ * Where a percussion note sits: its display step and octave, or -- where an export left those empty
+ * or nonsensical -- its printed height (default-y, tenths below the top line, F5), else the middle line.
+ */
+function unpitchedPlace(unpitched: Element, note: Element): { step: string; octave: number } {
+  const step = text(kid(unpitched, 'display-step'));
+  const octave = Number(text(kid(unpitched, 'display-octave')));
+  if (/^[A-G]$/.test(step) && octave >= 0 && octave <= 9) return { step, octave };
+  const y = parseFloat(note.getAttribute('default-y') ?? '');
+  if (Number.isFinite(y) && Math.abs(y) <= 120) {
+    const index = 5 * 7 + 3 + Math.round(y / 5);
+    return { step: 'CDEFGAB'[((index % 7) + 7) % 7], octave: Math.floor(index / 7) };
   }
-  return out;
+  return { step: 'B', octave: 4 };
+}
+
+function gcdInt(a: number, b: number): number {
+  a = Math.abs(Math.round(a));
+  b = Math.abs(Math.round(b));
+  while (b) [a, b] = [b, a % b];
+  return a || 1;
 }
 
 /** The given measures (by position) of every part, in the compact notation. */
@@ -223,7 +262,8 @@ export function compactPage(doc: Document, measureIdx: number[]): { parts: PartR
     };
     parts.forEach((p, k) => {
       const el = measureEls[k][i];
-      if (el) cm.parts[p.ref.id] = compactNotes(el, states[k][i].divisions);
+      const st = states[k][i];
+      if (el) cm.parts[p.ref.id] = compactVoices(el, st.divisions, (st.divisions * 4 * st.beats) / st.beatType);
     });
     return cm;
   });
@@ -232,71 +272,95 @@ export function compactPage(doc: Document, measureIdx: number[]): { parts: PartR
 
 // ---- writing corrections back ---------------------------------------------------------------
 
-const TYPES: [number, string][] = [
-  [4, 'whole'],
-  [2, 'half'],
-  [1, 'quarter'],
-  [0.5, 'eighth'],
-  [0.25, '16th'],
-  [0.125, '32nd'],
-  [0.0625, '64th'],
-];
-
-/** Note type and dot count for a duration in quarters, when it's a plain (possibly dotted) value. */
-function typeAndDots(q: number): { type: string; dots: number } | null {
-  for (const [base, type] of TYPES) {
-    if (Math.abs(q - base) < 1e-9) return { type, dots: 0 };
-    if (Math.abs(q - base * 1.5) < 1e-9) return { type, dots: 1 };
-    if (Math.abs(q - base * 1.75) < 1e-9) return { type, dots: 2 };
-  }
-  return null;
-}
-
-const PITCH_RE = /^([A-G])(#{1,2}|b{1,2})?(-?\d)$/;
-
 export class CorrectionError extends Error {}
 
-/** Per-voice total of a note list, in divisions (chord notes don't advance time). */
-function voiceTotals(notes: { v: number; chord: boolean; div: number }[]): Map<number, number> {
-  const totals = new Map<number, number>();
-  for (const n of notes) if (!n.chord) totals.set(n.v, (totals.get(n.v) ?? 0) + n.div);
-  return totals;
+/** Multiplies every duration of a part (and its divisions) by `factor`, so finer values fit. */
+function rescalePart(part: Element, factor: number) {
+  for (const measure of kids(part, 'measure')) {
+    for (const attrs of kids(measure, 'attributes')) {
+      const d = kid(attrs, 'divisions');
+      if (d) d.textContent = String(Number(text(d)) * factor);
+    }
+    for (const c of kids(measure)) {
+      if (c.nodeName !== 'note' && c.nodeName !== 'backup' && c.nodeName !== 'forward') continue;
+      const d = kid(c, 'duration');
+      if (d) d.textContent = String(Number(text(d)) * factor);
+    }
+  }
+}
+
+/** What the measures before `index` leave open: ties into it, words that go on, their last syllables. */
+function carryInto(part: Element, index: number): CarryOver {
+  const carry = emptyCarry();
+  const measures = kids(part, 'measure');
+  const prev = measures[index - 1];
+  if (prev) {
+    for (const note of kids(prev, 'note')) {
+      const pitch = kid(note, 'pitch');
+      if (!pitch || !kids(note, 'tie').some((t) => t.getAttribute('type') === 'start')) continue;
+      const v = Number(text(kid(note, 'voice'))) || 1;
+      const key = `${text(kid(pitch, 'step'))}${Math.round(Number(text(kid(pitch, 'alter'))) || 0)}/${text(kid(pitch, 'octave'))}`;
+      if (!carry.ties.has(v)) carry.ties.set(v, new Set());
+      carry.ties.get(v)!.add(key);
+      carry.staffOf.set(v, Number(text(kid(note, 'staff'))) || 1);
+    }
+  }
+  // Each voice's last syllable per verse, looking back a few bars.
+  for (let i = index - 1; i >= Math.max(0, index - 8); i--) {
+    const notes = kids(measures[i], 'note').reverse();
+    for (const note of notes) {
+      const v = Number(text(kid(note, 'voice'))) || 1;
+      for (const lyric of kids(note, 'lyric')) {
+        const k = Math.max(1, Number(lyric.getAttribute('number')) || 1) - 1;
+        if (!carry.lastLyric.has(v)) carry.lastLyric.set(v, new Map());
+        if (carry.lastLyric.get(v)!.has(k)) continue;
+        carry.lastLyric.get(v)!.set(k, lyric);
+        const syl = text(kid(lyric, 'syllabic'));
+        if (syl === 'begin' || syl === 'middle') {
+          if (!carry.continuing.has(v)) carry.continuing.set(v, new Set());
+          carry.continuing.get(v)!.add(k);
+        }
+      }
+    }
+  }
+  return carry;
 }
 
 /**
- * Replaces one part's notes in one measure (by position) with `notes`. Refuses -- throwing
- * CorrectionError, leaving the measure untouched -- when a note can't be written in the part's
- * divisions, a pitch is malformed, or a voice no longer fills the bar (a full bar by the time
- * signature, or exactly what the original measure had, for pickups and short final bars).
+ * Replaces one part's notes in one measure (by position) with `voices`. Refuses -- throwing
+ * CorrectionError, leaving the measure untouched -- when a note can't be read, or a voice no
+ * longer fills the bar (a full bar by the time signature, or exactly what the original measure
+ * had, for pickups and short final bars). Finer durations than the part was written in are made
+ * room for (its divisions multiplied).
  */
-export function applyMeasure(doc: Document, partId: string, m: number, notes: CompactNote[]): void {
+export function applyMeasure(doc: Document, partId: string, m: number, voices: Voice[]): void {
   const part = partsOf(doc).find((p) => p.ref.id === partId);
   if (!part) throw new CorrectionError(`unknown part ${partId}`);
   const measures = kids(part.el, 'measure');
   const measure = measures[m - 1];
   if (!measure) throw new CorrectionError(`part ${partId} has no measure ${m}`);
-  const state = partStates(part.el)[m - 1];
-  if (!notes.length) throw new CorrectionError('empty note list');
-
-  const parsed = notes.map((n) => {
-    const f = parseFraction(n.d);
-    if (!f) throw new CorrectionError(`bad duration "${n.d}"`);
-    const div = (state.divisions * f.num) / f.den;
-    if (!Number.isInteger(div)) throw new CorrectionError(`duration ${n.d} can't be written with ${state.divisions} divisions per quarter`);
-    if (n.p !== 'rest' && !PITCH_RE.test(n.p)) throw new CorrectionError(`bad pitch "${n.p}"`);
-    return { ...n, v: Math.max(1, Math.round(n.v) || 1), staff: Math.max(1, Math.round(n.staff) || 1), div, q: f.num / f.den };
-  });
-
-  const full = (state.divisions * 4 * state.beats) / state.beatType;
-  const original = voiceTotals(compactNotes(measure, state.divisions).map((n) => {
-    const f = parseFraction(n.d)!;
-    return { v: n.v, chord: n.chord, div: (state.divisions * f.num) / f.den };
-  }));
-  const originalLen = Math.max(0, ...original.values());
-  for (const [v, total] of voiceTotals(parsed)) {
-    if (total !== full && total !== originalLen) {
-      throw new CorrectionError(`voice ${v} lasts ${fraction(total, state.divisions)} quarters, the bar needs ${fraction(full, state.divisions)}`);
+  if (!voices.length || voices.every((v) => !v.notes.length)) throw new CorrectionError('empty note list');
+  let parsed;
+  try {
+    parsed = parseVoices(voices);
+  } catch (err) {
+    throw new CorrectionError(err instanceof Error ? err.message : String(err));
+  }
+  let state = partStates(part.el)[m - 1];
+  const quarters = (len: { num: number; den: number }) => len.num / len.den;
+  const full = (4 * state.beats) / state.beatType;
+  const originalLen = Math.max(0, ...parseVoices(compactVoices(measure, state.divisions, state.divisions * full)).map((v) => quarters(voiceLength(v.notes))));
+  for (const v of parsed) {
+    const len = quarters(voiceLength(v.notes));
+    if (Math.abs(len - full) > 1e-9 && Math.abs(len - originalLen) > 1e-9) {
+      throw new CorrectionError(`voice ${v.v} lasts ${len} quarters, the bar needs ${full}`);
     }
+  }
+  // (Only now that it will be written: finer durations need finer divisions.)
+  const needed = divisionsFor([voices], state.divisions);
+  if (needed !== state.divisions) {
+    rescalePart(part.el, needed / state.divisions);
+    state = partStates(part.el)[m - 1];
   }
 
   // Everything that isn't a note/backup/forward stays: what came before the first note stays in
@@ -307,66 +371,7 @@ export function applyMeasure(doc: Document, partId: string, m: number, notes: Co
   const rest = firstNote < 0 ? [] : children.slice(firstNote).filter((c) => c.nodeName !== 'note' && c.nodeName !== 'backup' && c.nodeName !== 'forward');
   const trailing = [...rest.filter((c) => c.nodeName !== 'barline'), ...rest.filter((c) => c.nodeName === 'barline')];
   for (const c of children) if (!leading.includes(c)) measure.removeChild(c);
-
-  const el = (name: string, content?: string, attrs: Record<string, string> = {}): Element => {
-    const e = doc.createElement(name);
-    for (const [k, val] of Object.entries(attrs)) e.setAttribute(k, val);
-    if (content !== undefined) e.appendChild(doc.createTextNode(content));
-    return e;
-  };
-
-  const voices = [...new Set(parsed.map((n) => n.v))];
-  const totals = voiceTotals(parsed);
-  voices.forEach((v, vi) => {
-    let continuing = false; // previous syllable of this voice ended with "-"
-    for (const n of parsed.filter((x) => x.v === v)) {
-      const note = el('note');
-      if (n.chord) note.appendChild(el('chord'));
-      if (n.p === 'rest') {
-        note.appendChild(el('rest'));
-      } else {
-        const [, step, acc, octave] = n.p.match(PITCH_RE)!;
-        const pitch = el('pitch');
-        pitch.appendChild(el('step', step));
-        if (acc) pitch.appendChild(el('alter', String(acc[0] === '#' ? acc.length : -acc.length)));
-        pitch.appendChild(el('octave', octave));
-        note.appendChild(pitch);
-      }
-      note.appendChild(el('duration', String(n.div)));
-      if (n.tie === 'stop' || n.tie === 'both') note.appendChild(el('tie', undefined, { type: 'stop' }));
-      if (n.tie === 'start' || n.tie === 'both') note.appendChild(el('tie', undefined, { type: 'start' }));
-      note.appendChild(el('voice', String(v)));
-      const td = typeAndDots(n.q);
-      if (td) {
-        note.appendChild(el('type', td.type));
-        for (let i = 0; i < td.dots; i++) note.appendChild(el('dot'));
-      }
-      if (state.staves > 1) note.appendChild(el('staff', String(n.staff)));
-      if (n.tie !== 'none' && n.p !== 'rest') {
-        const notations = el('notations');
-        if (n.tie === 'stop' || n.tie === 'both') notations.appendChild(el('tied', undefined, { type: 'stop' }));
-        if (n.tie === 'start' || n.tie === 'both') notations.appendChild(el('tied', undefined, { type: 'start' }));
-        note.appendChild(notations);
-      }
-      const raw = n.lyric.trim();
-      if (raw && n.p !== 'rest' && !n.chord) {
-        const continues = raw.endsWith('-') && raw.length > 1;
-        const syllable = continues ? raw.slice(0, -1) : raw;
-        const syllabic = continuing ? (continues ? 'middle' : 'end') : continues ? 'begin' : 'single';
-        const lyric = el('lyric', undefined, { number: '1' });
-        lyric.appendChild(el('syllabic', syllabic));
-        lyric.appendChild(el('text', syllable));
-        note.appendChild(lyric);
-        continuing = continues;
-      }
-      measure.appendChild(note);
-    }
-    if (vi < voices.length - 1) {
-      const backup = el('backup');
-      backup.appendChild(el('duration', String(totals.get(v) ?? 0)));
-      measure.appendChild(backup);
-    }
-  });
+  writeMeasureNotes(doc, measure, voices, { divisions: state.divisions, fifths: state.fifths, staves: state.staves, beat: beatOf(`${state.beats}/${state.beatType}`) }, carryInto(part.el, m - 1), full);
   for (const c of trailing) measure.appendChild(c);
 }
 

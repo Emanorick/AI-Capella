@@ -1,7 +1,7 @@
 import { backingSize } from './pixels';
 import type { NoteEvent, Score, SlurArc } from './score';
 import { getBeatMarkers } from './score';
-import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, withAlpha, stageFill, gelPill, playheadBeam, paperGrain } from './theme';
+import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, withAlpha, stageFill, gelPill, playheadBeam, paperGrain, drawQueryMark } from './theme';
 import { Lantern, type Flare } from './lantern';
 import { deviceChoice, PAPER_DESIGN } from './design';
 import { drawRulerSignature, signatureChanges, transposeFifths, type SignatureChange } from './signatures';
@@ -209,6 +209,7 @@ export class PianoRoll {
   // shimmering/blurring: see snapToDevicePx below for the other half of that fix.
   private rulerBuffer: HTMLCanvasElement | null = null;
   private sections: { label: string; beat: number }[] = [];
+  private markedBars = new Set<number>();
 
   constructor(canvas: HTMLCanvasElement, score: Score, partColor: (partId: string) => string) {
     this.canvas = canvas;
@@ -504,6 +505,13 @@ export class PianoRoll {
   /** Section letters (rehearsal marks) printed as boxed letters in the ruler. */
   setSections(sections: { label: string; beat: number }[]) {
     this.sections = sections;
+    this.invalidateBuffers();
+  }
+
+  /** Bar numbers the scan wasn't sure of, marked with a "?" in the ruler. */
+  setMarkedBars(bars: Set<number>) {
+    if (bars.size === this.markedBars.size && [...bars].every((b) => this.markedBars.has(b))) return;
+    this.markedBars = bars;
     this.invalidateBuffers();
   }
 
@@ -1075,10 +1083,12 @@ export class PianoRoll {
         rctx.font = `600 11px ${FONT_MONO}`;
         rctx.fillStyle = paper(0.62);
         rctx.fillText(String(marker.measureNumber), textX, 18);
+        let after = textX + rctx.measureText(String(marker.measureNumber)).width;
+        if (marker.measureNumber !== undefined && this.markedBars.has(marker.measureNumber)) after += 3 + drawQueryMark(rctx, after + 3, 18);
         const change = this.signatureAt.get(marker.beat);
         if (change) {
           const fifths = change.fifths !== undefined ? transposeFifths(change.fifths, this.transpose) : undefined;
-          drawRulerSignature(rctx, change, fifths, textX + rctx.measureText(String(marker.measureNumber)).width + 7, paper(0.85));
+          drawRulerSignature(rctx, change, fifths, after + 7, paper(0.85));
         }
       }
       // Section letters that don't sit on a bar line (hand-marked mid-bar) still get their box.

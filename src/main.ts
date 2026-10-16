@@ -14,7 +14,7 @@ import { StaffView } from './staffView';
 import { OverviewStrip } from './overview';
 import { colorForPart } from './palette';
 import { measureAtBeat, playedBeat, type Score } from './score';
-import { deleteImportedSong, readScoreFile, saveSongOrder, songOrder, saveImportedSong, saveSongConfig, saveSongSections, subscribeToSongs, updateSongMetadata, type SongFormat, type StoredSong, type VoiceClef } from './library';
+import { deleteImportedSong, readScoreFile, saveSongOrder, songOrder, saveImportedSong, saveScanMarks, saveSongConfig, saveSongSections, subscribeToSongs, updateSongMetadata, type ScanMark, type SongFormat, type StoredSong, type VoiceClef } from './library';
 import { ensureSignedIn, isFirebaseConfigured } from './firebase';
 import { animateRibbons, coverDataFromScore, drawCover, drawMark, prepareCanvas, type CoverData } from './artwork';
 import { icon } from './icons';
@@ -71,6 +71,7 @@ interface SongEntry {
   removedParts?: string[];
   splitParts?: string[];
   swing?: boolean;
+  scanMarks?: ScanMark[]; // a scanned song's places to check (scan.ts)
   order?: number; // imported songs: their place in the repertoire (songOrder)
 }
 
@@ -814,6 +815,93 @@ let lightOffsetMs = (() => {
   }
 })();
 
+/** The "?" by the bar numbers of a scanned song's places to check, in both rulers. */
+function renderScanMarks() {
+  const bars = new Set((currentSong?.scanMarks ?? []).map((mk) => parseInt(mk.measure, 10)).filter((n) => Number.isFinite(n)));
+  pianoRoll?.setMarkedBars(bars);
+  staffView?.setMarkedBars(bars);
+}
+
+/**
+ * A scanned song's places to check (scan.ts): where the scan wasn't sure, with a picture of the bar
+ * on the scanned page. "Go there" jumps to the bar; "It's right" takes it off the list, for everyone.
+ */
+function openScanMarksSheet(opener: HTMLElement | null) {
+  const song = currentSong;
+  if (!song?.scanMarks?.length) return;
+  const body = document.createElement('div');
+  body.className = 'sheet-body scan-marks-body';
+  const urls: string[] = [];
+  const render = () => {
+    const marks = song.scanMarks ?? [];
+    body.replaceChildren();
+    const lead = document.createElement('p');
+    lead.className = 'ctl-note';
+    lead.textContent = t('scanMarksLead');
+    const list = document.createElement('ul');
+    list.className = 'scan-mark-list';
+    marks.forEach((mk, i) => {
+      const li = document.createElement('li');
+      li.className = 'scan-mark';
+      const head = document.createElement('div');
+      head.className = 'scan-q-head';
+      const bar = document.createElement('b');
+      bar.textContent = t('scanBarShort', { n: mk.measure });
+      const part = document.createElement('span');
+      part.textContent = mk.part;
+      head.append(bar, part);
+      li.appendChild(head);
+      if (mk.img) {
+        const img = document.createElement('img');
+        const url = URL.createObjectURL(new Blob([mk.img as BlobPart], { type: 'image/jpeg' }));
+        urls.push(url);
+        img.src = url;
+        img.alt = t('scanBarShort', { n: mk.measure });
+        img.className = 'scan-mark-img';
+        li.appendChild(img);
+      }
+      const note = document.createElement('p');
+      note.className = 'scan-q-text';
+      note.textContent = mk.note;
+      const actions = document.createElement('div');
+      actions.className = 'scan-actions';
+      const go = document.createElement('button');
+      go.type = 'button';
+      go.className = 'btn';
+      go.textContent = t('scanMarkGo');
+      go.addEventListener('click', () => {
+        jumpToMeasure(parseInt(mk.measure, 10));
+        closeOverlay();
+      });
+      const ok = document.createElement('button');
+      ok.type = 'button';
+      ok.className = 'btn ghost';
+      ok.textContent = t('scanMarkOk');
+      ok.addEventListener('click', async () => {
+        ok.disabled = true;
+        const rest = marks.filter((_, k) => k !== i);
+        try {
+          await saveScanMarks(song.id, rest);
+          song.scanMarks = rest.length ? rest : undefined;
+          renderScanMarks();
+          toast(t('scanMarkDone'));
+          if (rest.length) render();
+          else closeOverlay();
+        } catch (err) {
+          ok.disabled = false;
+          toast(errorText(err), 'error');
+        }
+      });
+      actions.append(go, ok);
+      li.append(note, actions);
+      list.appendChild(li);
+    });
+    body.append(lead, list);
+  };
+  render();
+  openSheet(t('scanMarksTitle'), body, opener, () => urls.forEach((u) => URL.revokeObjectURL(u)));
+}
+
 function openLightOffsetSheet(opener: HTMLElement | null) {
   const body = document.createElement('div');
   body.className = 'sheet-body offset-body';
@@ -1453,11 +1541,11 @@ function renderScanChip() {
 }
 
 /** A checked scan goes into the repertoire like an imported MusicXML file. */
-async function importScannedScore(title: string, xml: string) {
+async function importScannedScore(title: string, xml: string, marks: ScanMark[]) {
   parseMusicXML(xml); // throws on anything the player couldn't open
-  const id = await saveImportedSong({ title, xml, format: 'musicxml', ensemble: importEnsemble() });
+  const id = await saveImportedSong({ title, xml, format: 'musicxml', ensemble: importEnsemble(), scanMarks: marks });
   toast(t('added', { title }));
-  void selectSong({ id, title, xml, format: 'musicxml', imported: true });
+  void selectSong({ id, title, xml, format: 'musicxml', imported: true, scanMarks: marks.length ? marks : undefined });
 }
 importInput.addEventListener('change', () => {
   if (importInput.files?.length) void importFiles(importInput.files);
@@ -2286,6 +2374,7 @@ function rebuildStaffView() {
   staffView.setZoom(zoomOf.staff);
   staffView.setPartMix(partMix);
   staffView.setSections(effectiveSections());
+  renderScanMarks();
   resizeCanvases();
 }
 
@@ -2717,6 +2806,7 @@ function renderSections() {
   const sections = effectiveSections();
   pianoRoll?.setSections(sections);
   staffView?.setSections(sections);
+  renderScanMarks();
   const total = currentScore?.totalBeats || 1;
   sectionMarksEl.replaceChildren(
     ...sections.map((s, i) => {
@@ -2743,6 +2833,8 @@ function openPlayerMenu(anchor: HTMLElement) {
     // Saving defaults is a laptop task, like adding sections.
     if (!isNarrow()) items.push({ label: t('saveDefaults'), icon: 'save', onSelect: saveDefaults });
     if (sectionsEditable() && manualSections.length) items.push({ label: t('removeAllSections'), icon: 'flag', onSelect: () => void removeAllSections() });
+    const marks = currentSong.scanMarks?.length ?? 0;
+    if (marks) items.push({ label: t('scanMarksItem', { n: marks }), icon: 'help', onSelect: () => openScanMarksSheet(anchor) });
   }
   if (activeView === 'roll') items.push({ label: t('followMusic'), icon: 'fitHeight', checked: followPref, onSelect: () => setFollow(!followPref) });
   items.push(...soundItems());
@@ -3740,6 +3832,7 @@ async function runBootstrap() {
           removedParts: s.removedParts,
           splitParts: s.splitParts,
           swing: s.swing,
+          scanMarks: s.scanMarks,
           order: songOrder(s),
         }));
         renderSongList();
@@ -3747,6 +3840,11 @@ async function runBootstrap() {
         // it's paused -- reloading mid-playback would cut the music off).
         const fresh = currentSong && importedSongs.find((s) => s.id === currentSong!.id);
         if (fresh && currentSong && voiceSetupKey(fresh) !== voiceSetupKey(currentSong) && !audioEngine?.isPlaying()) void reloadCurrentSong();
+        // Places to check ticked off on another device.
+        if (fresh && currentSong && fresh.scanMarks !== currentSong.scanMarks) {
+          currentSong.scanMarks = fresh.scanMarks;
+          renderScanMarks();
+        }
         // A remote songId can arrive before this device's own library listener has caught up
         // with it (e.g. it was just imported elsewhere) -- re-apply the last state we got once
         // the library list might actually contain it.

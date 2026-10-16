@@ -56,6 +56,17 @@ export interface StoredSong {
   splitParts?: string[];
   // Played with swing (swing.ts) instead of straight -- a choice for the song, for everyone.
   swing?: boolean;
+  // A scanned song (scan.ts): the places the scan wasn't sure of, for the singers to check, until
+  // someone says they're fine. img: a small JPEG of the bar on the scanned page.
+  scanMarks?: ScanMark[];
+}
+
+export interface ScanMark {
+  m: number; // the bar's position in the file
+  measure: string; // its printed number
+  part: string; // the voice's name, "" for all
+  note: string;
+  img?: Uint8Array;
 }
 
 export type VoiceClef = 'treble' | 'treble8' | 'bass';
@@ -82,8 +93,21 @@ function parseSongDoc(id: string, data: Record<string, unknown>): StoredSong {
     removedParts: Array.isArray(data.removedParts) ? (data.removedParts as string[]) : undefined,
     splitParts: Array.isArray(data.splitParts) ? (data.splitParts as string[]) : undefined,
     swing: data.swing === true ? true : undefined,
+    scanMarks: Array.isArray(data.scanMarks) ? (data.scanMarks as Record<string, unknown>[]).map(readScanMark) : undefined,
   };
 }
+
+function readScanMark(d: Record<string, unknown>): ScanMark {
+  return {
+    m: Number(d.m) || 0,
+    measure: String(d.measure ?? ''),
+    part: String(d.part ?? ''),
+    note: String(d.note ?? ''),
+    img: d.img instanceof Bytes ? d.img.toUint8Array() : undefined,
+  };
+}
+
+const writeScanMarks = (marks: ScanMark[]) => marks.map(({ img, ...rest }) => (img ? { ...rest, img: Bytes.fromUint8Array(img) } : rest));
 
 /** Live-subscribes to an ensemble's songs (the only query the Firestore rules allow); the callback
  *  fires immediately and again on every change from any device. */
@@ -140,7 +164,7 @@ export async function saveSongOrder(places: { id: string; sortKey: number }[]): 
 }
 
 /** Returns the new song's id (available immediately from Firestore's optimistic local write). */
-export async function saveImportedSong(song: { title: string; xml: string; format: SongFormat; ensemble?: string }): Promise<string> {
+export async function saveImportedSong(song: { title: string; xml: string; format: SongFormat; ensemble?: string; scanMarks?: ScanMark[] }): Promise<string> {
   if (!db) throw new Error('Firebase is not configured');
   const compressed = gzipSync(strToU8(song.xml));
   if (compressed.byteLength > MAX_COMPRESSED_XML_BYTES) {
@@ -148,6 +172,15 @@ export async function saveImportedSong(song: { title: string; xml: string; forma
       `This score is too large (${Math.round(compressed.byteLength / 1024)} KB compressed) -- Firestore caps documents at 1 MB.`,
     );
   }
+  // The scan's pictures of its doubtful bars only as far as they fit beside the score.
+  let room = MAX_COMPRESSED_XML_BYTES - compressed.byteLength;
+  const marks = (song.scanMarks ?? []).map((mk) => {
+    room -= 200 + mk.note.length;
+    if (!mk.img) return mk;
+    if (mk.img.byteLength > room) return { ...mk, img: undefined };
+    room -= mk.img.byteLength;
+    return mk;
+  });
   const docRef = await addDoc(collection(db, SONGS_COLLECTION), {
     title: song.title,
     xmlGz: Bytes.fromUint8Array(compressed),
@@ -155,8 +188,15 @@ export async function saveImportedSong(song: { title: string; xml: string; forma
     importedAt: Date.now(),
     createdAt: serverTimestamp(),
     ...(song.ensemble ? { ensemble: song.ensemble } : {}),
+    ...(marks.length ? { scanMarks: writeScanMarks(marks) } : {}),
   });
   return docRef.id;
+}
+
+/** The scan's places to check that are left (one was found fine and taken off the list). */
+export async function saveScanMarks(id: string, marks: ScanMark[]): Promise<void> {
+  if (!db) throw new Error('Firebase is not configured');
+  await updateDoc(doc(db, SONGS_COLLECTION, id), { scanMarks: writeScanMarks(marks) });
 }
 
 export async function deleteImportedSong(id: string): Promise<void> {

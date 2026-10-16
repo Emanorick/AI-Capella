@@ -5,6 +5,8 @@ export const INK1 = '#13121E';
 export const INK2 = '#1B1929';
 export const INK3 = '#252235';
 export const PAPER = '#EFE7DA';
+// Bars the scan wasn't sure of (scan marks): a small gold "?" by their number in the rulers.
+export const QUERY = '#EDC96B';
 
 /**
  * The stage the score sits on: velvet, a touch lighter at the top like fabric catching light,
@@ -173,4 +175,19 @@ export function canvasFontsReady(): Promise<void> {
   ]).then(() => undefined);
   const timeout = new Promise<void>((resolve) => setTimeout(resolve, 2500));
   return Promise.race([loads, timeout]).catch(() => undefined);
+}
+
+/** The "?" by a bar number in a ruler (x: its left edge, y: the number's baseline); returns its width. */
+export function drawQueryMark(ctx: CanvasRenderingContext2D, x: number, y: number): number {
+  ctx.save();
+  ctx.fillStyle = QUERY;
+  ctx.beginPath();
+  ctx.arc(x + 5.5, y - 4, 5.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = INK0;
+  ctx.font = `700 9px ${FONT_TEXT}`;
+  ctx.textAlign = 'center';
+  ctx.fillText('?', x + 5.5, y - 0.8);
+  ctx.restore();
+  return 11;
 }

@@ -1,7 +1,7 @@
 import { backingSize } from './pixels';
 import type { MeasureInfo, NoteEvent, PartInfo, Score } from './score';
 import type { PartMixState } from './audioEngine';
-import { FONT_DISPLAY, FONT_MONO, FONT_MUSIC, FONT_TEXT, INK1, PAPER, paper, stageFill, playheadBeam, readingStrip, paperGrain } from './theme';
+import { FONT_DISPLAY, FONT_MONO, FONT_MUSIC, FONT_TEXT, INK1, PAPER, paper, stageFill, playheadBeam, readingStrip, paperGrain, drawQueryMark } from './theme';
 import { PAPER_DESIGN } from './design';
 import { drawRulerSignature, signatureChanges, type SignatureChange } from './signatures';
 import { drawInkMark, layoutMarks, MARKS_ON, type MarkLayout } from './goldInk';
@@ -569,6 +569,7 @@ export class StaffView {
   private transpose = 0;
   private gutterPx = 80;
   private sections: { label: string; beat: number }[] = [];
+  private markedBars = new Set<number>();
   // Fill-the-height factor (see MAX_FILL_SCALE) and the extra room between staves it leaves.
   // render() draws in "logical" units -- cssWidth/cssHeight/pixelsPerBeat swapped for the
   // scaled-down values -- under a ctx.scale(fill), so the drawing code itself is unchanged.
@@ -699,6 +700,11 @@ export class StaffView {
   /** Section letters (rehearsal marks) printed as boxed letters in the ruler. */
   setSections(sections: { label: string; beat: number }[]) {
     this.sections = sections;
+  }
+
+  /** Bar numbers the scan wasn't sure of, marked with a "?" in the ruler. */
+  setMarkedBars(bars: Set<number>) {
+    this.markedBars = bars;
   }
 
   /**
@@ -986,10 +992,12 @@ export class StaffView {
       ctx.font = `600 11px ${FONT_MONO}`;
       ctx.fillStyle = paper(0.62);
       ctx.fillText(String(measure.number), textX, 18);
+      let after = textX + ctx.measureText(String(measure.number)).width;
+      if (this.markedBars.has(measure.number)) after += 3 + drawQueryMark(ctx, after + 3, 18);
       const change = this.signatureAt.get(measure.startBeat);
       if (change) {
         const fifths = change.fifths !== undefined ? this.transposedFifths(change.fifths) : undefined;
-        drawRulerSignature(ctx, change, fifths, textX + ctx.measureText(String(measure.number)).width + 7, paper(0.85));
+        drawRulerSignature(ctx, change, fifths, after + 7, paper(0.85));
       }
     }
     ctx.restore();

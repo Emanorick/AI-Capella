@@ -2,7 +2,7 @@
   "name": "ai-capella-omr",
   "private": true,
   "type": "module",
-  "description": "Sheet-music scanning for AI-Capella: Audiveris recognition, then a GPT check of every page against the scan.",
+  "description": "Sheet-music scanning for AI-Capella: GPT reads every page, checks it in a second run and asks back where it is unsure.",
   "engines": {
     "node": ">=20"
   },
