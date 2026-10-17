@@ -2150,6 +2150,399 @@ button.stepper-value:hover {
   }
 }
 
+/* ---- Feedback (feedback.ts) --------------------------------------------------------------
+   A quiet button in the top bar, a short form, a five-question survey, a card asking for it
+   once, and the leaders' inbox. */
+.fb-btn {
+  position: relative;
+}
+
+.fb-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--q-gold, #edc96b);
+  color: var(--ink-0);
+  font: 700 11px/18px var(--f-mono);
+  font-style: normal;
+  text-align: center;
+}
+
+@media (max-width: 899px) {
+  .fb-btn span {
+    display: none;
+  }
+}
+
+.fb {
+  display: grid;
+  gap: 16px;
+}
+
+.fb-lead {
+  margin: 0;
+  color: var(--paper-dim);
+  line-height: 1.5;
+}
+
+.fb-field {
+  display: grid;
+  gap: 8px;
+}
+
+.fb-label {
+  font-weight: 600;
+  font-size: 14.5px;
+}
+
+.fb-text {
+  resize: vertical;
+  min-height: 110px;
+  font: inherit;
+  line-height: 1.45;
+}
+
+.fb textarea.field {
+  font: inherit;
+  resize: vertical;
+}
+
+.fb-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fb-choice {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 20px;
+  border: 1px solid var(--hair-2);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--paper-dim);
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+}
+
+.fb-choice:hover {
+  border-color: var(--paper-dim);
+}
+
+.fb-choice[aria-pressed='true'],
+.fb-choice[aria-checked='true'] {
+  background: var(--paper);
+  border-color: var(--paper);
+  color: var(--ink-0);
+}
+
+.fb-context {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 13.5px;
+  color: var(--paper-dim);
+  cursor: pointer;
+}
+
+.fb-context input {
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  accent-color: var(--live);
+  flex: none;
+}
+
+.fb-context small {
+  display: block;
+  margin-top: 3px;
+  font: 500 12px/1.4 var(--f-mono);
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.fb-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.fb-survey-link {
+  justify-self: center;
+}
+
+.fb-q {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.fb-q legend {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 0;
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.fb-num {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  background: var(--ink-3);
+  font: 700 12px/1 var(--f-mono);
+}
+
+.fb-scale .fb-choices {
+  flex-wrap: nowrap;
+}
+
+.fb-scale .fb-choice {
+  flex: 1;
+  padding: 0;
+  font-family: var(--f-mono);
+}
+
+.fb-scale-ends {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* The card asking for the survey: bottom right on a laptop, above the controls on a phone. */
+.fb-ask {
+  position: fixed;
+  right: 20px;
+  bottom: calc(110px + var(--safe-b));
+  z-index: 1050;
+  width: min(360px, calc(100vw - 32px));
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px 12px;
+  padding: 16px 16px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--hair-2);
+  background: var(--ink-2);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity var(--t-med), transform var(--t-med) var(--ease);
+}
+
+.fb-ask.shown {
+  opacity: 1;
+  transform: none;
+}
+
+.fb-ask-icon {
+  color: var(--q-gold, #edc96b);
+}
+
+.fb-ask-icon .ic {
+  width: 24px;
+  height: 24px;
+}
+
+.fb-ask-text {
+  display: grid;
+  gap: 4px;
+  padding-right: 22px;
+  line-height: 1.4;
+}
+
+.fb-ask-text span {
+  color: var(--paper-dim);
+  font-size: 14px;
+}
+
+.fb-ask-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.fb-ask-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+
+@media (max-width: 899px) {
+  .fb-ask {
+    right: 16px;
+    bottom: calc(150px + var(--safe-b));
+  }
+}
+
+/* The leaders' inbox */
+.fb-summary {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: var(--r-md);
+  background: var(--ink-1);
+  border: 1px solid var(--hair);
+}
+
+.fb-summary-line {
+  margin: 0;
+  font-size: 14px;
+  color: var(--paper-dim);
+}
+
+.fb-tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.fb-tile {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--ink-2);
+}
+
+.fb-tile b {
+  font: 700 20px/1.1 var(--f-mono);
+}
+
+.fb-tile span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.fb-filters .fb-choice {
+  min-height: 34px;
+  font-size: 13px;
+}
+
+.fb-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.fb-item {
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  background: var(--ink-1);
+  border: 1px solid var(--hair);
+  border-left: 3px solid var(--fb-kind, var(--muted));
+}
+
+.fb-item.kind-bug {
+  --fb-kind: var(--danger);
+}
+
+.fb-item.kind-wish {
+  --fb-kind: #72b7f2;
+}
+
+.fb-item.kind-idea {
+  --fb-kind: #edc96b;
+}
+
+.fb-item.kind-note {
+  --fb-kind: #a9d38a;
+}
+
+.fb-item.kind-survey {
+  --fb-kind: #c891ee;
+}
+
+.fb-item.is-done {
+  opacity: 0.55;
+}
+
+.fb-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  font-size: 13px;
+}
+
+.fb-kind {
+  font-weight: 700;
+  color: var(--fb-kind);
+}
+
+.fb-when {
+  color: var(--muted);
+  font-family: var(--f-mono);
+  font-size: 12px;
+}
+
+.fb-who {
+  margin-left: auto;
+  font-size: 13.5px;
+}
+
+.fb-item-text {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.fb-survey-line {
+  margin: 8px 0 0;
+  font-size: 13.5px;
+  color: var(--paper);
+}
+
+.fb-item-context {
+  margin: 8px 0 0;
+  font: 500 12px/1.4 var(--f-mono);
+  color: var(--muted);
+}
+
+.fb-item-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.btn.small {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 13.5px;
+}
+
+.btn.ghost.danger {
+  background: none;
+  border-color: transparent;
+  color: var(--danger);
+}
+
+.fb-empty {
+  padding: 18px 0;
+  text-align: center;
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fb-ask {
+    transition: none;
+  }
+}
+
 /* ---- Scan sheet music ----------------------------------------------------------------- */
 
 .btn.ghost {

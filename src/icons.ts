@@ -45,6 +45,7 @@ const PATHS = {
   chevronDown: `<path d="M5.5 9L12 15.5 18.5 9" ${S} stroke-width="2"/>`,
   key: `<g ${S} stroke-width="1.8"><circle cx="8" cy="15.5" r="4"/><path d="M10.9 12.6L19 4.5M15.5 8l2.5 2.5M13.3 10.2l2 2"/></g>`,
   globe: `<g ${S} stroke-width="1.7"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5c-2.4-2.3-3.6-5.1-3.6-8.5S9.6 5.8 12 3.5z"/></g>`,
+  chat: `<g ${S} stroke-width="1.8"><path d="M5.5 5h13A1.5 1.5 0 0 1 20 6.5v8.5a1.5 1.5 0 0 1-1.5 1.5H11l-4.5 3.6v-3.6h-1A1.5 1.5 0 0 1 4 15V6.5A1.5 1.5 0 0 1 5.5 5z"/><path d="M8.2 9.4h7.6M8.2 12.4h4.8"/></g>`,
   help: `<g ${S} stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.6a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.4"/></g><circle cx="12" cy="16.9" r="1.05" fill="currentColor"/>`,
 } as const;
 

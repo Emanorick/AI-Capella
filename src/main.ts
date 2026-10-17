@@ -31,6 +31,7 @@ import { createPowerHint } from './powerHint';
 import { attachReorder } from './reorder';
 import type { PdfVoice } from './exportPdf';
 import { INTRO_ON, introDue, introRunning, startIntro, stopIntro } from './intro';
+import { deviceSummary, feedbackMenuLabel, feedbackOn, initFeedback, openFeedbackInbox, openFeedbackSheet, openLeaderFeedbackMenu } from './feedback';
 import { canSwing, swingMap, swingScore } from './swing';
 import { loadScriptFont } from './goldInk';
 import { closeOverlay, confirmDialog, isNarrow, openMenu, openPopover, openSheet, promptDialog, toast } from './ui';
@@ -139,6 +140,7 @@ app.innerHTML = `
     <header class="lib-top">
       <span class="brand"><canvas class="mark" aria-hidden="true"></canvas><span class="wordmark" aria-label="LightScore"><span class="ls-l">Light</span>Score</span></span>
       <div class="lib-top-r">
+        <button type="button" class="badge fb-btn" data-action="feedback" aria-label="${t('fbButton')}" hidden>${icon('chat')}<span>${t('fbButton')}</span><i class="fb-count" hidden></i></button>
         <div class="seg mode-seg" id="mode-seg" role="group" aria-label="${t('mode')}">
           <button type="button" data-action="mode" data-mode="solo">${icon('user')}<span>${modeName('solo')}</span></button>
           <button type="button" data-action="mode" data-mode="ensemble">${icon('users')}<span>${modeName('ensemble')}</span><i class="live-dot" aria-hidden="true"></i></button>
@@ -178,6 +180,7 @@ app.innerHTML = `
           <button type="button" data-action="view" data-view="roll" aria-label="${t('pianoRoll')}">${icon('roll')}<span>${t('pianoRoll')}</span></button>
           <button type="button" data-action="view" data-view="staff" aria-label="${t('sheetMusic')}">${icon('sheet')}<span>${t('sheetMusic')}</span></button>
         </div>
+        <button type="button" class="badge fb-btn" data-action="feedback" aria-label="${t('fbButton')}" hidden>${icon('chat')}<span>${t('fbButton')}</span><i class="fb-count" hidden></i></button>
         <button type="button" class="badge" id="mode-badge"></button>
         <button type="button" class="icon-btn landscape-only" data-action="open-mixer" aria-label="${t('voices')}">${icon('mixer')}</button>
         <button type="button" class="icon-btn" id="player-menu-btn" aria-label="${t('menu')}">${icon('more')}</button>
@@ -699,6 +702,7 @@ async function openEnsembleMenu(anchor: HTMLElement) {
   if (!inPublicFolder()) {
     const name = ensembleName(currentEnsemble);
     if (leads(currentEnsemble)) {
+      if (feedbackOn(currentEnsemble)) items.push({ label: feedbackMenuLabel(), icon: 'chat', onSelect: () => openFeedbackInbox(anchor) });
       items.push({ label: t('renameEnsemble'), icon: 'pencil', onSelect: () => void renameCurrentEnsemble() });
       items.push({ label: t('changeCodeFor', { name }), icon: 'key', onSelect: () => void setCodeFor(currentEnsemble) });
       items.push({ label: t('changeLeaderCodeFor', { name }), icon: 'crown', onSelect: () => void setLeaderCodeFor(currentEnsemble) });
@@ -1053,8 +1057,39 @@ function languageItems() {
   ];
 }
 document.querySelector<HTMLButtonElement>('#lib-menu-btn')!.addEventListener('click', (e) => {
-  openMenu(e.currentTarget as HTMLElement, [...languageItems(), ...introItems('library')], t('language'));
+  const anchor = e.currentTarget as HTMLElement;
+  openMenu(anchor, [...feedbackItems(anchor), ...languageItems(), ...introItems('library')], t('language'));
 });
+
+/** In an ensemble that asks for feedback: giving it (and, for its leaders, reading it). */
+function feedbackItems(anchor: HTMLElement) {
+  if (!feedbackOn(currentEnsemble)) return [];
+  const items: Parameters<typeof openMenu>[1] = [{ label: t('fbGive'), icon: 'chat', onSelect: () => openFeedbackSheet(anchor) }];
+  if (leads(currentEnsemble)) items.push({ label: feedbackMenuLabel(), icon: 'users', onSelect: () => openFeedbackInbox(anchor) });
+  return items;
+}
+
+/** Where this device is now, sent along with feedback so a problem can be found again. */
+function feedbackContext(): string {
+  const parts: string[] = [];
+  if (app.classList.contains('mode-player') && currentScore) {
+    const measure = measureAtBeat(currentScore, engineBeat());
+    parts.push(`„${currentScore.title}“`, `Takt ${measure?.number ?? 1}`, activeView === 'staff' ? 'Noten' : 'Klavierrolle');
+    if (transpose) parts.push(`Tonart ${transpose > 0 ? '+' : ''}${transpose}`);
+  } else parts.push('Repertoire');
+  parts.push(syncEnabled() ? (leaderId === myDeviceId ? 'gemeinsam, leitet' : isFollower() ? 'gemeinsam, folgt' : 'gemeinsam') : 'allein');
+  if (app.classList.contains('sing-along')) parts.push('Mitsing-Ansicht');
+  parts.push(deviceSummary(), lang);
+  return parts.join(' · ');
+}
+
+function showFeedbackCount(n: number) {
+  document.querySelectorAll<HTMLElement>('.fb-btn .fb-count').forEach((c) => {
+    c.hidden = !n;
+    c.textContent = n ? String(n) : '';
+  });
+  document.querySelectorAll<HTMLElement>('.fb-btn').forEach((b) => b.setAttribute('aria-label', n ? `${t('fbButton')} (${t('fbReadNew', { n })})` : t('fbButton')));
+}
 
 /** The introduction, to see again (intro.ts) -- while it's a draft, only where it's switched on. */
 function introItems(tour: 'library' | 'player') {
@@ -1066,6 +1101,11 @@ function introItems(tour: 'library' | 'player') {
  * place, no dialog or menu open, nothing playing, and not in the sing-along view.
  */
 function offerIntro(tour: 'library' | 'player') {
+  // Someone who saw the repertoire's tour before feedback was asked for: its one step, on its own.
+  if (tour === 'library' && !introDue('library') && introDue('feedback') && feedbackOn(currentEnsemble)) {
+    offerFeedbackIntro();
+    return;
+  }
   if (!introDue(tour)) return;
   const until = performance.now() + 15000;
   const check = () => {
@@ -1077,6 +1117,18 @@ function offerIntro(tour: 'library' | 'player') {
       !app.classList.contains('sing-along') &&
       (tour === 'player' ? !!currentScore : !!document.querySelector('#song-grid .song-card:not(.skeleton)'));
     if (ready) startIntro(tour);
+    else window.setTimeout(check, 400);
+  };
+  window.setTimeout(check, 900);
+}
+
+function offerFeedbackIntro() {
+  const until = performance.now() + 15000;
+  const check = () => {
+    if (!app.classList.contains('mode-library') || performance.now() > until || introRunning() || !introDue('feedback')) return;
+    const button = document.querySelector<HTMLElement>('#library .fb-btn');
+    const ready = !document.querySelector('.overlay') && !!button && !button.hidden && !!document.querySelector('#song-grid .song-card:not(.skeleton)');
+    if (ready) startIntro('feedback');
     else window.setTimeout(check, 400);
   };
   window.setTimeout(check, 900);
@@ -2846,7 +2898,7 @@ function openPlayerMenu(anchor: HTMLElement) {
   }
   // The sheet music as a PDF, from the file (not offered for MIDI imports: no notation in them).
   if (currentSong && currentSong.format !== 'score') items.push({ label: t('exportItem'), icon: 'file', onSelect: () => openExportSheet(anchor) });
-  items.push({ label: t('lightOffset'), icon: 'metronome', onSelect: () => openLightOffsetSheet(anchor) }, ...languageItems(), ...introItems('player'));
+  items.push({ label: t('lightOffset'), icon: 'metronome', onSelect: () => openLightOffsetSheet(anchor) }, ...feedbackItems(anchor), ...languageItems(), ...introItems('player'));
   openMenu(anchor, items, t('menu'));
 }
 
@@ -2883,6 +2935,10 @@ document.addEventListener('click', (e) => {
   const el = target.closest<HTMLElement>('[data-action]');
   if (!el) return;
   switch (el.dataset.action) {
+    case 'feedback':
+      if (leads(currentEnsemble)) openLeaderFeedbackMenu(el);
+      else openFeedbackSheet(el);
+      break;
     case 'play':
       togglePlay();
       break;
@@ -3816,6 +3872,17 @@ async function runBootstrap() {
     await ensureSignedIn();
     void refreshEnsembleNames().then(renderLibraryHead).catch(() => {});
     initScan({ onImport: importScannedScore, onStatusChange: renderScanChip });
+    if (feedbackOn(currentEnsemble)) {
+      document.querySelectorAll<HTMLElement>('.fb-btn').forEach((b) => (b.hidden = false));
+      initFeedback({
+        ensemble: currentEnsemble,
+        context: feedbackContext,
+        // Not while music plays, nor in a rehearsal someone leads.
+        isBusy: () => !!audioEngine?.isPlaying() || (syncEnabled() && leaderId != null),
+        onNewCount: showFeedbackCount,
+      });
+      offerIntro('library');
+    }
     subscribeToSongs(
       (songs, fromCache) => {
         libraryState = 'ready';

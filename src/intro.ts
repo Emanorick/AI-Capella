@@ -16,7 +16,7 @@ import { lang, t } from './i18n';
  */
 export const INTRO_ON = deviceChoice('intro', 'ai-capella-intro', ['an', 'aus'] as const, 'an') === 'an';
 
-export type TourId = 'library' | 'player';
+export type TourId = 'library' | 'player' | 'feedback';
 
 const OFF_KEY = 'ai-capella-intro-off';
 const doneKey = (id: TourId) => `ai-capella-intro-${id}-done`;
@@ -55,7 +55,7 @@ try {
 // Opening the app with ?intro=an starts the tours afresh.
 if (INTRO_ON && new URLSearchParams(location.search).get('intro') === 'an') {
   try {
-    for (const key of [OFF_KEY, doneKey('library'), doneKey('player')]) localStorage.removeItem(key);
+    for (const key of [OFF_KEY, doneKey('library'), doneKey('player'), doneKey('feedback')]) localStorage.removeItem(key);
     sessionStorage.removeItem(LATER_KEY);
   } catch {
     /* storage unavailable */
@@ -85,6 +85,17 @@ interface Step {
   phone?: Text;
   phoneTitle?: Text;
 }
+
+// Where to give feedback, in an ensemble that asks for it (feedback.ts): the last step of the
+// repertoire's tour, and a tour of its own for someone who has seen that tour already.
+const FEEDBACK_STEP: Step = {
+  at: ['#library .fb-btn'],
+  title: { de: 'Deine Rückmeldung', en: 'Your feedback' },
+  text: {
+    de: 'Ihr probiert LightScore gerade aus. Fällt dir etwas auf – ein Fehler, ein Wunsch, eine Idee? Hier hinein, es dauert eine Minute. Lesen kann es nur eure Leitung.',
+    en: 'You’re trying LightScore out. Notice something – a bug, a wish, an idea? Put it in here; it takes a minute. Only your leaders can read it.',
+  },
+};
 
 // Written as a coach would say it: one thing per step, what you can do and what it brings you,
 // beginning with the doing ("Tippe", "Zieh"), in a sentence or two. Shortcuts and the finer points
@@ -121,7 +132,9 @@ const TOURS: Record<TourId, Step[]> = {
         en: 'Choose “Together”: whoever leads starts the music on every device.',
       },
     },
+    FEEDBACK_STEP,
   ],
+  feedback: [FEEDBACK_STEP],
   player: [
     {
       at: ['#stage'],
@@ -403,8 +416,10 @@ export function startIntro(id: TourId, onClose?: () => void) {
     if (closed) return;
     closed = true;
     if (how === 'never') set(() => localStorage, OFF_KEY);
-    else if (how === 'done') set(() => localStorage, doneKey(id));
-    else if (how === 'later') set(() => sessionStorage, LATER_KEY);
+    else if (how === 'done') {
+      set(() => localStorage, doneKey(id));
+      if (steps.includes(FEEDBACK_STEP)) set(() => localStorage, doneKey('feedback'));
+    } else if (how === 'later') set(() => sessionStorage, LATER_KEY);
     window.removeEventListener('keydown', onKey, true);
     window.removeEventListener('keyup', onKeyUp, true);
     window.removeEventListener('resize', onResize);

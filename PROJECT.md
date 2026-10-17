@@ -476,6 +476,36 @@ played (`playedBeat`).
   a job is only visible to the device that started it. The older `functions/` spike (Claude
   vision only, one page) is superseded by this and isn't used by the app.
 
+### Feedback from people trying the app (`feedback.ts`)
+- For an ensemble flagged `feedback: true` in `ensembles.ts` — **Stolz und Vorurteil**, which the
+  Anhaltisches Theater Dessau is trying out. Everywhere else none of this shows.
+- **Feedback button** in the top bar of the repertoire and the player (on a phone only its speech
+  bubble), and *Feedback geben* in both ⋯ menus. The form: what kind (bug/problem, wish/
+  improvement, idea, remark/praise — the text field's hint follows it), the text, a name or role
+  if they like (remembered on the device), and — ticked by default, shown in full — where they
+  are: song, bar, view, key change, alone/together/leading/following, the sing-along view, device,
+  browser, window size, language. A link leads to the survey.
+- **Survey**, five questions, any of them skippable: used for (alone / together / looking up the
+  music / hardly yet), helps learning one's part (1–5), ease of use (1–5), what bothered or was
+  missing (text), keep using it for the production (yes/maybe/no). A small card offers it **once**
+  someone has come back on three days or had the app open 15 minutes: "Hast du eine Minute?" —
+  *Los* / *Später* / ×. Never while music plays or a rehearsal is led, never over a dialog or a
+  tour; at most twice (the second time after more use), × means never, sent means done.
+- **Intro:** the repertoire's tour ends on the feedback button in such an ensemble; someone who saw
+  the tour before gets that one step on its own, once.
+- **Sending:** to the `feedback` collection (ensemble, kind, text, name, context, survey, the
+  writer's uid, the server's time, done:false). If it can't go out — offline beyond what
+  Firestore queues itself, or refused (the rules not yet published) — it waits in localStorage and
+  goes out at the next start, once.
+- **Reading — leaders only** (firestore.rules: members create, only the ensemble's leaders read,
+  tick off — only `done` — or delete; nobody else reads it, not even the writer). The feedback
+  button shows a gold count of new entries for a leader and opens *Feedback geben* / *Feedback
+  lesen (n neu)*; the ensemble menu has *Feedback lesen* too. The inbox: counts per kind, the
+  survey's averages (helps learning, ease of use), keep-using and used-for tallies; filters (open,
+  all, per kind, done); each entry with kind colour, time, name, text, survey answers and context;
+  *Erledigt* / *Wieder öffnen*, *Löschen*; **CSV download** (semicolons and a BOM, so a German
+  spreadsheet opens it as is) and **copy as text**. What was open in the inbox counts as seen.
+
 ### Synced multi-device playback
 - Every connected device is a full remote control for one shared playback session: hitting
   Play/Pause/Stop, changing BPM, transpose, or the metronome, seeking via the ruler, marking a
@@ -698,6 +728,7 @@ AI-Capella/
 │   ├── firebaseConfig.ts      # Firebase web app config (not secret; see file comment)
 │   ├── pinGate.ts             # the PIN screen
 │   ├── scan.ts                # "Scan sheet music" sheet: pages, upload, progress, questions, result
+│   ├── feedback.ts            # feedback form, survey, the leaders' inbox (ensembles with feedback: true)
 │   ├── backdrop.ts            # the velvet wave backdrop behind the whole app
 │   └── style.css              # all styling
 ├── omr-service/            # scan service (Docker: own server or Cloud Run): GPT reads, checks, asks back

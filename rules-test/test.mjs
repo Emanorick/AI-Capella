@@ -1,6 +1,7 @@
 // The Firestore rules (../firestore.rules), checked against the emulator: npm install && npm test.
 // Seeds two ensembles and plays through joining, the separation of songs and sessions, setting up
-// an unguarded ensemble, attempts to take over or repoint codes, and changing a code.
+// an unguarded ensemble, attempts to take over or repoint codes, changing a code, and feedback
+// (written by members, read only by leaders).
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
 import { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 import fs from 'fs';
@@ -142,6 +143,31 @@ await check('suv: leads with it', true, () => setDoc(doc(fran, 'leaders', 'fran'
 await check('suv: records it', true, () => setDoc(doc(fran, 'ensembles', 'suv'), { leaderCodeId: L_SUV }, { merge: true }));
 await check('suv: the one who set it up cannot change its code now', false, () => setDoc(doc(erin, 'ensembleCodes', '9'.repeat(63) + 'a'), { ensemble: 'suv' }));
 await check('suv: its own session', true, () => getDoc(doc(fran, 'sessions', 'live-suv')));
+// Feedback: suv's members write it, only its leaders (fran) read, tick off or delete it.
+const gina = env.authenticatedContext('gina').firestore();
+await check('fb: gina joins suv', true, () => setDoc(doc(gina, 'members', 'gina', 'ensembles', 'suv'), { code: C_SUV }));
+const fb = (uid, extra = {}) => ({ ensemble: 'suv', uid, kind: 'bug', text: 'Der Ton hängt', name: '', context: 'Player · Takt 3', createdAt: serverTimestamp(), done: false, ...extra });
+await check('fb: a member writes feedback', true, () => setDoc(doc(gina, 'feedback', 'f1'), fb('gina')));
+await check('fb: with a survey', true, () => setDoc(doc(gina, 'feedback', 'f2'), fb('gina', { kind: 'survey', survey: { uses: ['alone'], helps: 4, ease: 5, keep: 'yes' } })));
+await check('fb: cannot read it back', false, () => getDoc(doc(gina, 'feedback', 'f1')));
+await check('fb: cannot list it', false, () => getDocs(query(collection(gina, 'feedback'), where('ensemble', '==', 'suv'))));
+await check('fb: not in someone else\'s name', false, () => setDoc(doc(gina, 'feedback', 'f3'), fb('fran')));
+await check('fb: not for an ensemble not joined', false, () => setDoc(doc(gina, 'feedback', 'f4'), fb('gina', { ensemble: 'nnb' })));
+await check('fb: not as a stranger', false, () => setDoc(doc(carol, 'feedback', 'f5'), fb('carol')));
+await check('fb: no extra fields', false, () => setDoc(doc(gina, 'feedback', 'f6'), fb('gina', { admin: true })));
+await check('fb: no made-up kind', false, () => setDoc(doc(gina, 'feedback', 'f7'), fb('gina', { kind: 'spam' })));
+await check('fb: not too long', false, () => setDoc(doc(gina, 'feedback', 'f8'), fb('gina', { text: 'x'.repeat(4001) })));
+await check('fb: not already done', false, () => setDoc(doc(gina, 'feedback', 'f9'), fb('gina', { done: true })));
+await check('fb: not backdated', false, () => setDoc(doc(gina, 'feedback', 'f10'), fb('gina', { createdAt: new Date(0) })));
+await check('fb: cannot change it after', false, () => updateDoc(doc(gina, 'feedback', 'f1'), { text: 'anders' }));
+await check('fb: the leader reads it', true, () => getDocs(query(collection(fran, 'feedback'), where('ensemble', '==', 'suv'))));
+await check('fb: a member of another ensemble does not', false, () => getDocs(query(collection(alice, 'feedback'), where('ensemble', '==', 'suv'))));
+await check('fb: another ensemble\'s leader does not', false, () => getDoc(doc(alice, 'feedback', 'f1')));
+await check('fb: the leader ticks it off', true, () => updateDoc(doc(fran, 'feedback', 'f1'), { done: true }));
+await check('fb: but cannot change the text', false, () => updateDoc(doc(fran, 'feedback', 'f1'), { text: 'anders' }));
+await check('fb: a member cannot tick it off', false, () => updateDoc(doc(gina, 'feedback', 'f2'), { done: true }));
+await check('fb: a member cannot delete it', false, () => deleteDoc(doc(gina, 'feedback', 'f2')));
+await check('fb: the leader deletes it', true, () => deleteDoc(doc(fran, 'feedback', 'f2')));
 console.log(`\n${pass} passed, ${fail} failed`);
 await env.cleanup();
 process.exit(fail ? 1 : 0);

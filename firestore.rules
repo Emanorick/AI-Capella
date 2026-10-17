@@ -11,6 +11,7 @@ rules_version = '2';
 //   songs/{songId}                      { ensemble, ... }     each song belongs to one ensemble
 //   sessions/live, sessions/live-<id>   rehearsing together: the first ensemble's, then the others'
 //   sessions/clockPing_<uid>            each device's clock calibration
+//   feedback/{id}                       { ensemble, kind, text, ... }  testers' feedback for the leaders
 //
 // Anything not matched below (config/access, the old PIN's hash, among it) is closed.
 service cloud.firestore {
@@ -130,6 +131,26 @@ service cloud.firestore {
       allow update: if memberOf(resource.data.ensemble) && memberOf(request.resource.data.ensemble)
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['sortKey']) || leaderOf(resource.data.ensemble));
       allow delete: if memberOf(resource.data.ensemble);
+    }
+
+    // Feedback (src/feedback.ts): an ensemble's members write it, only its leaders read it, mark it
+    // done or delete it. Nobody else reads it -- not even who wrote it. The writer is recorded (their
+    // sign-in), the time is the server's, and nothing else can be added.
+    match /feedback/{id} {
+      allow create: if memberOf(request.resource.data.ensemble)
+        && request.resource.data.keys().hasOnly(['ensemble', 'uid', 'kind', 'text', 'name', 'context', 'survey', 'createdAt', 'done'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.kind in ['bug', 'wish', 'idea', 'note', 'survey']
+        && request.resource.data.text is string && request.resource.data.text.size() <= 4000
+        && request.resource.data.name is string && request.resource.data.name.size() <= 80
+        && request.resource.data.context is string && request.resource.data.context.size() <= 600
+        && (!('survey' in request.resource.data) || (request.resource.data.survey is map && request.resource.data.survey.size() <= 8))
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.done == false;
+      allow read, delete: if leaderOf(resource.data.ensemble);
+      allow update: if leaderOf(resource.data.ensemble)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['done'])
+        && request.resource.data.done is bool;
     }
 
     match /sessions/{sessionId} {

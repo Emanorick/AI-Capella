@@ -19,6 +19,8 @@ export interface Ensemble {
   defaultName: string;
   /** The rehearsal session's document in the sessions collection; null: no rehearsing together. */
   channel: string | null;
+  /** Its members are asked for feedback (feedback.ts): people trying the app out. */
+  feedback?: boolean;
 }
 
 export const PUBLIC_ID = 'public';
@@ -31,7 +33,7 @@ export const ENSEMBLES: readonly Ensemble[] = [
   { id: FIRST_ENSEMBLE_ID, defaultName: 'Ensemble n.n.b.', channel: 'live' },
   { id: 'rm', defaultName: 'Relativ männlich', channel: 'live-rm' },
   { id: 'frederick', defaultName: 'Frederick', channel: 'live-frederick' }, // a personal workspace
-  { id: 'suv', defaultName: 'Stolz und Vorurteil', channel: 'live-suv' },
+  { id: 'suv', defaultName: 'Stolz und Vorurteil', channel: 'live-suv', feedback: true }, // tried out at the Anhaltisches Theater Dessau
 ];
 
 export function ensembleById(id: string): Ensemble | undefined {
