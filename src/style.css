@@ -2150,6 +2150,64 @@ button.stepper-value:hover {
   }
 }
 
+/* ---- Paper chooser (main.ts openPaperSheet) ------------------------------------------- */
+.paper-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.paper-option {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 14px;
+  align-items: center;
+  padding: 8px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--hair);
+  text-align: left;
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+
+.paper-option:hover {
+  border-color: var(--hair-2);
+}
+
+.paper-option[aria-checked='true'] {
+  border-color: var(--paper);
+  background: rgb(255 244 228 / 0.04);
+}
+
+.paper-swatch {
+  width: 150px;
+  height: 84px;
+  border-radius: 8px;
+  display: block;
+  background: #1b1621;
+}
+
+.paper-text {
+  display: grid;
+  gap: 4px;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--paper-dim);
+}
+
+.paper-text b {
+  color: var(--paper);
+  font-size: 15px;
+}
+
+@media (max-width: 420px) {
+  .paper-option {
+    grid-template-columns: 1fr;
+  }
+  .paper-swatch {
+    width: 100%;
+  }
+}
+
 /* ---- Feedback (feedback.ts) --------------------------------------------------------------
    A quiet button in the top bar, a short form, a five-question survey, a card asking for it
    once, and the leaders' inbox. */

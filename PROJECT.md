@@ -568,7 +568,7 @@ layer (strength between "subtle" and "balanced" of its design draft):
   is the ground everywhere and the waves are gone; the ink tokens shift to the paper's tones; bars
   are paper sheets, overlays vellum (tracing paper, blurred); the play button and pressed switches
   are blind-embossed; a voice chip is a punched hole lit in the voice's colour (covered when off).
-  The sheet view draws on a clear canvas over the stage's paper, with the lamp's strip at the
+  The sheet view paints its own paper (see "The paper" below), with the lamp's strip at the
   playhead (`theme.ts readingStrip`). Lines drawn by hand use `pen.ts`: a broad nib (thick across
   the nib, hairline along it) or a pointed pen (swelling on downstrokes). Covers are the song's
   voice lines written with the broad nib. The title animation (`artwork.ts drawPenRibbons`) writes
@@ -648,9 +648,37 @@ layer (strength between "subtle" and "balanced" of its design draft):
   (space, arrows, L, M) are held back. A device that was already using the app when the tours came
   (it had chosen alone or together, or opened an ensemble) has them only in the menu -- decided
   once, on its first start with them (`ai-capella-intro-checked`).
+- **The paper (`paper.ts`).** One texture for every paper surface, made on the device at start
+  (seeded, the same everywhere; a few tens of ms): a 512 px tile of its **surface** (soft
+  formation, a fine tooth, fibres, flecks — lighter as warm white, darker as shade, both as alpha
+  over the paper's colour) and one of **what the lamp shows through it** (light only: more where
+  the paper is thinner, less in its clumps of fibre, fibres as strands holding light back). The
+  CSS surfaces (ground, cards, bars, sheets, buttons) get it as `--fibre` (a 256 px PNG set on
+  `:root`; the SVG noise in style.css is only the first paint's fallback); the canvases paint it as
+  a pattern (`paintPaper`).
+  - **It moves with the music.** In the roll it is painted into the content buffer anchored to
+    beat 0 and the top row (`paperFrame`), also where the roll's content doesn't reach; in the
+    sheet view it is painted every frame anchored the same way (`beatToX(0)`, the staves' top) —
+    before, the sheet view's paper was the stage's CSS background and stood still under the moving
+    notes. Zooming stretches it with the music (across; in the roll also down, with the rows):
+    drawn as two layers an octave of scale apart that cross-fade (`fold`, as an endless zoom does),
+    so each stays put on the music and the grain keeps its size. Both layers and the paper's colour
+    are composed into one tile per stretch (`composedTile`, weights in 1/48 steps), so the screen
+    gets a single fill per frame (measured headless: the roll as fast as before, the sheet view
+    about one full-screen fill slower). The pinned margin keeps its paper still.
+  - **Against the lamp** (`backlight`): in a strip around the reading line (70 px behind, 150 ahead,
+    composed at CSS resolution — light through paper is soft) the paper shows its inside, anchored
+    like the paper; in the roll only on the paper, not in its holes (masked with the content
+    buffer); in the sheet view under the notes.
+  - **Four papers** (`?papier=…`, or ⋯ → *Papier* with live previews; per device, default
+    Nachtpapier): **Nachtpapier** (fine fibres along the roll, a soft formation), **Bütten**
+    (handmade: cloudy, rough tooth, fibres every way, flecks), **Vergé** (laid paper: fine laid lines
+    down the sheet and soft chain bands, faint on the surface, clear against the lamp — chain lines
+    as bands, since lines across would read as staff lines), **Washi** (long silky fibres, dark
+    strands against the light). Switching repaints at once (`paperchange`).
 - **Piano roll as a lit paper roll ("lantern").** `NOTE_STYLE` in `pianoRoll.ts`: part of the
   paper design (Samt & Glas uses the gel notes); any device can also pick it with `?roll=lantern`
-  / `?roll=gel`. The roll is dark paper (with fibres, `theme.ts paperGrain`) with a round hole per
+  / `?roll=gel`. The roll is dark paper (`paper.ts`, see "The paper" below) with a round hole per
   note, cut into the content buffer (a turned-down voice's holes are only marked, not cut). A lamp
   sits behind the paper at the reading line (`lantern.ts`): through the holes each voice's
   colour, full in the lamp's spot and dimmer with distance (never unreadable), white-hot right at
@@ -950,7 +978,7 @@ reading line, not the screen's right edge, so the "doesn't cover the screen" saf
 every time). Changes to what the roll shows (`invalidateBuffers`: mix, transpose, zoom, rows,
 sections, resize) drop the slices painted so far and repaint at once, as before; the second set is
 allocated and touched at that first paint, not in the first seconds of playback. The paper's
-grain is anchored to the music (`paperGrain`'s offset), so it doesn't jump when buffers change.
+grain is anchored to the music (`paper.ts`, `paperFrame`), so it doesn't jump when buffers change.
 
 **Measuring a device.** Opening the app with `?fps=1` (this visit only) shows a small probe while
 playing: frames per second, the typical gap between frames, how many came late in the last two

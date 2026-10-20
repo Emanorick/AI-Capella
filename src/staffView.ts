@@ -1,7 +1,8 @@
 import { backingSize } from './pixels';
 import type { MeasureInfo, NoteEvent, PartInfo, Score } from './score';
 import type { PartMixState } from './audioEngine';
-import { FONT_DISPLAY, FONT_MONO, FONT_MUSIC, FONT_TEXT, INK1, PAPER, paper, stageFill, playheadBeam, readingStrip, paperGrain, drawQueryMark } from './theme';
+import { FONT_DISPLAY, FONT_MONO, FONT_MUSIC, FONT_TEXT, INK1, PAPER, paper, stageFill, playheadBeam, readingStrip, drawQueryMark } from './theme';
+import { backlight, NIGHT_PAPER, paintPaper, STILL } from './paper';
 import { PAPER_DESIGN } from './design';
 import { drawRulerSignature, signatureChanges, type SignatureChange } from './signatures';
 import { drawInkMark, layoutMarks, MARKS_ON, type MarkLayout } from './goldInk';
@@ -9,6 +10,8 @@ import { drawInkMark, layoutMarks, MARKS_ON, type MarkLayout } from './goldInk';
 // Wider than the piano roll's (70): noteheads, stems, accidentals and syllables need the room.
 // A phone draws its staves larger (see updateFill), so it starts from less to show about a bar.
 export const BASE_PIXELS_PER_BEAT = 120;
+// How strongly the lamp shows the paper's inside around the reading line (paper.ts backlight).
+const PAPER_BACKLIGHT = 0.42;
 const BASE_PIXELS_PER_BEAT_NARROW = 76;
 export const STAFF_RULER_HEIGHT_PX = 28; // matches PianoRoll's ruler height, for a consistent look when toggling views
 const PLAYHEAD_X_RATIO = 0.2;
@@ -821,16 +824,23 @@ export class StaffView {
     if (width <= 0 || height <= 0) return;
     const G = this.gutterPx;
 
-    // Paper design: the canvas stays clear and the stage's paper (CSS, with its fibres) shows through.
-    if (PAPER_DESIGN) ctx.clearRect(0, 0, width, height);
-    else {
-      ctx.fillStyle = stageFill(ctx, height);
-      ctx.fillRect(0, 0, width, height);
-    }
-
     const startBeat = displayBeat - (this.playheadX() - G) / this.pixelsPerBeat;
     const endBeat = displayBeat + (width - this.playheadX()) / this.pixelsPerBeat;
     const layouts = this.visibleLayouts();
+    const playheadPx = Math.round(this.beatToX(playheadBeat, displayBeat));
+
+    if (PAPER_DESIGN) {
+      // The music is printed on the paper: it lies under the notes anchored to beat 0 and the top
+      // of the staves, moving and stretching with them; around the reading line the lamp behind it
+      // shows its inside.
+      const frame = { x: this.beatToX(0, displayBeat), y: STAFF_RULER_HEIGHT_PX - this.scrollY, sx: this.pixelsPerBeat / BASE_PIXELS_PER_BEAT, sy: 1 };
+      // (The margin and the ruler are painted over the rest.)
+      paintPaper(ctx, G, STAFF_RULER_HEIGHT_PX, width - G, height - STAFF_RULER_HEIGHT_PX, frame, 'surface', NIGHT_PAPER);
+      if (playheadPx > G - 60 && playheadPx < width + 160) backlight(ctx, playheadPx, STAFF_RULER_HEIGHT_PX, height - STAFF_RULER_HEIGHT_PX, frame, PAPER_BACKLIGHT);
+    } else {
+      ctx.fillStyle = stageFill(ctx, height);
+      ctx.fillRect(0, 0, width, height);
+    }
 
     ctx.save();
     ctx.beginPath();
@@ -843,7 +853,6 @@ export class StaffView {
     ctx.restore();
 
     // Played music steps back, as in the piano roll.
-    const playheadPx = Math.round(this.beatToX(playheadBeat, displayBeat));
     if (playheadPx > G) {
       if (PAPER_DESIGN) {
         // A soft edge, as on the punched roll, so the lamp's strip isn't cut in half.
@@ -884,15 +893,11 @@ export class StaffView {
   private drawMargin(ctx: CanvasRenderingContext2D, layouts: PartLayout[], startBeat: number, height: number) {
     const G = this.gutterPx;
     const ground = PAPER_DESIGN ? '27,22,33' : '19,18,30';
-    ctx.fillStyle = `rgb(${ground})`;
-    ctx.fillRect(0, STAFF_RULER_HEIGHT_PX, G, height - STAFF_RULER_HEIGHT_PX);
-    if (PAPER_DESIGN) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, STAFF_RULER_HEIGHT_PX, G + 28, height - STAFF_RULER_HEIGHT_PX);
-      ctx.clip();
-      paperGrain(ctx, G + 28, height);
-      ctx.restore();
+    // The pinned margin is a strip of its own: its paper stays put.
+    if (PAPER_DESIGN) paintPaper(ctx, 0, STAFF_RULER_HEIGHT_PX, G, height - STAFF_RULER_HEIGHT_PX, STILL, 'surface', NIGHT_PAPER);
+    else {
+      ctx.fillStyle = `rgb(${ground})`;
+      ctx.fillRect(0, STAFF_RULER_HEIGHT_PX, G, height - STAFF_RULER_HEIGHT_PX);
     }
     // Music scrolling into the margin fades out instead of stopping at a hard edge.
     const fade = ctx.createLinearGradient(G, 0, G + 28, 0);

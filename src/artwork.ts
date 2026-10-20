@@ -1,6 +1,7 @@
 import type { Score } from './score';
 import { colorForPart } from './palette';
-import { paperGrain, withAlpha } from './theme';
+import { withAlpha } from './theme';
+import { NIGHT_PAPER, paintPaper, STILL } from './paper';
 import { LOGO_DRAFT, PAPER_DESIGN, START_DRAFT, type LogoDraft } from './design';
 import { drawLightRibbons, RibbonField } from './lightRibbons';
 import { broadNib, pointAlong, pointedPen, type Pt } from './pen';
@@ -303,9 +304,7 @@ export function drawCover(ctx: CanvasRenderingContext2D, w: number, h: number, d
 /** Paper design: the song's voice lines written with a broad nib in the voice colours on night paper. */
 function drawPenCover(ctx: CanvasRenderingContext2D, w: number, h: number, data: CoverData) {
   const count = data.contours.length;
-  ctx.fillStyle = '#1b1621';
-  ctx.fillRect(0, 0, w, h);
-  paperGrain(ctx, w, h);
+  paintPaper(ctx, 0, 0, w, h, STILL, 'surface', NIGHT_PAPER);
   if (!count) return;
   const scale = Math.max(0.6, Math.min(1.4, w / 260));
   data.contours.forEach((contour, i) => {

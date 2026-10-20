@@ -1,7 +1,8 @@
 import { backingSize } from './pixels';
 import type { NoteEvent, Score, SlurArc } from './score';
 import { getBeatMarkers } from './score';
-import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, withAlpha, stageFill, gelPill, playheadBeam, paperGrain, drawQueryMark } from './theme';
+import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, withAlpha, stageFill, gelPill, playheadBeam, drawQueryMark } from './theme';
+import { backlight, BACKLIGHT_REACH, paintPaper, type PaperFrame } from './paper';
 import { Lantern, type Flare } from './lantern';
 import { deviceChoice, PAPER_DESIGN } from './design';
 import { drawRulerSignature, signatureChanges, transposeFifths, type SignatureChange } from './signatures';
@@ -40,6 +41,8 @@ type NoteStyle = 'lantern' | 'gel';
 const NOTE_STYLE: NoteStyle = deviceChoice('roll', 'ai-capella-roll', ['lantern', 'gel'] as const, PAPER_DESIGN ? 'lantern' : 'gel');
 const LANTERN = NOTE_STYLE === 'lantern';
 const LANTERN_PAPER = '#1b1621';
+// How strongly the lamp shows the paper's inside around the reading line (paper.ts backlight).
+const PAPER_BACKLIGHT = 0.5;
 const LANTERN_VOID = '#08060c'; // behind the paper, where no light reaches
 // The voices' colour filters behind the holes are soft anyway -- painted at reduced resolution.
 const GLASS_SCALE = 0.75;
@@ -508,6 +511,16 @@ export class PianoRoll {
     this.invalidateBuffers();
   }
 
+  /** Paints everything again (another paper was chosen). */
+  repaint() {
+    this.invalidateBuffers();
+  }
+
+  /** Where the paper lies: beat 0 at screen x `x`, the top row at `y`, stretched as the music is. */
+  private paperFrame(x: number, y: number, rowHeight: number): PaperFrame {
+    return { x, y, sx: this.pixelsPerBeat / BASE_PIXELS_PER_BEAT, sy: rowHeight / MIN_ROW_HEIGHT_PX };
+  }
+
   /** Bar numbers the scan wasn't sure of, marked with a "?" in the ruler. */
   setMarkedBars(bars: Set<number>) {
     if (bars.size === this.markedBars.size && [...bars].every((b) => this.markedBars.has(b))) return;
@@ -732,6 +745,7 @@ export class PianoRoll {
     const bufferBeatToX = (beat: number) => blitX + (beat - this.contentBufferOriginBeat) * this.pixelsPerBeat;
     const sounding = this.soundingNotes(playheadBeat, bufferBeatToX, rowHeight, contentAreaHeight, scale);
     let lit = false;
+    let lampPaper: { frame: PaperFrame; destX: number; destTop: number; srcStartCss: number; srcTop: number; srcHeightCss: number; scale: number } | null = null;
     if (this.contentBuffer) {
       const destX = blitX;
       // During a follow-the-music glide the buffer is scaled vertically (scale != 1); at rest it
@@ -759,9 +773,10 @@ export class PianoRoll {
         if (LANTERN) {
           // Paper also where the roll's content doesn't reach (above/below its pitch range).
           const covered = destTop + srcHeightCss * scale;
-          ctx.fillStyle = LANTERN_PAPER;
-          if (destTop > 0) ctx.fillRect(0, 0, width, destTop);
-          if (covered < contentAreaHeight) ctx.fillRect(0, covered, width, contentAreaHeight - covered);
+          const frame = this.paperFrame(destX - this.contentBufferOriginBeat * this.pixelsPerBeat, -scrollYSnapped * scale, rowHeight * scale);
+          if (destTop > 0) paintPaper(ctx, 0, 0, width, destTop, frame, 'surface', LANTERN_PAPER);
+          if (covered < contentAreaHeight) paintPaper(ctx, 0, covered, width, contentAreaHeight - covered, frame, 'surface', LANTERN_PAPER);
+          lampPaper = { frame, destX, destTop, srcStartCss: 0, srcTop, srcHeightCss, scale };
         }
       }
     }
@@ -785,6 +800,20 @@ export class PianoRoll {
         ctx.fillStyle = fade;
         ctx.fillRect(fadeFrom, 0, end - fadeFrom, contentAreaHeight);
       }
+    }
+    // The lamp shows the paper's inside around the reading line -- on the paper only, not in its holes.
+    if (lit && lampPaper && this.contentBuffer) {
+      const lp = lampPaper;
+      const buffer = this.contentBuffer;
+      const dpr = this.dpr;
+      const bufferCssWidth = this.contentBufferBeatsSpan * this.pixelsPerBeat;
+      backlight(ctx, playheadXPos, 0, contentAreaHeight, lp.frame, PAPER_BACKLIGHT, (s, left) => {
+        const from = Math.max(0, left - lp.destX);
+        const to = Math.min(bufferCssWidth, left + BACKLIGHT_REACH.behind + BACKLIGHT_REACH.ahead - lp.destX);
+        if (to <= from) return;
+        s.globalCompositeOperation = 'destination-in';
+        s.drawImage(buffer, from * dpr, lp.srcTop * dpr, (to - from) * dpr, lp.srcHeightCss * dpr, lp.destX + from - left, lp.destTop, to - from, lp.srcHeightCss * lp.scale);
+      });
     }
     // In front of the paper: the lamp's glow and the light spilling from its holes.
     if (lit) this.lantern!.over(ctx);
@@ -1114,11 +1143,10 @@ export class PianoRoll {
     const localBeatToX = (beat: number) => (beat - originBeat) * this.pixelsPerBeat;
     ctx.clearRect(0, 0, widthCss, heightCss);
     if (LANTERN) {
-      ctx.fillStyle = LANTERN_PAPER;
-      ctx.fillRect(0, 0, widthCss, heightCss);
-      // Anchored to the music, not to where this buffer starts: no jump in the grain when the
-      // next buffer is swapped in.
-      paperGrain(ctx, widthCss, heightCss, -originBeat * this.pixelsPerBeat);
+      // Anchored to the music (beat 0, the top row), not to where this buffer starts, and
+      // stretched with it: the holes keep their place in the paper when the roll scrolls, the next
+      // buffer is swapped in, the roll is zoomed or its rows grow.
+      paintPaper(ctx, 0, 0, widthCss, heightCss, this.paperFrame(-originBeat * this.pixelsPerBeat, 0, rowHeight), 'surface', LANTERN_PAPER);
     }
 
     // Rows shaded like piano keys: black-key rows a touch darker, and a hairline under every C, so

@@ -23,39 +23,6 @@ export function stageFill(ctx: CanvasRenderingContext2D, height: number): Canvas
   return fill;
 }
 
-let grainTile: HTMLCanvasElement | null = null;
-/**
- * The paper's fibres, painted into the piano roll's content buffer (so they scroll with the roll
- * like real paper, and cost nothing per frame).
- */
-/** The paper's grain over width x height; `offsetX` shifts it, so it can stay put on the music when a buffer starts elsewhere. */
-export function paperGrain(ctx: CanvasRenderingContext2D, width: number, height: number, offsetX = 0) {
-  if (!grainTile) {
-    const tile = document.createElement('canvas');
-    tile.width = tile.height = 96;
-    const t = tile.getContext('2d')!;
-    const img = t.createImageData(96, 96);
-    let seed = 11;
-    const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-    for (let i = 0; i < img.data.length; i += 4) {
-      const v = random() < 0.5 ? 255 : 0;
-      img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
-      img.data[i + 3] = random() < 0.35 ? 9 : 0;
-    }
-    t.putImageData(img, 0, 0);
-    // Fibres run along the roll: the noise is stretched horizontally.
-    grainTile = document.createElement('canvas');
-    grainTile.width = 288;
-    grainTile.height = 96;
-    grainTile.getContext('2d')!.drawImage(tile, 0, 0, 288, 96);
-  }
-  const pattern = ctx.createPattern(grainTile, 'repeat');
-  if (!pattern) return;
-  if (offsetX) pattern.setTransform(new DOMMatrix().translateSelf(offsetX % grainTile.width, 0));
-  ctx.fillStyle = pattern;
-  ctx.fillRect(0, 0, width, height);
-}
-
 /** Paper at the given opacity -- hairlines, grid, secondary text on the dark ground. */
 export function paper(alpha: number): string {
   return `rgba(239,231,218,${alpha})`;

@@ -18,11 +18,12 @@ import { deleteImportedSong, readScoreFile, saveSongOrder, songOrder, saveImport
 import { ensureSignedIn, isFirebaseConfigured } from './firebase';
 import { animateRibbons, coverDataFromScore, drawCover, drawMark, prepareCanvas, type CoverData } from './artwork';
 import { icon } from './icons';
-import { countLabel, keyName, lang, setLang, t } from './i18n';
+import { countLabel, keyName, lang, setLang, t, type MessageKey } from './i18n';
 import { canvasFontsReady } from './theme';
 import { initScan, openScanSheet, scanAvailable, scanStatusLine } from './scan';
 import { WaveBackdrop } from './backdrop';
-import { START_DRAFT, START_STAFF, START_STAGE } from './design';
+import { PAPER_DESIGN, START_DRAFT, START_STAFF, START_STAGE } from './design';
+import { initPaper, paintSwatch, PAPER_KINDS, paperKind, setPaperKind, type PaperKind } from './paper';
 import { lightScoreName, type TitleName } from './lightName';
 import { animateStaff } from './titleStaff';
 import { animateStage } from './titleStage';
@@ -1058,8 +1059,60 @@ function languageItems() {
 }
 document.querySelector<HTMLButtonElement>('#lib-menu-btn')!.addEventListener('click', (e) => {
   const anchor = e.currentTarget as HTMLElement;
-  openMenu(anchor, [...feedbackItems(anchor), ...languageItems(), ...introItems('library')], t('language'));
+  openMenu(anchor, [...feedbackItems(anchor), ...paperItems(anchor), ...languageItems(), ...introItems('library')], t('language'));
 });
+
+/** The paper design's paper, to choose on this device (paper.ts). */
+function paperItems(anchor: HTMLElement) {
+  return PAPER_DESIGN ? [{ label: t('paperMenu'), icon: 'sheet' as const, onSelect: () => openPaperSheet(anchor) }] : [];
+}
+
+function openPaperSheet(opener: HTMLElement | null) {
+  const body = document.createElement('div');
+  body.className = 'sheet-body paper-body';
+  const lead = document.createElement('p');
+  lead.className = 'ctl-note';
+  lead.textContent = t('paperLead');
+  const list = document.createElement('div');
+  list.className = 'paper-list';
+  list.setAttribute('role', 'radiogroup');
+  list.setAttribute('aria-label', t('paperMenu'));
+  const buttons = new Map<PaperKind, HTMLButtonElement>();
+  const mark = () => buttons.forEach((b, k) => b.setAttribute('aria-checked', String(k === paperKind())));
+  for (const kind of PAPER_KINDS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'paper-option';
+    b.setAttribute('role', 'radio');
+    const swatch = document.createElement('canvas');
+    swatch.className = 'paper-swatch';
+    swatch.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('span');
+    text.className = 'paper-text';
+    const name = document.createElement('b');
+    name.textContent = t(`paper_${kind}` as MessageKey);
+    const desc = document.createElement('span');
+    desc.textContent = t(`paper_${kind}_desc` as MessageKey);
+    text.append(name, desc);
+    b.append(swatch, text);
+    b.addEventListener('click', () => {
+      setPaperKind(kind);
+      mark();
+    });
+    buttons.set(kind, b);
+    list.appendChild(b);
+  }
+  mark();
+  body.append(lead, list);
+  openSheet(t('paperMenu'), body, opener);
+  // The previews, one per frame: each paper is made the first time it's shown.
+  PAPER_KINDS.forEach((kind, i) =>
+    window.setTimeout(() => {
+      const c = buttons.get(kind)!.querySelector('canvas')!;
+      paintSwatch(c, kind, c.clientWidth || 240, c.clientHeight || 96);
+    }, 60 + i * 50),
+  );
+}
 
 /** In an ensemble that asks for feedback: giving it (and, for its leaders, reading it). */
 function feedbackItems(anchor: HTMLElement) {
@@ -2898,7 +2951,7 @@ function openPlayerMenu(anchor: HTMLElement) {
   }
   // The sheet music as a PDF, from the file (not offered for MIDI imports: no notation in them).
   if (currentSong && currentSong.format !== 'score') items.push({ label: t('exportItem'), icon: 'file', onSelect: () => openExportSheet(anchor) });
-  items.push({ label: t('lightOffset'), icon: 'metronome', onSelect: () => openLightOffsetSheet(anchor) }, ...feedbackItems(anchor), ...languageItems(), ...introItems('player'));
+  items.push({ label: t('lightOffset'), icon: 'metronome', onSelect: () => openLightOffsetSheet(anchor) }, ...paperItems(anchor), ...feedbackItems(anchor), ...languageItems(), ...introItems('player'));
   openMenu(anchor, items, t('menu'));
 }
 
@@ -3728,6 +3781,15 @@ window.addEventListener('resize', () => {
   resizeCanvases();
   drawAllCovers();
   drawMarks();
+});
+
+// The paper design's paper (paper.ts): on the CSS surfaces from the start; another one chosen on
+// this device is painted everywhere at once.
+if (PAPER_DESIGN) initPaper();
+window.addEventListener('paperchange', () => {
+  pianoRoll?.repaint();
+  drawAllCovers();
+  renderNow();
 });
 
 // Mobile browsers can change the canvas's laid-out size (address bar show/hide, dynamic toolbar,
