@@ -673,12 +673,13 @@ layer (strength between "subtle" and "balanced" of its design draft):
   - **Quiet on purpose.** The first version was found beautiful but a little distracting (October
     2026): the surface, fibres, flecks and the light were all turned down to about 60 % (light
     to about half), so the paper is felt more than seen.
-  - **Four papers** (`?papier=…`, or ⋯ → *Papier* with live previews; per device, default
-    Nachtpapier): **Nachtpapier** (fine fibres along the roll, a soft formation), **Bütten**
-    (handmade: cloudy, rough tooth, fibres every way, flecks), **Vergé** (laid paper: fine laid lines
-    down the sheet and soft chain bands, faint on the surface, clear against the lamp — chain lines
-    as bands, since lines across would read as staff lines), **Washi** (long silky fibres, dark
-    strands against the light). Switching repaints at once (`paperchange`).
+  - **Four papers** (`?papier=…`, or ⋯ → *Papier* with live previews; per device). **Vergé** is
+    everyone's (chosen in October 2026, `DEFAULT_PAPER`): laid paper, fine laid lines down the
+    sheet and soft chain bands, faint on the surface, clear against the lamp (chain lines as bands,
+    since lines across would read as staff lines). A device can pick **Nachtpapier** (fine fibres
+    along the roll, a soft formation), **Bütten** (handmade: cloudy, rough tooth, fibres every way,
+    flecks) or **Washi** (long silky fibres, dark strands against the light). Switching repaints
+    at once (`paperchange`).
 - **Piano roll as a lit paper roll ("lantern").** `NOTE_STYLE` in `pianoRoll.ts`: part of the
   paper design (Samt & Glas uses the gel notes); any device can also pick it with `?roll=lantern`
   / `?roll=gel`. The roll is dark paper (`paper.ts`, see "The paper" below) with a round hole per

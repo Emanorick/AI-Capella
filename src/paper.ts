@@ -13,14 +13,16 @@
 // fibre (its formation), long fibres as dark strands, in laid paper the lines of the mould. That is
 // a second texture, of what light passes through, shown in a strip around the lamp (backlight()).
 //
-// Four kinds to choose from on a device (?papier=… or the menu): Nachtpapier (fine fibres along the
-// roll -- the default), Bütten (handmade: cloudy, rough, flecks), Vergé (laid paper, its lines
-// showing in the light) and Washi (Japanese paper, long silky fibres).
+// Four kinds: Vergé (laid paper, its lines showing in the light -- everyone's), and on a device
+// (?papier=… or the menu) Nachtpapier (fine fibres along the roll), Bütten (handmade: cloudy,
+// rough, flecks) or Washi (Japanese paper, long silky fibres).
 
 import { deviceChoice } from './design';
 
 export type PaperKind = 'nacht' | 'buetten' | 'verge' | 'washi';
-export const PAPER_KINDS: readonly PaperKind[] = ['nacht', 'buetten', 'verge', 'washi'];
+export const PAPER_KINDS: readonly PaperKind[] = ['verge', 'nacht', 'buetten', 'washi'];
+/** Everyone's paper, unless a device chose another: Vergé, chosen in October 2026. */
+export const DEFAULT_PAPER: PaperKind = 'verge';
 
 /** The colour of night paper (the roll, the sheet view, the covers). */
 export const NIGHT_PAPER = '#1b1621';
@@ -28,7 +30,7 @@ export const NIGHT_PAPER = '#1b1621';
 const N = 512; // the tile, in texture pixels
 const TS = 0.5; // CSS px per texture pixel: a tile is 256 px wide, and crisp on a 2x screen
 
-let kind: PaperKind = deviceChoice('papier', 'ai-capella-papier', PAPER_KINDS, 'nacht');
+let kind: PaperKind = deviceChoice('papier', 'ai-capella-papier', PAPER_KINDS, DEFAULT_PAPER);
 type Tiles = { surface: HTMLCanvasElement; light: HTMLCanvasElement };
 const made = new Map<PaperKind, Tiles>();
 
@@ -41,7 +43,7 @@ export function setPaperKind(next: PaperKind) {
   if (next === kind) return;
   kind = next;
   try {
-    if (next === 'nacht') localStorage.removeItem('ai-capella-papier');
+    if (next === DEFAULT_PAPER) localStorage.removeItem('ai-capella-papier');
     else localStorage.setItem('ai-capella-papier', next);
   } catch {
     /* for this visit only */
