@@ -24,6 +24,7 @@ import { initScan, openScanSheet, scanAvailable, scanStatusLine } from './scan';
 import { WaveBackdrop } from './backdrop';
 import { PAPER_DESIGN, START_DRAFT, START_STAFF, START_STAGE } from './design';
 import { initPaper, paintSwatch, PAPER_KINDS, paperKind, setPaperKind, type PaperKind } from './paper';
+import { applyPercussion } from './percussion';
 import { lightScoreName, type TitleName } from './lightName';
 import { animateStaff } from './titleStaff';
 import { animateStage } from './titleStage';
@@ -70,6 +71,7 @@ interface SongEntry {
   partNameOverrides?: Record<string, string>;
   savedConfig?: StoredSong['savedConfig'];
   clefOverrides?: StoredSong['clefOverrides'];
+  percussion?: StoredSong['percussion'];
   removedParts?: string[];
   splitParts?: string[];
   swing?: boolean;
@@ -2301,10 +2303,15 @@ function applyVoiceSetup(score: Score, song: SongEntry) {
     // A part on several staves keeps its staves' own clefs.
     if (choice && !part.staves) part.clef = CLEF_SPECS[choice];
   }
+  // Claps and stamps: recognised (a MIDI file's channel 10, a part's name), or chosen per voice.
+  percussionParts = applyPercussion(score, song.percussion, song.format === 'score');
 }
 
+/** The open song's voices made percussion by applyVoiceSetup (not those written so in the file). */
+let percussionParts = new Set<string>();
+
 function voiceSetupKey(song: SongEntry): string {
-  return JSON.stringify([song.removedParts ?? [], song.splitParts ?? [], song.clefOverrides ?? {}, !!song.swing]);
+  return JSON.stringify([song.removedParts ?? [], song.splitParts ?? [], song.clefOverrides ?? {}, song.percussion ?? {}, !!song.swing]);
 }
 
 // Swing (swing.ts): a library song's choice is stored with it, for everyone; the bundled samples
@@ -2376,6 +2383,13 @@ function openVoiceMenu(anchor: HTMLElement, partId: string) {
       items.push({ label, icon: 'sheet', checked: clef === value, onSelect: () => void setVoiceClef(partId, value) });
     }
   }
+  // Played as claps and stamps, or as notes -- for a voice the file doesn't already write as
+  // percussion itself.
+  const filePercussion = !percussionParts.has(partId) && (notesByPart.get(partId) ?? []).every((n) => n.unpitched);
+  if (!part.staves && !part.sourceId && !filePercussion) {
+    const on = percussionParts.has(partId);
+    items.push({ label: t('voicePercussion'), icon: 'quarter', checked: on, onSelect: () => void setVoicePercussion(partId, !on) });
+  }
   // A part on several staves is one voice; its staves can be made voices of their own (two people
   // playing a piano's two hands), and joined again.
   const split = currentSong.splitParts ?? [];
@@ -2407,6 +2421,25 @@ async function setSplitParts(splitParts: string[]) {
     if (entry) entry.splitParts = previous;
     toast(t('changeFailed', { msg: errorText(err) }), 'error');
     await reloadCurrentSong();
+  }
+}
+
+/** Plays a voice as claps and stamps, or as notes again -- for everyone; the open song reloads. */
+async function setVoicePercussion(partId: string, on: boolean) {
+  const song = currentSong;
+  if (!song?.imported) return;
+  const previous = { ...(song.percussion ?? {}) };
+  song.percussion = { ...previous, [partId]: on };
+  const entry = importedSongs.find((s) => s.id === song.id);
+  if (entry && entry !== song) entry.percussion = song.percussion;
+  void reloadCurrentSong();
+  try {
+    await updateSongMetadata(song.id, { percussion: { partId, on } });
+  } catch (err) {
+    song.percussion = previous;
+    if (entry && entry !== song) entry.percussion = previous;
+    toast(t('changeFailed', { msg: errorText(err) }), 'error');
+    void reloadCurrentSong();
   }
 }
 
@@ -3958,6 +3991,7 @@ async function runBootstrap() {
           partNameOverrides: s.partNameOverrides,
           savedConfig: s.savedConfig,
           clefOverrides: s.clefOverrides,
+          percussion: s.percussion,
           removedParts: s.removedParts,
           splitParts: s.splitParts,
           swing: s.swing,

@@ -48,6 +48,9 @@ export interface StoredSong {
   savedConfig?: { transpose?: number; bpm?: number; sections?: { label: string; beat: number }[]; played?: boolean };
   // Per-voice clef chosen in the app (keyed by part id), overriding the file's own <clef>.
   clefOverrides?: Record<string, VoiceClef>;
+  // Per voice (part id): played as percussion -- claps, stamps -- or not, chosen in the app; else
+  // as percussion.ts recognises it.
+  percussion?: Record<string, boolean>;
   // Voices removed in the app (part ids). The stored score itself is never rewritten, so a removed
   // voice can be restored at any time; it is filtered out when the song loads.
   removedParts?: string[];
@@ -90,6 +93,7 @@ function parseSongDoc(id: string, data: Record<string, unknown>): StoredSong {
     partNameOverrides: data.partNameOverrides as Record<string, string> | undefined,
     savedConfig: data.savedConfig as StoredSong['savedConfig'],
     clefOverrides: data.clefOverrides as StoredSong['clefOverrides'],
+    percussion: data.percussion && typeof data.percussion === 'object' ? (data.percussion as Record<string, boolean>) : undefined,
     removedParts: Array.isArray(data.removedParts) ? (data.removedParts as string[]) : undefined,
     splitParts: Array.isArray(data.splitParts) ? (data.splitParts as string[]) : undefined,
     swing: data.swing === true ? true : undefined,
@@ -218,7 +222,7 @@ export async function deleteImportedSong(id: string): Promise<void> {
  */
 export async function updateSongMetadata(
   id: string,
-  patch: { title?: string; ensemble?: string; swing?: boolean; partName?: { partId: string; name: string }; clef?: { partId: string; clef: VoiceClef }; removedParts?: string[]; splitParts?: string[] },
+  patch: { title?: string; ensemble?: string; swing?: boolean; partName?: { partId: string; name: string }; clef?: { partId: string; clef: VoiceClef }; percussion?: { partId: string; on: boolean }; removedParts?: string[]; splitParts?: string[] },
 ): Promise<void> {
   if (!db) throw new Error('Firebase is not configured');
   const fields: Record<string, unknown> = {};
@@ -228,6 +232,7 @@ export async function updateSongMetadata(
   if (patch.partName) fields[`partNameOverrides.${patch.partName.partId}`] = patch.partName.name;
   // Dot-path for the same reason as partNameOverrides: only this one voice's entry changes.
   if (patch.clef) fields[`clefOverrides.${patch.clef.partId}`] = patch.clef.clef;
+  if (patch.percussion) fields[`percussion.${patch.percussion.partId}`] = patch.percussion.on;
   if (patch.removedParts) fields.removedParts = patch.removedParts;
   if (patch.splitParts) fields.splitParts = patch.splitParts;
   await updateDoc(doc(db, SONGS_COLLECTION, id), fields);

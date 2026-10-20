@@ -235,7 +235,9 @@ export function parseMIDI(buffer: ArrayBuffer): Score {
     const multiChannel = (trackHasMultipleChannels.get(part.trackIndex) ?? 0) > 1;
     const name = multiChannel ? `${base} (ch ${part.channel + 1})` : base;
     const id = `p${trackCounter}`;
-    partInfos.push({ id, name });
+    // (Channel 10's notes are drums and body percussion: made percussion when the song loads,
+    // percussion.ts -- kept as keys here, so a part can still be played as notes if wished.)
+    partInfos.push({ id, name: part.channel === 9 && !part.trackName?.trim() ? 'Percussion' : name, midiChannel: part.channel + 1 });
     for (const note of part.notes) allNotes.push({ ...note, partId: id });
   }
   allNotes.sort((a, b) => a.startBeat - b.startBeat);

@@ -739,6 +739,7 @@ AI-Capella/
 │   ├── main.ts              # app shell, event wiring, transport/mix state, render loop
 │   ├── musicxml.ts           # MusicXML → Score parser
 │   ├── midi.ts                # Standard MIDI file → Score parser
+│   ├── percussion.ts          # claps, stamps, drums: recognised and placed as percussion
 │   ├── score.ts              # the Score data model + small pure helpers
 │   ├── pianoRoll.ts           # canvas rendering: the piano roll itself
 │   ├── staffView.ts           # canvas rendering: the alternate sheet-music view
@@ -937,6 +938,24 @@ always comes from the app's own BPM control, never the source file. Because the 
 `Score` has no natural MusicXML-equivalent text form worth manufacturing, MIDI imports are
 stored in the shared library as a JSON-serialized `Score` rather than XML text — see
 `StoredSong.format` in `library.ts`, which every load path branches on.
+
+**Clapping, stamping, drums** (`percussion.ts`). MIDI keeps percussion on channel 10, where a key
+is an instrument (General MIDI: 36 bass drum — how a stamp is usually written —, 39 hand clap,
+42 hi-hat …); played as pitches they sounded as piano notes. Each MIDI part keeps its channel
+(`PartInfo.midiChannel`), and when a song loads (`applyVoiceSetup` → `applyPercussion`) a part
+becomes percussion (`NoteEvent.unpitched`, as MusicXML's `<unpitched>`; percussion clef) when it
+is on channel 10, when its name says so (Klatschen/clap, Stampfen/stomp, Schnipsen/snap,
+Patschen/pat — one instrument — or percussion/Schlagwerk/drums/kit), or — a MIDI song stored
+before the channel was kept — when its notes look like a drum track (only short hits on a few
+of the usual drum keys). The notes are placed as drum notation prints them (stamp/bass drum
+low on F4, clap high on E5 with a cross, hi-hat and snaps on G5 …): by General MIDI's keys, by
+the instrument the name gives, or — body percussion written on ordinary pitches — lowest pitch
+the feet, highest the hands. MusicXML parts named so keep their printed places. Played as taps
+(`audioEngine.ts playTap`): low places as a thump (a falling sine), high crossed ones as a clap
+(three quick bursts of noise), the rest as before. The keys stay in the stored score, so it is
+reversible: each voice's ⋯ menu has **Als Schlagwerk (Klatschen, Stampfen)** to switch it on or
+off, for everyone (`StoredSong.percussion`, per part id, overriding the recognition either way;
+not offered for a voice the file itself writes as percussion).
 
 ### 4.3 Rendering (`pianoRoll.ts`)
 

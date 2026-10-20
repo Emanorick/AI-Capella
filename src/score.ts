@@ -1,6 +1,8 @@
 export interface PartInfo {
   id: string;
   name: string;
+  // MIDI imports: the channel its notes were on (1-16; 10 is percussion in General MIDI).
+  midiChannel?: number;
   // The clef actually notated in the source (MusicXML <clef>: <sign>/<line>/<clef-octave-change>),
   // when known -- absent for MIDI imports and any MusicXML file that omits it, in which case
   // staffView.ts falls back to a heuristic guess from the part's average pitch. octaveChange is

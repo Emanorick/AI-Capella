@@ -451,6 +451,8 @@ function playClick(ctx: AudioContext, destination: AudioNode, startTime: number,
 // for those printed low (bass drum, stamping). One second of noise per context, reused.
 const noiseBuffers = new WeakMap<BaseAudioContext, AudioBuffer>();
 function playTap(ctx: AudioContext, destination: AudioNode, startTime: number, staffMidi: number, level: number): Voice {
+  // A stamp or bass drum (printed low): a thump, felt more than heard.
+  if (staffMidi <= 66) return playThump(ctx, destination, startTime, level);
   let noise = noiseBuffers.get(ctx);
   if (!noise) {
     noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
@@ -468,8 +470,17 @@ function playTap(ctx: AudioContext, destination: AudioNode, startTime: number, s
   const gain = ctx.createGain();
   const peak = 0.5 * level;
   gain.gain.setValueAtTime(0.0001, startTime);
-  gain.gain.exponentialRampToValueAtTime(peak, startTime + 0.004);
-  gain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.09);
+  if (staffMidi >= 75) {
+    // A clap (printed high): several hands not quite together -- three quick bursts, then the room.
+    for (const at of [0, 0.009, 0.018]) {
+      gain.gain.exponentialRampToValueAtTime(peak, startTime + at + 0.002);
+      gain.gain.exponentialRampToValueAtTime(peak * 0.25, startTime + at + 0.008);
+    }
+    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.11);
+  } else {
+    gain.gain.exponentialRampToValueAtTime(peak, startTime + 0.004);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.09);
+  }
   src.connect(filter).connect(gain).connect(destination);
   src.start(startTime, Math.random() * 0.5);
   src.stop(startTime + 0.1);
@@ -483,6 +494,31 @@ function playTap(ctx: AudioContext, destination: AudioNode, startTime: number, s
     }
   });
   return { sources: [src], gain };
+}
+
+/** A stamp or bass drum: a low sine falling in pitch, with a little low noise for the floor. */
+function playThump(ctx: AudioContext, destination: AudioNode, startTime: number, level: number): Voice {
+  const osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(120, startTime);
+  osc.frequency.exponentialRampToValueAtTime(48, startTime + 0.12);
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.0001, startTime);
+  gain.gain.exponentialRampToValueAtTime(0.9 * level, startTime + 0.005);
+  gain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.2);
+  osc.connect(gain).connect(destination);
+  osc.start(startTime);
+  osc.stop(startTime + 0.22);
+  osc.addEventListener('ended', () => {
+    for (const node of [osc, gain]) {
+      try {
+        node.disconnect();
+      } catch {
+        // already disconnected
+      }
+    }
+  });
+  return { sources: [osc], gain };
 }
 
 export type PartMixState = 'normal' | 'muted' | 'solo';
