@@ -11,7 +11,7 @@ import { drawInkMark, layoutMarks, MARKS_ON, type MarkLayout } from './goldInk';
 // A phone draws its staves larger (see updateFill), so it starts from less to show about a bar.
 export const BASE_PIXELS_PER_BEAT = 120;
 // How strongly the lamp shows the paper's inside around the reading line (paper.ts backlight).
-const PAPER_BACKLIGHT = 0.42;
+const PAPER_BACKLIGHT = 0.2; // quieter than on the roll: here the music is read
 const BASE_PIXELS_PER_BEAT_NARROW = 76;
 export const STAFF_RULER_HEIGHT_PX = 28; // matches PianoRoll's ruler height, for a consistent look when toggling views
 const PLAYHEAD_X_RATIO = 0.2;

@@ -206,8 +206,9 @@ const RECIPES: Record<PaperKind, Recipe> = {
 };
 
 // How far a texture pixel may lighten or darken what is under it (alpha at full strength).
-const SURFACE_LIGHT = 0.09;
-const SURFACE_DARK = 0.14;
+// (Kept quiet: the paper is felt more than seen -- it mustn't draw the eye from the music.)
+const SURFACE_LIGHT = 0.055;
+const SURFACE_DARK = 0.085;
 // Against the lamp the paper only lets light through, more where it is thinner: light only.
 const LIGHT_BRIGHT = 0.3;
 const LIGHT_BASE = 0.35; // what passes even where it is thickest (relative)
@@ -310,7 +311,7 @@ function make(k: PaperKind) {
     wrapped(sctx, f.pts, () => {
       path(sctx, f.pts);
       sctx.lineWidth = f.width;
-      sctx.strokeStyle = f.shade > 0 ? `rgba(255,244,228,${(0.05 * f.shade).toFixed(3)})` : `rgba(4,2,8,${(0.09 * -f.shade).toFixed(3)})`;
+      sctx.strokeStyle = f.shade > 0 ? `rgba(255,244,228,${(0.032 * f.shade).toFixed(3)})` : `rgba(4,2,8,${(0.06 * -f.shade).toFixed(3)})`;
       sctx.stroke();
     });
     wrapped(lctx, f.pts, () => {
@@ -335,7 +336,7 @@ function make(k: PaperKind) {
       ctx.fillStyle = dark ? (warm ? `rgba(70,40,20,${alpha})` : `rgba(4,2,8,${alpha})`) : `rgba(255,244,228,${alpha * 0.6})`;
       ctx.fill();
     };
-    wrapped(sctx, pts, draw(sctx, 0.35));
+    wrapped(sctx, pts, draw(sctx, 0.2));
     lctx.globalCompositeOperation = 'destination-out';
     wrapped(lctx, pts, draw(lctx, 0.8));
     lctx.globalCompositeOperation = 'source-over';
@@ -461,7 +462,7 @@ export function paintPaper(ctx: CanvasRenderingContext2D, x: number, y: number, 
 let strip: HTMLCanvasElement | null = null;
 
 /** How far the lamp shows the paper's inside: px over the music played, px over the music to come. */
-export const BACKLIGHT_REACH = { behind: 70, ahead: 150 };
+export const BACKLIGHT_REACH = { behind: 60, ahead: 120 };
 
 /**
  * The lamp behind the paper at x: in a strip around it the paper shows what light passes through it.

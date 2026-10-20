@@ -42,7 +42,7 @@ const NOTE_STYLE: NoteStyle = deviceChoice('roll', 'ai-capella-roll', ['lantern'
 const LANTERN = NOTE_STYLE === 'lantern';
 const LANTERN_PAPER = '#1b1621';
 // How strongly the lamp shows the paper's inside around the reading line (paper.ts backlight).
-const PAPER_BACKLIGHT = 0.5;
+const PAPER_BACKLIGHT = 0.3;
 const LANTERN_VOID = '#08060c'; // behind the paper, where no light reaches
 // The voices' colour filters behind the holes are soft anyway -- painted at reduced resolution.
 const GLASS_SCALE = 0.75;

@@ -666,10 +666,13 @@ layer (strength between "subtle" and "balanced" of its design draft):
     are composed into one tile per stretch (`composedTile`, weights in 1/48 steps), so the screen
     gets a single fill per frame (measured headless: the roll as fast as before, the sheet view
     about one full-screen fill slower). The pinned margin keeps its paper still.
-  - **Against the lamp** (`backlight`): in a strip around the reading line (70 px behind, 150 ahead,
+  - **Against the lamp** (`backlight`): in a strip around the reading line (60 px behind, 120 ahead,
     composed at CSS resolution — light through paper is soft) the paper shows its inside, anchored
     like the paper; in the roll only on the paper, not in its holes (masked with the content
-    buffer); in the sheet view under the notes.
+    buffer); in the sheet view under the notes, and quieter there (0.2 against the roll's 0.3).
+  - **Quiet on purpose.** The first version was found beautiful but a little distracting (October
+    2026): the surface, fibres, flecks and the light were all turned down to about 60 % (light
+    to about half), so the paper is felt more than seen.
   - **Four papers** (`?papier=…`, or ⋯ → *Papier* with live previews; per device, default
     Nachtpapier): **Nachtpapier** (fine fibres along the roll, a soft formation), **Bütten**
     (handmade: cloudy, rough tooth, fibres every way, flecks), **Vergé** (laid paper: fine laid lines
