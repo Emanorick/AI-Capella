@@ -63,6 +63,8 @@ function mount(root: HTMLElement, opener: Element | null, onClose?: () => void):
 export interface MenuItem {
   label: string;
   icon?: IconName;
+  // A sign from the music font (Bravura) shown in place of the icon: a clef, say.
+  glyph?: { text: string; kind: string };
   danger?: boolean;
   checked?: boolean;
   onSelect: () => void;
@@ -79,7 +81,13 @@ export function openMenu(anchor: HTMLElement, items: MenuItem[], title?: string)
     btn.className = 'menu-item' + (item.danger ? ' danger' : '');
     btn.setAttribute('role', item.checked === undefined ? 'menuitem' : 'menuitemradio');
     if (item.checked !== undefined) btn.setAttribute('aria-checked', String(item.checked));
-    btn.innerHTML = item.icon ? icon(item.icon) : '<span class="ic"></span>';
+    if (item.glyph) {
+      const glyph = document.createElement('span');
+      glyph.className = `ic glyph glyph-${item.glyph.kind}`;
+      glyph.setAttribute('aria-hidden', 'true');
+      glyph.textContent = item.glyph.text;
+      btn.appendChild(glyph);
+    } else btn.innerHTML = item.icon ? icon(item.icon) : '<span class="ic"></span>';
     const label = document.createElement('span');
     label.textContent = item.label;
     btn.appendChild(label);

@@ -1755,6 +1755,37 @@ button.stepper-value:hover {
   color: var(--paper-dim);
 }
 
+/* A clef as printed, in place of an icon: the music font's signs sit on their staff line, so each is
+   moved to stand in the middle of the icon's place. */
+.menu-item .glyph {
+  width: 18px;
+  height: 26px;
+  display: block;
+  position: relative;
+  overflow: visible;
+  font-family: 'Bravura';
+  font-size: 15px;
+  line-height: 0;
+  font-weight: 400;
+  color: var(--paper-dim);
+  text-shadow: none;
+}
+
+.menu-item .glyph-treble,
+.menu-item .glyph-treble8 {
+  padding-top: 17px;
+  text-align: center;
+}
+
+.menu-item .glyph-treble8 {
+  padding-top: 15px;
+}
+
+.menu-item .glyph-bass {
+  padding-top: 10px;
+  text-align: center;
+}
+
 .menu-item.danger,
 .menu-item.danger .ic {
   color: var(--danger);

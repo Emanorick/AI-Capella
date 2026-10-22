@@ -2375,12 +2375,13 @@ function openVoiceMenu(anchor: HTMLElement, partId: string) {
   // staves keeps theirs.
   if (currentSong.format !== 'score' && !part.staves) {
     const clef = currentClef(partId);
-    for (const [value, label] of [
-      ['treble', t('clefTreble')],
-      ['treble8', t('clefTenor')],
-      ['bass', t('clefBass')],
+    // Each with its sign, as printed (SMuFL: G clef, G clef with an 8 below, F clef).
+    for (const [value, label, text] of [
+      ['treble', t('clefTreble'), '\uE050'],
+      ['treble8', t('clefTenor'), '\uE052'],
+      ['bass', t('clefBass'), '\uE062'],
     ] as const) {
-      items.push({ label, icon: 'sheet', checked: clef === value, onSelect: () => void setVoiceClef(partId, value) });
+      items.push({ label, glyph: { text, kind: value }, checked: clef === value, onSelect: () => void setVoiceClef(partId, value) });
     }
   }
   // MIDI imports only: played as claps and stamps, or as notes (MIDI has no notation for
