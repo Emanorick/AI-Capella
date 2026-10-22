@@ -113,7 +113,9 @@ samples), **Relativ männlich** (`rm`) and **Frederick** (`frederick`, a persona
   anyone. The PIN screen (`pinGate.ts`) is gone; the app before ensembles no longer works
   against these rules.
 - **Checking the rules:** `rules-test/` runs them against the Firestore emulator (`npm install &&
-  npm test`, needs Java). In development, `?emulator=1` points the app itself at local
+  npm test`, needs Java). The test hands the emulator `../firestore.rules` itself
+  (`initializeTestEnvironment`); its `firebase.json` names no rules file, since firebase-tools
+  (15.34 on) refuses one outside its own folder. In development, `?emulator=1` points the app itself at local
   emulators (Firestore on 8085, Auth on 9099) instead of the choir's database.
 
 ### Repertoire / player split
@@ -1712,6 +1714,9 @@ typesetting problem, left as a possible follow-up rather than built speculativel
 
 ## 5. Development
 
+Node 24 from 24.22.1 on (or 22 from 22.23.4; `engines` in `package.json`): older versions still
+carry the CA bundle from before the eMudhra fix of October 2026 (see Deployment).
+
 ```bash
 npm install
 npm run dev       # Vite dev server with HMR
@@ -1740,6 +1745,17 @@ Pages serves the repo at a subpath (`https://<user>.github.io/AI-Capella/`), `vi
 sets `base: '/AI-Capella/'` so every built asset URL accounts for that prefix; local dev is
 unaffected. `import.meta.env.BASE_URL` is used (never a bare `/...` path) anywhere the app
 needs to reference its own bundled assets, like the sample song's URL, for the same reason.
+
+The build runs on Node 24 with `check-latest` and a step that stops it on anything older than
+24.22.1 -- the security release whose CA bundle has the eMudhra fix (October 2026; Node 20, which
+the build used before, is out of support and got no fix). The page itself is static: what it talks
+to over HTTPS (Firebase) is checked by the visitor's browser and its own certificate store, so
+for the choir that part is a browser update, not ours. The scan service (`omr-service/`) is where
+Node's own bundle matters -- it calls OpenAI and checks sign-ins with firebase-admin -- so its
+images are on `node:24-bookworm-slim` with the same check, and get rebuilt with `--pull`
+(`omr-service/README.md`). Node's `--use-system-ca` / `NODE_USE_SYSTEM_CA=1` isn't used: it adds
+the system's certificates to Node's bundle instead of replacing it, so it can't take a distrusted
+one out -- the updated Node does. npm installs are pinned by the lockfiles' integrity hashes.
 
 ---
 

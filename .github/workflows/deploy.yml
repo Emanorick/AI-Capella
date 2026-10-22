@@ -19,17 +19,22 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          # Node 24 from 24.22.1 on: its CA bundle has the eMudhra fix (Oct 2026 security release).
+          # check-latest: don't settle for an older 24.x the runner may have cached.
+          node-version: 24
+          check-latest: true
+      - name: Node has the CA fix
+        run: node -e "const [a,b,c]=process.versions.node.split('.').map(Number); if (a*1e6+b*1e3+c < 24022001) { console.error('Node '+process.version+' predates the eMudhra CA fix'); process.exit(1) }"
       - run: npm ci
       - run: npm run build
         env:
           # The scan service's address (Settings -> Secrets and variables -> Actions -> Variables).
           # Without it the app simply doesn't offer "Scan sheet music".
           VITE_OMR_URL: ${{ vars.OMR_URL }}
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: dist
 
@@ -41,4 +46,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

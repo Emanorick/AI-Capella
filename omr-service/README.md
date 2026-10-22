@@ -63,8 +63,19 @@ docker compose logs -f omr     # laufende Protokolle
 Dann die App verbinden wie in Schritt 5 unten beschrieben (GitHub-Variable `OMR_URL` =
 `https://scan.mein-chor.de`).
 
-**Aktualisieren:** `git pull && docker compose up -d --build`. Fertige Scans bleiben dabei
-erhalten (sie liegen im Docker-Volume `omr-jobs`); nur ein gerade laufender Scan geht verloren.
+**Aktualisieren:**
+
+```sh
+git pull
+docker compose build --pull     # --pull: holt das neueste Node-Grundimage (Sicherheits-Updates)
+docker compose pull caddy
+docker compose up -d
+```
+
+Fertige Scans bleiben dabei erhalten (sie liegen im Docker-Volume `omr-jobs`); nur ein gerade
+laufender Scan geht verloren. Ohne `--pull` nimmt Docker ein altes Grundimage aus seinem Speicher;
+ist dessen Node älter als 24.22.1 (ohne die Korrektur der Zertifikatsliste vom Oktober 2026,
+eMudhra), bricht der Bau mit einem Hinweis ab.
 
 **Keine Domain oder keine offenen Ports?** Dann geht es auch mit einem Cloudflare Tunnel
 (kostenlos, gibt eine HTTPS-Adresse ohne Portfreigabe) statt Caddy – sag Bescheid, dann baue ich
@@ -143,6 +154,8 @@ zusätzlich **„Noten scannen (PDF, Fotos)“** an.
 ## Aktualisieren (Cloud Run)
 
 In der Cloud Shell: `cd AI-Capella && git pull && cd omr-service` und Schritt 4 wiederholen.
+Cloud Build baut dabei jedes Mal mit dem aktuellen Node-Grundimage – Sicherheits-Updates von Node
+(wie die korrigierte Zertifikatsliste vom Oktober 2026) kommen so mit jedem neuen Deploy mit.
 Anderes Modell: `OPENAI_MODEL=…` in Schritt 4 ändern (z. B. ein neueres GPT-Modell). Optional
 `OPENAI_REASONING_EFFORT=low|medium|high` für Modelle mit einstellbarem Denkaufwand (für Noten
 lohnt sich `high`), `OPENAI_IMAGE_DETAIL=original`, wenn das Modell Bilder in voller Auflösung
@@ -170,6 +183,8 @@ die gleichzeitig gelesen werden.
 - Rückfragen müssen innerhalb der 6 Stunden beantwortet werden, solange der Scan auf dem Server liegt.
 
 ## Entwickeln und testen (ohne OpenAI)
+
+Node 24 ab 24.22.1 (oder 22 ab 22.23.4) – ältere Versionen haben noch die alte Zertifikatsliste.
 
 ```sh
 npm install

@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Sheet-music scanning for AI-Capella: GPT reads every page, checks it in a second run and asks back where it is unsure.",
   "engines": {
-    "node": ">=20"
+    "node": "^22.23.4 || ^24.22.1 || >=26.12.1"
   },
   "scripts": {
     "build": "tsc",
@@ -14,11 +14,11 @@
   "dependencies": {
     "@xmldom/xmldom": "^0.9.8",
     "fflate": "^0.8.2",
-    "firebase-admin": "^13.4.0",
+    "firebase-admin": "^14.5.0",
     "openai": "^5.0.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^24.19.2",
     "typescript": "^5.5.4"
   }
 }
