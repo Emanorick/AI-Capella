@@ -2383,10 +2383,9 @@ function openVoiceMenu(anchor: HTMLElement, partId: string) {
       items.push({ label, icon: 'sheet', checked: clef === value, onSelect: () => void setVoiceClef(partId, value) });
     }
   }
-  // Played as claps and stamps, or as notes -- for a voice the file doesn't already write as
-  // percussion itself.
-  const filePercussion = !percussionParts.has(partId) && (notesByPart.get(partId) ?? []).every((n) => n.unpitched);
-  if (!part.staves && !part.sourceId && !filePercussion) {
+  // MIDI imports only: played as claps and stamps, or as notes (MIDI has no notation for
+  // percussion beyond channel 10, which older imports didn't keep; MusicXML writes it itself).
+  if (currentSong.format === 'score' && !part.staves && !part.sourceId) {
     const on = percussionParts.has(partId);
     items.push({ label: t('voicePercussion'), icon: 'quarter', checked: on, onSelect: () => void setVoicePercussion(partId, !on) });
   }

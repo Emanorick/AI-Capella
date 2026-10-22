@@ -953,9 +953,10 @@ the instrument the name gives, or — body percussion written on ordinary pitche
 the feet, highest the hands. MusicXML parts named so keep their printed places. Played as taps
 (`audioEngine.ts playTap`): low places as a thump (a falling sine), high crossed ones as a clap
 (three quick bursts of noise), the rest as before. The keys stay in the stored score, so it is
-reversible: each voice's ⋯ menu has **Als Schlagwerk (Klatschen, Stampfen)** to switch it on or
-off, for everyone (`StoredSong.percussion`, per part id, overriding the recognition either way;
-not offered for a voice the file itself writes as percussion).
+reversible: for MIDI imports each voice's ⋯ menu has **Als Schlagwerk (Klatschen, Stampfen)** to
+switch it on or off, for everyone (`StoredSong.percussion`, per part id, overriding the
+recognition either way). MusicXML songs don't get it: their files write percussion themselves,
+and a part with claps written on pitches is recognised by its name.
 
 ### 4.3 Rendering (`pianoRoll.ts`)
 
