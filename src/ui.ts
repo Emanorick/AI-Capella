@@ -68,6 +68,10 @@ export interface MenuItem {
   danger?: boolean;
   checked?: boolean;
   onSelect: () => void;
+  // A choice that opens in place: the item shows the chosen one (`value`) and, clicked, its
+  // `options` below it; the menu stays open until one of them is picked.
+  options?: MenuItem[];
+  value?: string;
 }
 
 /** A dropdown menu anchored to `anchor` (a bottom sheet on narrow screens). */
@@ -92,6 +96,44 @@ export function openMenu(anchor: HTMLElement, items: MenuItem[], title?: string)
     label.textContent = item.label;
     btn.appendChild(label);
     if (item.checked) btn.insertAdjacentHTML('beforeend', '<span class="menu-check" aria-hidden="true">✓</span>');
+    if (item.options) {
+      const value = document.createElement('span');
+      value.className = 'menu-value';
+      value.textContent = item.value ?? '';
+      btn.append(value);
+      btn.insertAdjacentHTML('beforeend', icon('chevronDown', 'ic menu-chevron'));
+      btn.setAttribute('aria-expanded', 'false');
+      btn.setAttribute('aria-haspopup', 'true');
+      const sub = document.createElement('div');
+      sub.className = 'menu-sub';
+      sub.setAttribute('role', 'group');
+      sub.setAttribute('aria-label', item.label);
+      sub.hidden = true;
+      for (const option of item.options) {
+        const o = document.createElement('button');
+        o.type = 'button';
+        o.className = 'menu-item menu-option';
+        o.setAttribute('role', 'menuitemradio');
+        o.setAttribute('aria-checked', String(!!option.checked));
+        o.innerHTML = '<span class="ic"></span>';
+        const l = document.createElement('span');
+        l.textContent = option.label;
+        o.appendChild(l);
+        if (option.checked) o.insertAdjacentHTML('beforeend', '<span class="menu-check" aria-hidden="true">✓</span>');
+        o.addEventListener('click', () => {
+          closeOverlay();
+          option.onSelect();
+        });
+        sub.appendChild(o);
+      }
+      btn.addEventListener('click', () => {
+        sub.hidden = !sub.hidden;
+        btn.setAttribute('aria-expanded', String(!sub.hidden));
+        if (!sub.hidden) sub.querySelector<HTMLElement>('[aria-checked="true"]')?.focus({ preventScroll: true });
+      });
+      list.append(btn, sub);
+      continue;
+    }
     btn.addEventListener('click', () => {
       closeOverlay();
       item.onSelect();

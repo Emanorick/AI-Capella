@@ -250,6 +250,7 @@ app.innerHTML = `
           <span class="stepper-value static"><b data-bind="key-short"></b></span>
           <button type="button" data-action="transpose-up" aria-label="${t('higher')}">${icon('plus')}</button>
         </div>
+        <button type="button" class="t-btn t-save" data-action="save-defaults" aria-label="${t('saveDefaults')}" title="${t('saveDefaults')}" hidden>${icon('save')}</button>
       </div>
     </footer>
   </section>
@@ -1047,10 +1048,12 @@ function soundItems() {
     localStorage.setItem(SOUND_KEY, sound);
     audioEngine?.setSound(sound);
   };
-  return [
-    { label: t('soundPiano'), icon: 'quarter' as const, checked: playbackSound === 'piano', onSelect: choose('piano') },
-    { label: t('soundVoice'), icon: 'users' as const, checked: playbackSound === 'voice', onSelect: choose('voice') },
+  const options = [
+    { label: t('soundPiano'), checked: playbackSound === 'piano', onSelect: choose('piano') },
+    { label: t('soundVoice'), checked: playbackSound === 'voice', onSelect: choose('voice') },
   ];
+  // One entry that opens in place: the sound chosen, and the others to choose from.
+  return [{ label: t('sound'), icon: 'quarter' as const, value: options.find((o) => o.checked)?.label ?? '', options, onSelect: () => {} }];
 }
 
 function languageItems() {
@@ -1741,6 +1744,8 @@ async function loadSongLocally(song: SongEntry) {
   currentScore = score;
   currentSong = song;
   loadedSongId = song.id;
+  // Saving tempo, key and sections as the song's default (laptop: beside the key; library songs only).
+  document.querySelector<HTMLElement>('.t-save')!.hidden = !song.imported;
   notesByPart = new Map(score.parts.map((p) => [p.id, score.notes.filter((n) => n.partId === p.id).sort((a, b) => a.startBeat - b.startBeat)]));
   // Only relevant when the source has no rehearsal marks of its own (see renderSections) --
   // reloaded fresh from this song's saved config every time, never carried over from whatever the
@@ -2968,24 +2973,29 @@ function openPlayerMenu(anchor: HTMLElement) {
     items.push({ label: t('renameSong'), icon: 'pencil', onSelect: () => currentSong && void renameSong(currentSong) });
     const removed = currentSong.removedParts?.length ?? 0;
     if (removed) items.push({ label: t('restoreVoices', { n: removed }), icon: 'users', onSelect: () => void setRemovedParts([]) });
-    // Saving defaults is a laptop task, like adding sections.
-    if (!isNarrow()) items.push({ label: t('saveDefaults'), icon: 'save', onSelect: saveDefaults });
     if (sectionsEditable() && manualSections.length) items.push({ label: t('removeAllSections'), icon: 'flag', onSelect: () => void removeAllSections() });
     const marks = currentSong.scanMarks?.length ?? 0;
     if (marks) items.push({ label: t('scanMarksItem', { n: marks }), icon: 'help', onSelect: () => openScanMarksSheet(anchor) });
   }
   if (activeView === 'roll') items.push({ label: t('followMusic'), icon: 'fitHeight', checked: followPref, onSelect: () => setFollow(!followPref) });
   items.push(...soundItems());
+  // The sheet music as a PDF, from the file (not offered for MIDI imports: no notation in them).
+  if (currentSong && currentSong.format !== 'score') items.push({ label: t('exportItem'), icon: 'file', onSelect: () => openExportSheet(anchor) });
+  items.push({ label: t('settings'), icon: 'gear', onSelect: () => openSettingsMenu(anchor) }, ...feedbackItems(anchor), ...languageItems(), ...introItems('player'));
+  openMenu(anchor, items, t('menu'));
+}
+
+/** The player's settings, a menu of their own: swing, light and sound, paper. */
+function openSettingsMenu(anchor: HTMLElement) {
+  const items: Parameters<typeof openMenu>[1] = [];
   // Swing or straight, for this song (not in 6/8 and the like). In a rehearsal only the leader -- or
   // anyone, while nobody leads -- changes it for everyone.
   if (currentSong && currentScore && canSwing(currentScore) && (currentSong.imported ? !isFollower() : true)) {
     const on = swingChosen(currentSong);
     items.push({ label: t('swingItem'), icon: 'quarter', checked: on, onSelect: () => void setSwing(!on) });
   }
-  // The sheet music as a PDF, from the file (not offered for MIDI imports: no notation in them).
-  if (currentSong && currentSong.format !== 'score') items.push({ label: t('exportItem'), icon: 'file', onSelect: () => openExportSheet(anchor) });
-  items.push({ label: t('lightOffset'), icon: 'metronome', onSelect: () => openLightOffsetSheet(anchor) }, ...paperItems(anchor), ...feedbackItems(anchor), ...languageItems(), ...introItems('player'));
-  openMenu(anchor, items, t('menu'));
+  items.push({ label: t('lightOffset'), icon: 'metronome', onSelect: () => openLightOffsetSheet(anchor) }, ...paperItems(anchor));
+  openMenu(anchor, items, t('settings'));
 }
 
 function saveDefaults() {
@@ -3024,6 +3034,9 @@ document.addEventListener('click', (e) => {
     case 'feedback':
       if (leads(currentEnsemble)) openLeaderFeedbackMenu(el);
       else openFeedbackSheet(el);
+      break;
+    case 'save-defaults':
+      saveDefaults();
       break;
     case 'play':
       togglePlay();

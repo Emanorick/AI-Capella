@@ -1755,6 +1755,38 @@ button.stepper-value:hover {
   color: var(--paper-dim);
 }
 
+/* A choice that opens in place (ui.ts MenuItem.options): the chosen one at the end, its options
+   below, indented under the label. */
+.menu-item .menu-value {
+  margin-left: auto;
+  color: var(--paper-dim);
+  font-weight: 500;
+}
+
+.menu-item .menu-chevron {
+  width: 16px;
+  height: 16px;
+  transition: transform var(--t-fast);
+}
+
+.menu-item[aria-expanded='true'] .menu-chevron {
+  transform: rotate(180deg);
+}
+
+.menu-sub {
+  display: grid;
+}
+
+.menu-item.menu-option {
+  min-height: 40px;
+  padding-left: 12px;
+  font-weight: 500;
+}
+
+.menu-item.menu-option .menu-check {
+  margin-left: auto;
+}
+
 /* A clef as printed, in place of an icon: the music font's signs sit on their staff line, so each is
    moved to stand in the middle of the icon's place. */
 .menu-item .glyph {

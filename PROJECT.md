@@ -298,8 +298,16 @@ score, with a mixer button that opens the same rows in a sheet.
 - **Clicking or tapping a voice's name** (sidebar name or phone chip) toggles *only this voice*:
   mutes and hides every other voice entirely; again restores everyone. **Reset** clears the mix.
 
+### The player's ⋯ menu
+Rename, restore voices, sections, places to check, *Höhe folgt der Musik* (roll), **Klang** — one
+entry showing the sound chosen (Klavier / Stimme) that opens its choices in place (`MenuItem.options`
+in ui.ts; the menu stays open until one is picked) —, PDF export, **Einstellungen** (a menu of its
+own: Swing, Licht und Ton, Papier), feedback where asked for, language, the introduction. Saving
+tempo, key and sections as the song's default is not in it: on a laptop it is the disk at the
+bottom right, beside *Tonart* (`.t-save`).
+
 ### Swing or straight
-The player's ⋯ menu has **Swing (Achtel lang–kurz)** for songs whose beat is a quarter or half note
+The player's ⋯ menu → **Einstellungen** has **Swing (Achtel lang–kurz)** for songs whose beat is a quarter or half note
 (not 6/8, 12/8, 3/8). With swing each beat's eighths are played long-short, 2:1 -- the triplet feel
 (`swing.ts`): every position within a beat is mapped piecewise-linearly so the half-beat falls at
 two thirds; on-beat positions and triplet positions (thirds) stay where they are; beats are counted
@@ -367,7 +375,8 @@ letters follow their order in the piece again (A, B, C — no gap or double afte
 **Removing**: right-click a letter on the whole-piece strip (laptop) or hold it in the phone's
 Tempo & key sheet → jump there / remove this section / remove all; the player ⋯ menu also has
 **Remove all sections** (with a confirmation). Letters printed in the file itself can't be removed.
-**Save tempo, key and sections as default** (player ⋯ menu, laptop only, library songs only) still
+**Save tempo, key and sections as default** (the disk beside *Tonart* at the bottom right, laptop
+only, library songs only) still
 snapshots transpose and tempo together with the letters (`saveSongConfig`). A file with its own
 rehearsal marks never offers hand-added ones. A rehearsal mark that is a word ("Refrain", "Intro
 4 Takte Bass+Drums vom Band") gets a box as wide as it in smaller type (`.rmark.word`); on the
@@ -673,7 +682,8 @@ layer (strength between "subtle" and "balanced" of its design draft):
   - **Quiet on purpose.** The first version was found beautiful but a little distracting (October
     2026): the surface, fibres, flecks and the light were all turned down to about 60 % (light
     to about half), so the paper is felt more than seen.
-  - **Four papers** (`?papier=…`, or ⋯ → *Papier* with live previews; per device). **Vergé** is
+  - **Four papers** (`?papier=…`, or ⋯ → *Einstellungen* → *Papier* in the player, ⋯ → *Papier* in the
+    repertoire, with live previews; per device). **Vergé** is
     everyone's (chosen in October 2026, `DEFAULT_PAPER`): laid paper, fine laid lines down the
     sheet and soft chain bands, faint on the surface, clear against the lamp (chain lines as bands,
     since lines across would read as staff lines). A device can pick **Nachtpapier** (fine fibres
@@ -1121,7 +1131,7 @@ Two playback sounds, chosen per device in the player ⋯ menu (`ai-capella-sound
   output latency (`outputLatency`, or `baseLatency` where a browser reports none, plus the bus
   compressor's 6 ms look-ahead): a few milliseconds on a laptop, 150 ms and more over Bluetooth.
   Adding `baseLatency` on top of `outputLatency` overshot (reported: the sound came slightly before
-  the light). Loudspeakers differ, so each device can fine-tune it in the ⋯ menu ("Light and sound",
+  the light). Loudspeakers differ, so each device can fine-tune it in the ⋯ menu → Settings ("Light and sound",
   ±150 ms, `ai-capella-light-offset`). `getCurrentBeat()` — which every view
   draws from — is the beat being *heard*, so the light reaches a note as it sounds (reported: the
   piano came after the light). The scheduler itself keeps the context's clock
