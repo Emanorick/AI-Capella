@@ -589,8 +589,16 @@ layer (strength between "subtle" and "balanced" of its design draft):
   is still there as `?logo=1`.) The app mark, app icons and favicon are the four voice lines
   written with the pointed pen on night paper (icons generated from the same geometry as
   `drawMark`; the service worker's cache name was bumped so installed apps pick them up).
-- **"Pergament & Tinte" -- the light design (test: `?design=pergament`, `?design=papier` goes
-  back).** The paper design on parchment: `design.ts PARCHMENT` keeps `data-design='papier'` (so
+- **"Pergament & Tinte" -- the light design.** The look follows the device: night paper in dark
+  mode, parchment in light mode (`design.ts DESIGN_CHOICE` 'auto', everyone's), or the one chosen
+  under *Erscheinungsbild* (Automatisch / Nachtpapier / Pergament -- in the repertoire's ⋯ menu
+  and the player's Einstellungen; also `?design=auto|papier|pergament`). The canvases take their
+  colours when the app starts, so a change loads it again, straight back into the repertoire (as a
+  mode switch does); when the device itself turns light or dark the app waits for a quiet moment
+  -- not in the player, while music plays, in a sheet or dialog, or while typing -- and changes
+  when back in the repertoire or brought to the front again. A small script in `index.html` sets
+  the look before anything loads, so a light-mode device never flashes night paper. The paper
+  design on parchment: `design.ts PARCHMENT` keeps `data-design='papier'` (so
   everything of the paper design holds) and adds `data-ground='pergament'`, which
   `parchment.css` turns light: the ink tokens become the parchment's shades, `--paper` (what
   things are printed in) iron-gall ink, gold becomes a darker gold leaf; buttons stay
@@ -605,7 +613,7 @@ layer (strength between "subtle" and "balanced" of its design draft):
   parchment, deepening it to amber and the inks around a sounding note into their colour.
   Played music fades like old ink instead of darkening. The title's "Light" is written in ink
   with the lamp's warmth around it, its voice lines soak into the parchment (`multiply`) instead
-  of adding light. Without the switch nothing of this applies (checked pixel for pixel).
+  of adding light. On night paper nothing of this applies (checked pixel for pixel).
 - **Title screen (paper design; design.ts `START_DRAFT`, `?start=heute` brings back the earlier
   one).** The voice lines, written by the pen one after another, become figures of light
   (`lightRibbons.ts`): a thin bright core in a soft glow (drawn wide and faint at a quarter of the
@@ -737,15 +745,17 @@ layer (strength between "subtle" and "balanced" of its design draft):
   loaded from Google (no visitor data to a third party — German courts have fined sites for
   remotely loaded Google Fonts — and works on weak Wi-Fi). Canvas text waits for them
   (`canvasFontsReady`) so cached lyric bitmaps never bake in a fallback font.
-- **Type test (`?schrift=test`, `?schrift=heute` goes back; `typeTest.css`, design.ts `TYPE_TEST`)**:
-  faces from Font Revival (19th-century American type specimens, MIT; `src/assets/fonts/revival`
-  with its README) — headings in Baltimore Title 1832 as spaced capitals, song titles in Modern
-  Antique 1889, rehearsal letters in Baltimore Bold 1832 (also on the canvases: `FONT_MARK`),
-  text and controls in Remington 1888 (a typewriter), the "Score" of the name in Baltimore Black
-  Slope 1832 (header and the title screen's ink: `FONT_BRAND`). Lyrics in the score stay Atkinson. None of
-  the faces had German letters: Ä Ö Ü ä ö ü are added (letter plus two dots from the face's own
-  period), ß is "ss" (`add-german.py`). Every rule is scoped to `:root[data-schrift='test']`, so
-  other devices never fetch the faces.
+- **Faces from Font Revival -- everyone's since October 2026 (`revivalType.css`, design.ts
+  `REVIVAL_TYPE`; `?schrift=bodoni` brings back the earlier Bodoni and Atkinson on a device,
+  `?schrift=neu` the new ones)**: 19th-century American type specimens, MIT
+  (`src/assets/fonts/revival` with its README) -- headings in Baltimore Title 1832 as spaced
+  capitals, song titles in Modern Antique 1889, rehearsal letters in Baltimore Bold 1832 (also on
+  the canvases: `FONT_MARK`), text and controls in Remington 1888 (a typewriter), the "Score" of
+  the name in Baltimore Black Slope 1832 (header and the title screen's ink: `FONT_BRAND`). Lyrics
+  in the score stay Atkinson, which also stands in for the symbols the faces lack (♯ ♭ ✓ ⋯). None
+  of the faces had German letters: Ä Ö Ü ä ö ü are added (letter plus two dots from the face's own
+  period), ß is "ss" (`add-german.py`). Every rule is scoped to `:root[data-type='revival']`, so a
+  device with the earlier faces fetches none of them.
 - **Music font**: Bravura (Steinberg, SIL OFL 1.1; licence in `src/assets/fonts`), subset with
   `pyftsubset` to the ~30 glyphs the sheet view uses (8 KB).
 - **Icons**: one inline SVG set (`icons.ts`) instead of Unicode glyphs, which rendered

@@ -1,11 +1,12 @@
 // Which look this device shows. The default is what the whole choir sees; a device can switch to
 // another by opening the app with ?design=samt (or ?logo=1, ?roll=gel), and keeps it until opened
-// with the default again (?design=papier).
+// with the default again. The look (design) follows the device's light or dark mode unless chosen
+// in the menu (Erscheinungsbild) or with ?design=papier / pergament; ?design=auto follows again.
 //
-// 'samt': velvet ground with slow waves, glass panels, gel notes ("Samt & Glas").
+// 'samt': velvet ground with slow waves, glass panels, gel notes ("Samt & Glas"; ?design=samt only).
 // 'papier': night paper everywhere, vellum overlays, embossed buttons, the punched roll lit from
 //           behind, and the title screen's voice lines written by a pen ("Papier & Feder").
-// 'pergament': the same paper design on parchment, a light ground (test: ?design=pergament): text
+// 'pergament': the same paper design on parchment, a light ground (in light mode): text
 //           in iron-gall ink, the voices in coloured inks, gold leaf where the night paper has gold;
 //           the lamp behind the parchment makes it glow amber at the reading line, and the inks
 //           there shine like stained glass ("Pergament & Tinte").
@@ -28,7 +29,44 @@ export function deviceChoice<T extends string>(param: string, key: string, value
 }
 
 export type Design = 'samt' | 'papier' | 'pergament';
-export const DESIGN: Design = deviceChoice('design', 'ai-capella-design', ['samt', 'papier', 'pergament'] as const, 'papier');
+/** What a device chose for its look: 'auto' (everyone's) is night paper in dark mode, parchment in light mode. */
+export type DesignChoice = 'auto' | Design;
+const DESIGN_KEY = 'ai-capella-design';
+const LIGHT_MODE = '(prefers-color-scheme: light)';
+export const DESIGN_CHOICE: DesignChoice = deviceChoice('design', DESIGN_KEY, ['auto', 'samt', 'papier', 'pergament'] as const, 'auto');
+
+/** The look 'auto' shows right now: the device's light mode is parchment, its dark mode night paper. */
+export function systemDesign(): Design {
+  try {
+    return matchMedia(LIGHT_MODE).matches ? 'pergament' : 'papier';
+  } catch {
+    return 'papier';
+  }
+}
+
+export const DESIGN: Design = DESIGN_CHOICE === 'auto' ? systemDesign() : DESIGN_CHOICE;
+
+/** Remembers the look chosen in the menu (the page has to be loaded again to show it -- see main.ts). */
+export function setDesignChoice(next: DesignChoice) {
+  try {
+    if (next === 'auto') localStorage.removeItem(DESIGN_KEY);
+    else localStorage.setItem(DESIGN_KEY, next);
+  } catch {
+    /* for this visit only */
+  }
+}
+
+/** Calls `changed` when the device turns to light or dark mode and 'auto' would show another look. */
+export function onSystemDesignChange(changed: () => void) {
+  if (DESIGN_CHOICE !== 'auto') return;
+  try {
+    matchMedia(LIGHT_MODE).addEventListener('change', () => {
+      if (systemDesign() !== DESIGN) changed();
+    });
+  } catch {
+    /* no light or dark mode to follow */
+  }
+}
 /** Parchment: the paper design on a light ground (everything of the paper design holds, in light). */
 export const PARCHMENT = DESIGN === 'pergament';
 export const PAPER_DESIGN = DESIGN === 'papier' || PARCHMENT;
@@ -58,19 +96,21 @@ export const START_STAFF = START_CHOICE === 'zeile';
 export const START_STAGE = START_CHOICE === 'buehne';
 
 /**
- * Test (?schrift=test; ?schrift=heute goes back): the faces from Font Revival (assets/fonts/revival)
- * -- headings in Baltimore Title, song titles in Modern Antique, rehearsal letters in Baltimore
- * Bold, text and controls in Remington, the "Score" of the name in Baltimore Black Slope
- * (typeTest.css). The fonts are only fetched on a device that has it on.
+ * The faces from Font Revival (assets/fonts/revival), everyone's since October 2026 -- headings in
+ * Baltimore Title, song titles in Modern Antique, rehearsal letters in Baltimore Bold, text and
+ * controls in Remington, the "Score" of the name in Baltimore Black Slope (revivalType.css).
+ * ?schrift=bodoni brings back the earlier ones (Bodoni Moda, Atkinson Hyperlegible) on a device
+ * ('heute' as it was called while the new ones were a test), ?schrift=neu the new ones.
  */
-export const TYPE_TEST = deviceChoice('schrift', 'ai-capella-schrift', ['heute', 'test'] as const, 'heute') === 'test';
+const TYPE_CHOICE = deviceChoice('schrift', 'ai-capella-schrift', ['neu', 'bodoni', 'heute', 'test'] as const, 'neu');
+export const REVIVAL_TYPE = TYPE_CHOICE !== 'bodoni' && TYPE_CHOICE !== 'heute';
 
 document.documentElement.dataset.design = PAPER_DESIGN ? 'papier' : DESIGN;
 if (PARCHMENT) {
   document.documentElement.dataset.ground = 'pergament';
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', '#E8D9B8');
 }
-if (TYPE_TEST) document.documentElement.dataset.schrift = 'test';
+if (REVIVAL_TYPE) document.documentElement.dataset.type = 'revival';
 if (START_DRAFT) document.documentElement.dataset.start = 'neu';
 if (START_STAFF) document.documentElement.dataset.title = 'zeile';
 if (START_STAGE) document.documentElement.dataset.title = 'buehne';

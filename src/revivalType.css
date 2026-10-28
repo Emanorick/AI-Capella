@@ -1,10 +1,10 @@
-/* The type test (?schrift=test, design.ts): faces from Font Revival (assets/fonts/revival).
-   Headings in Baltimore Title, in spaced capitals as on an engraved title page; song titles in
-   Modern Antique; rehearsal letters in Baltimore Bold; text and controls in Remington, a
-   typewriter; the "Score" of the name in Baltimore Black Slope, leaning back against the pen
-   script's "Light". Each face has one weight -- bold text is set by the browser, like a key
-   struck twice. Everything here is scoped to the test, and a browser only fetches a face once
-   something on the page uses it, so other devices never load them. */
+/* The faces from Font Revival (assets/fonts/revival; design.ts REVIVAL_TYPE, everyone's -- a device
+   gets the earlier Bodoni and Atkinson back with ?schrift=bodoni). Headings in Baltimore Title, in
+   spaced capitals as on an engraved title page; song titles in Modern Antique; rehearsal letters
+   in Baltimore Bold; text and controls in Remington, a typewriter; the "Score" of the name in
+   Baltimore Black Slope, leaning back against the pen script's "Light". Each face has one weight --
+   bold text is set by the browser, like a key struck twice. Scoped to :root[data-type='revival'],
+   so a device with the earlier faces never fetches these. */
 
 @font-face {
   font-family: 'Baltimore Title 1832';
@@ -32,65 +32,65 @@
   font-display: swap;
 }
 
-:root[data-schrift='test'] {
+:root[data-type='revival'] {
   --f-text: 'Remington 1888', 'Atkinson Hyperlegible Next Variable', system-ui, sans-serif;
   --f-mono: 'Remington 1888', 'Atkinson Hyperlegible Mono Variable', ui-monospace, monospace;
   --f-head: 'Baltimore Title 1832', var(--f-display);
   --f-title: 'Modern Antique 1889', var(--f-display);
 }
 
-:root[data-schrift='test'] .wordmark {
+:root[data-type='revival'] .wordmark {
   font-family: 'Baltimore Black Slope 1832', var(--f-display);
   font-weight: 400;
   font-synthesis: none;
 }
 
-:root[data-schrift='test'] .lib-head h1,
-:root[data-schrift='test'] .dialog h2,
-:root[data-schrift='test'] .intro-card h2 {
+:root[data-type='revival'] .lib-head h1,
+:root[data-type='revival'] .dialog h2,
+:root[data-type='revival'] .intro-card h2 {
   font-family: var(--f-head);
   font-weight: 400;
   font-synthesis: none;
   text-transform: uppercase;
   letter-spacing: 0.07em;
 }
-:root[data-schrift='test'] .lib-head h1 {
+:root[data-type='revival'] .lib-head h1 {
   font-size: clamp(32px, 4.2vw, 46px);
   line-height: 1.05;
 }
-:root[data-schrift='test'] .dialog h2 {
+:root[data-type='revival'] .dialog h2 {
   font-size: 21px;
   line-height: 1.25;
 }
-:root[data-schrift='test'] .intro-card h2 {
+:root[data-type='revival'] .intro-card h2 {
   font-size: 19px;
   line-height: 1.25;
 }
 
-:root[data-schrift='test'] .song-title,
-:root[data-schrift='test'] #song-title {
+:root[data-type='revival'] .song-title,
+:root[data-type='revival'] #song-title {
   font-family: var(--f-title);
   font-weight: 400;
   font-synthesis: none;
   letter-spacing: 0.01em;
 }
-:root[data-schrift='test'] .song-title {
+:root[data-type='revival'] .song-title {
   font-size: 22px;
   line-height: 1.2;
 }
-:root[data-schrift='test'] #song-title {
+:root[data-type='revival'] #song-title {
   font-size: 27px;
   line-height: 1.15;
 }
 
-:root[data-schrift='test'] .rmark {
+:root[data-type='revival'] .rmark {
   font-family: 'Baltimore Bold 1832', var(--f-display);
   font-weight: 400;
   font-synthesis: none;
 }
 
 /* The typewriter is wider than Atkinson: the cards' "6 Stimmen · 8 Takte · G-Dur" stays one line. */
-:root[data-schrift='test'] .song-meta {
+:root[data-type='revival'] .song-meta {
   font-size: 12px;
   white-space: nowrap;
 }

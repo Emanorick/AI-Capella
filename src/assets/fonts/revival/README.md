@@ -1,10 +1,10 @@
-# Font Revival faces (test: `?schrift=test`)
+# Font Revival faces (everyone's; `?schrift=bodoni` brings back the earlier ones on a device)
 
 From [Font Revival](https://font-revival.com/) by Harold Lehmann — digital revivals of American
 type specimens, MIT license (`LICENSE.txt`). Taken from the `fonts/*.ttf` of
 github.com/fontrevival/font-revival at b848391 (2026-10-26).
 
-| File | Face | Used for (only with `?schrift=test`) |
+| File | Face | Used for |
 |---|---|---|
 | `BaltimoreTitle1832.woff2` | Baltimore Title 1832 | headings, in spaced capitals |
 | `ModernAntique1889.woff2` | Modern Antique 1889 | song titles |

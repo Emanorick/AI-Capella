@@ -1,6 +1,6 @@
 // Canvas-side mirror of the CSS tokens in style.css -- the piano roll, sheet view, covers and
 // ribbons draw with these so canvas and DOM share one palette and one set of typefaces.
-import { PARCHMENT, TYPE_TEST } from './design';
+import { PARCHMENT, REVIVAL_TYPE } from './design';
 
 // The grounds, deepest first, and the colour things are printed in on them: night paper and paper
 // white, or on parchment (design.ts) the parchment's shades and iron-gall ink.
@@ -126,12 +126,12 @@ export function readingStrip(ctx: CanvasRenderingContext2D, x: number, top: numb
 export const FONT_TEXT = '"Atkinson Hyperlegible Next Variable", "Atkinson Hyperlegible Next", system-ui, sans-serif';
 export const FONT_MONO = '"Atkinson Hyperlegible Mono Variable", "Atkinson Hyperlegible Mono", ui-monospace, monospace';
 export const FONT_DISPLAY = '"Bodoni Moda Variable", "Bodoni Moda", Didot, Georgia, serif';
-// The rehearsal letters in the rulers, and the "Score" of the name (inkWordmark.ts) -- the Bodoni,
-// or with the type test (design.ts) faces of their own, which have one weight.
-export const FONT_MARK = TYPE_TEST ? `"Baltimore Bold 1832", ${FONT_DISPLAY}` : FONT_DISPLAY;
-export const MARK_WEIGHT = TYPE_TEST ? 400 : 700;
-export const FONT_BRAND = TYPE_TEST ? `"Baltimore Black Slope 1832", ${FONT_DISPLAY}` : FONT_DISPLAY;
-export const BRAND_WEIGHT = TYPE_TEST ? 400 : 600;
+// The rehearsal letters in the rulers, and the "Score" of the name (inkWordmark.ts) -- faces of their
+// own from Font Revival (design.ts REVIVAL_TYPE), which have one weight, or the Bodoni.
+export const FONT_MARK = REVIVAL_TYPE ? `"Baltimore Bold 1832", ${FONT_DISPLAY}` : FONT_DISPLAY;
+export const MARK_WEIGHT = REVIVAL_TYPE ? 400 : 700;
+export const FONT_BRAND = REVIVAL_TYPE ? `"Baltimore Black Slope 1832", ${FONT_DISPLAY}` : FONT_DISPLAY;
+export const BRAND_WEIGHT = REVIVAL_TYPE ? 400 : 600;
 /** SMuFL music font (Bravura, subset to the glyphs the sheet view uses -- see assets/fonts). */
 export const FONT_MUSIC = 'Bravura';
 
@@ -148,7 +148,7 @@ export function canvasFontsReady(): Promise<void> {
     document.fonts.load(`600 12px ${FONT_TEXT}`),
     document.fonts.load(`600 11px ${FONT_MONO}`),
     document.fonts.load(`32px ${FONT_MUSIC}`, ''),
-    ...(TYPE_TEST ? [document.fonts.load(`${MARK_WEIGHT} 12px ${FONT_MARK}`, 'A')] : []),
+    ...(REVIVAL_TYPE ? [document.fonts.load(`${MARK_WEIGHT} 12px ${FONT_MARK}`, 'A')] : []),
   ]).then(() => undefined);
   const timeout = new Promise<void>((resolve) => setTimeout(resolve, 2500));
   return Promise.race([loads, timeout]).catch(() => undefined);

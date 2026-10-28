@@ -13,6 +13,20 @@
     <link rel="apple-touch-icon" href="%BASE_URL%apple-touch-icon.png" />
     <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
     <title>LightScore</title>
+    <script>
+      // The look before anything has loaded (design.ts decides it again), so a device in light mode
+      // doesn't see night paper for a moment.
+      try {
+        var asked = new URLSearchParams(location.search).get('design');
+        var d = /^(auto|samt|papier|pergament)$/.test(asked || '') ? asked : localStorage.getItem('ai-capella-design') || 'auto';
+        if (d === 'auto') d = matchMedia('(prefers-color-scheme: light)').matches ? 'pergament' : 'papier';
+        document.documentElement.dataset.design = d === 'samt' ? 'samt' : 'papier';
+        if (d === 'pergament') {
+          document.documentElement.dataset.ground = 'pergament';
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#E8D9B8');
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="app"></div>

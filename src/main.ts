@@ -7,7 +7,7 @@ import '@fontsource-variable/atkinson-hyperlegible-mono/wght.css';
 import '@fontsource/italianno/latin-400.css';
 import './style.css';
 import './parchment.css';
-import './typeTest.css';
+import './revivalType.css';
 import { parseMusicXML, splitStaves } from './musicxml';
 import { parseMIDI } from './midi';
 import { AudioEngine, onAudioStateChange, startTonesLeadSec, unlockAudio, type PartMixState, type Sound } from './audioEngine';
@@ -24,7 +24,7 @@ import { countLabel, keyName, lang, setLang, t, type MessageKey } from './i18n';
 import { canvasFontsReady } from './theme';
 import { initScan, openScanSheet, scanAvailable, scanStatusLine } from './scan';
 import { WaveBackdrop } from './backdrop';
-import { PAPER_DESIGN, PARCHMENT, START_DRAFT, START_STAFF, START_STAGE } from './design';
+import { DESIGN_CHOICE, onSystemDesignChange, PAPER_DESIGN, PARCHMENT, setDesignChoice, START_DRAFT, START_STAFF, START_STAGE, type DesignChoice } from './design';
 import { initPaper, paintSwatch, PAPER_KINDS, paperKind, setPaperKind, type PaperKind } from './paper';
 import { applyPercussion } from './percussion';
 import { lightScoreName, type TitleName } from './lightName';
@@ -373,6 +373,8 @@ function setViewMode(mode: 'landing' | 'library' | 'player') {
   // The title screen keeps its plain ground: only the voice ribbons move there.
   backdrop.setShown(mode !== 'landing');
   closeOverlay();
+  // Back in the repertoire: a look the device turned to meanwhile can be shown now.
+  if (mode === 'library') setTimeout(applyPendingDesign, 0);
   if (mode === 'landing' && !stopLandingRibbons && START_STAGE && titleName) {
     // Draft: the dark stage and its spotlight (titleStage.ts).
     stopLandingRibbons = animateStage(document.querySelector<HTMLCanvasElement>('#landing-ribbons')!, titleName);
@@ -1058,6 +1060,50 @@ function soundItems() {
   return [{ label: t('sound'), icon: 'quarter' as const, value: options.find((o) => o.checked)?.label ?? '', options, onSelect: () => {} }];
 }
 
+/**
+ * Erscheinungsbild: the look on this device -- following its light or dark mode (night paper in
+ * dark mode, parchment in light mode), or one of the two. The canvases take their colours when the
+ * app starts, so a change loads it again, straight back into the repertoire (as a mode switch does).
+ */
+function appearanceItems() {
+  const choose = (next: DesignChoice) => () => {
+    if (next === DESIGN_CHOICE) return;
+    setDesignChoice(next);
+    void reloadForDesign();
+  };
+  const options = [
+    { label: t('designAuto'), checked: DESIGN_CHOICE === 'auto', onSelect: choose('auto') },
+    { label: t('designNight'), checked: DESIGN_CHOICE === 'papier', onSelect: choose('papier') },
+    { label: t('designParchment'), checked: DESIGN_CHOICE === 'pergament', onSelect: choose('pergament') },
+  ];
+  return [{ label: t('appearance'), icon: 'sheet' as const, value: options.find((o) => o.checked)?.label ?? '', options, onSelect: () => {} }];
+}
+
+async function reloadForDesign() {
+  stopPlayback();
+  if (syncEnabled() && leaderId === myDeviceId) await sync.publishPlaybackState({ leaderId: null }).catch(() => {});
+  if (!app.classList.contains('mode-landing')) sessionStorage.setItem(MODE_SWITCH_KEY, sessionMode);
+  location.reload();
+}
+
+// Following the device: when it turns to light or dark mode the app changes its look -- not in the
+// middle of something, though: not in the player, while music plays, in a sheet or dialog, or
+// while something is being typed. Then at the next quiet moment (back in the repertoire, or the app
+// coming back to the front).
+let designPending = false;
+function applyPendingDesign() {
+  if (!designPending) return;
+  const busy = app.classList.contains('mode-player') || !!audioEngine?.isPlaying() || !!document.querySelector('.sheet-root.open, .dialog-root.open') || document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement;
+  if (busy || document.visibilityState === 'hidden') return;
+  designPending = false;
+  void reloadForDesign();
+}
+onSystemDesignChange(() => {
+  designPending = true;
+  applyPendingDesign();
+});
+document.addEventListener('visibilitychange', applyPendingDesign);
+
 function languageItems() {
   return [
     { label: 'Deutsch', icon: 'globe' as const, checked: lang === 'de', onSelect: () => lang !== 'de' && setLang('de') },
@@ -1066,7 +1112,7 @@ function languageItems() {
 }
 document.querySelector<HTMLButtonElement>('#lib-menu-btn')!.addEventListener('click', (e) => {
   const anchor = e.currentTarget as HTMLElement;
-  openMenu(anchor, [...feedbackItems(anchor), ...paperItems(anchor), ...languageItems(), ...introItems('library')], t('language'));
+  openMenu(anchor, [...feedbackItems(anchor), ...appearanceItems(), ...paperItems(anchor), ...languageItems(), ...introItems('library')], t('language'));
 });
 
 /** The paper design's paper, to choose on this device (paper.ts). */
@@ -2997,7 +3043,7 @@ function openSettingsMenu(anchor: HTMLElement) {
     const on = swingChosen(currentSong);
     items.push({ label: t('swingItem'), icon: 'quarter', checked: on, onSelect: () => void setSwing(!on) });
   }
-  items.push({ label: t('lightOffset'), icon: 'metronome', onSelect: () => openLightOffsetSheet(anchor) }, ...paperItems(anchor));
+  items.push({ label: t('lightOffset'), icon: 'metronome', onSelect: () => openLightOffsetSheet(anchor) }, ...appearanceItems(), ...paperItems(anchor));
   openMenu(anchor, items, t('settings'));
 }
 
