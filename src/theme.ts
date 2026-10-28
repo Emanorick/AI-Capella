@@ -129,7 +129,7 @@ export const FONT_DISPLAY = '"Bodoni Moda Variable", "Bodoni Moda", Didot, Georg
 // or with the type test (design.ts) faces of their own, which have one weight.
 export const FONT_MARK = TYPE_TEST ? `"Baltimore Bold 1832", ${FONT_DISPLAY}` : FONT_DISPLAY;
 export const MARK_WEIGHT = TYPE_TEST ? 400 : 700;
-export const FONT_BRAND = TYPE_TEST ? `"Johnson 1892", ${FONT_DISPLAY}` : FONT_DISPLAY;
+export const FONT_BRAND = TYPE_TEST ? `"Baltimore Black Slope 1832", ${FONT_DISPLAY}` : FONT_DISPLAY;
 export const BRAND_WEIGHT = TYPE_TEST ? 400 : 600;
 /** SMuFL music font (Bravura, subset to the glyphs the sheet view uses -- see assets/fonts). */
 export const FONT_MUSIC = 'Bravura';

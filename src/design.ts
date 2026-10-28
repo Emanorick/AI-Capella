@@ -54,8 +54,8 @@ export const START_STAGE = START_CHOICE === 'buehne';
 /**
  * Test (?schrift=test; ?schrift=heute goes back): the faces from Font Revival (assets/fonts/revival)
  * -- headings in Baltimore Title, song titles in Modern Antique, rehearsal letters in Baltimore
- * Bold, text and controls in Remington, the "Score" of the name in Johnson (typeTest.css). The
- * fonts are only fetched on a device that has it on.
+ * Bold, text and controls in Remington, the "Score" of the name in Baltimore Black Slope
+ * (typeTest.css). The fonts are only fetched on a device that has it on.
  */
 export const TYPE_TEST = deviceChoice('schrift', 'ai-capella-schrift', ['heute', 'test'] as const, 'heute') === 'test';
 

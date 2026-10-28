@@ -724,8 +724,8 @@ layer (strength between "subtle" and "balanced" of its design draft):
   faces from Font Revival (19th-century American type specimens, MIT; `src/assets/fonts/revival`
   with its README) — headings in Baltimore Title 1832 as spaced capitals, song titles in Modern
   Antique 1889, rehearsal letters in Baltimore Bold 1832 (also on the canvases: `FONT_MARK`),
-  text and controls in Remington 1888 (a typewriter), the "Score" of the name in Johnson 1892
-  (header and the title screen's ink: `FONT_BRAND`). Lyrics in the score stay Atkinson. None of
+  text and controls in Remington 1888 (a typewriter), the "Score" of the name in Baltimore Black
+  Slope 1832 (header and the title screen's ink: `FONT_BRAND`). Lyrics in the score stay Atkinson. None of
   the faces had German letters: Ä Ö Ü ä ö ü are added (letter plus two dots from the face's own
   period), ß is "ss" (`add-german.py`). Every rule is scoped to `:root[data-schrift='test']`, so
   other devices never fetch the faces.

@@ -10,7 +10,7 @@ github.com/fontrevival/font-revival at b848391 (2026-10-26).
 | `ModernAntique1889.woff2` | Modern Antique 1889 | song titles |
 | `BaltimoreBold1832.woff2` | Baltimore Bold 1832 | rehearsal letters |
 | `Remington1888.woff2` | Remington 1888 | text and controls |
-| `Johnson1892.woff2` | Johnson 1892 | the "Score" of LightScore |
+| `BaltimoreBlackSlope1832.woff2` | Baltimore Black Slope 1832 | the "Score" of LightScore |
 
 **Changed from the originals** (`add-german.py`): none of them has German letters, so Ä Ö Ü ä ö ü
 are added, each the letter with two dots drawn from the face's own period; ß and ẞ are set as

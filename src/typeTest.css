@@ -1,9 +1,10 @@
 /* The type test (?schrift=test, design.ts): faces from Font Revival (assets/fonts/revival).
    Headings in Baltimore Title, in spaced capitals as on an engraved title page; song titles in
    Modern Antique; rehearsal letters in Baltimore Bold; text and controls in Remington, a
-   typewriter; the "Score" of the name in Johnson. Each face has one weight -- bold text is set
-   by the browser, like a key struck twice. Everything here is scoped to the test, and a browser
-   only fetches a face once something on the page uses it, so other devices never load them. */
+   typewriter; the "Score" of the name in Baltimore Black Slope, leaning back against the pen
+   script's "Light". Each face has one weight -- bold text is set by the browser, like a key
+   struck twice. Everything here is scoped to the test, and a browser only fetches a face once
+   something on the page uses it, so other devices never load them. */
 
 @font-face {
   font-family: 'Baltimore Title 1832';
@@ -26,8 +27,8 @@
   font-display: swap;
 }
 @font-face {
-  font-family: 'Johnson 1892';
-  src: url('./assets/fonts/revival/Johnson1892.woff2') format('woff2');
+  font-family: 'Baltimore Black Slope 1832';
+  src: url('./assets/fonts/revival/BaltimoreBlackSlope1832.woff2') format('woff2');
   font-display: swap;
 }
 
@@ -39,7 +40,7 @@
 }
 
 :root[data-schrift='test'] .wordmark {
-  font-family: 'Johnson 1892', var(--f-display);
+  font-family: 'Baltimore Black Slope 1832', var(--f-display);
   font-weight: 400;
   font-synthesis: none;
 }
