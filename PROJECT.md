@@ -589,6 +589,23 @@ layer (strength between "subtle" and "balanced" of its design draft):
   is still there as `?logo=1`.) The app mark, app icons and favicon are the four voice lines
   written with the pointed pen on night paper (icons generated from the same geometry as
   `drawMark`; the service worker's cache name was bumped so installed apps pick them up).
+- **"Pergament & Tinte" -- the light design (test: `?design=pergament`, `?design=papier` goes
+  back).** The paper design on parchment: `design.ts PARCHMENT` keeps `data-design='papier'` (so
+  everything of the paper design holds) and adds `data-ground='pergament'`, which
+  `parchment.css` turns light: the ink tokens become the parchment's shades, `--paper` (what
+  things are printed in) iron-gall ink, gold becomes a darker gold leaf; buttons stay
+  blind-embossed, overlays paler parchment; the tour and the power hint turn ink-dark (as on the
+  night paper they are paper-light). On the canvases `theme.ts` swaps the same way (`INK0..3`,
+  `PAPER`, `paper()`, `towardPaper` mixing toward the ink), the voices are inks
+  (`palette.ts INKS`: carmine to violet, the order and temperatures kept), and `paper.ts` has a
+  kind of its own, *pergament*: skin rather than pulp -- clouds, scattered pores, faint veins,
+  its shades umber, the light through it amber (no paper chooser in this design). The lamp
+  (`lantern.ts`) can't add light to a light ground: away from it the inks only pale a little;
+  at the reading line they go a little brighter, and the lamp's glow is multiplied into the
+  parchment, deepening it to amber and the inks around a sounding note into their colour.
+  Played music fades like old ink instead of darkening. The title's "Light" is written in ink
+  with the lamp's warmth around it, its voice lines soak into the parchment (`multiply`) instead
+  of adding light. Without the switch nothing of this applies (checked pixel for pixel).
 - **Title screen (paper design; design.ts `START_DRAFT`, `?start=heute` brings back the earlier
   one).** The voice lines, written by the pen one after another, become figures of light
   (`lightRibbons.ts`): a thin bright core in a soft glow (drawn wide and faint at a quarter of the

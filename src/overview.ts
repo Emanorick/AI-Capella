@@ -2,6 +2,7 @@ import { backingSize } from './pixels';
 import type { Score } from './score';
 import type { LoopRegion } from './pianoRoll';
 import { PAPER, paper, withAlpha } from './theme';
+import { PARCHMENT } from './design';
 
 const PAD_X = 16;
 
@@ -130,7 +131,7 @@ export class OverviewStrip {
     }
     if (this.notesLayer) ctx.drawImage(this.notesLayer, 0, 0, this.cssWidth, this.cssHeight);
     const px = Math.round(this.beatToX(playheadBeat));
-    ctx.fillStyle = 'rgba(19,18,30,0.55)';
+    ctx.fillStyle = PARCHMENT ? 'rgba(232,216,182,0.6)' : 'rgba(19,18,30,0.55)';
     ctx.fillRect(PAD_X, top - 4, Math.max(0, px - PAD_X), bottom - top + 8);
     ctx.fillStyle = PAPER;
     ctx.fillRect(px - 1, 2, 2, this.cssHeight - 4);

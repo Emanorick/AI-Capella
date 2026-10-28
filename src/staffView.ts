@@ -3,7 +3,7 @@ import type { MeasureInfo, NoteEvent, PartInfo, Score } from './score';
 import type { PartMixState } from './audioEngine';
 import { FONT_MARK, FONT_MONO, FONT_MUSIC, FONT_TEXT, MARK_WEIGHT, INK1, PAPER, paper, stageFill, playheadBeam, readingStrip, drawQueryMark } from './theme';
 import { backlight, NIGHT_PAPER, paintPaper, STILL } from './paper';
-import { PAPER_DESIGN } from './design';
+import { PAPER_DESIGN, PARCHMENT } from './design';
 import { drawRulerSignature, signatureChanges, type SignatureChange } from './signatures';
 import { drawInkMark, layoutMarks, MARKS_ON, type MarkLayout } from './goldInk';
 
@@ -29,7 +29,9 @@ const STAFF_HEIGHT_PX = LINE_SPACING_PX * 4; // 5 lines, 4 gaps
 const MIN_STAFF_GAP_PX = 58;
 const FIRST_STAFF_TOP_PX = 44; // room for the first voice's label and ledger lines above it
 const DIMMED_ALPHA = 0.3; // matches PianoRoll's dimmed-part alpha
-const PAST_SHADE = 'rgba(13,12,22,0.38)'; // over everything left of the playhead, as in the piano roll
+// Over everything left of the playhead, as in the piano roll (on parchment the played music fades).
+const PAST_RGB = PARCHMENT ? '232,216,182' : '13,12,22';
+const PAST_SHADE = `rgba(${PAST_RGB},${PARCHMENT ? 0.5 : 0.38})`;
 // A note starting exactly at a measure's startBeat would otherwise land its notehead on the
 // barline (both computed via the same beatToX) -- nudged right so it sits just after the barline.
 // Applied only in drawNote's own local x, never in beatToX itself.
@@ -858,7 +860,7 @@ export class StaffView {
         // A soft edge, as on the punched roll, so the lamp's strip isn't cut in half.
         const fade = ctx.createLinearGradient(playheadPx - 72, 0, playheadPx, 0);
         fade.addColorStop(0, PAST_SHADE);
-        fade.addColorStop(1, 'rgba(13,12,22,0)');
+        fade.addColorStop(1, `rgba(${PAST_RGB},0)`);
         ctx.fillStyle = fade;
       } else ctx.fillStyle = PAST_SHADE;
       ctx.fillRect(G, STAFF_RULER_HEIGHT_PX, Math.min(width, playheadPx) - G, height - STAFF_RULER_HEIGHT_PX);
@@ -892,7 +894,7 @@ export class StaffView {
   /** The pinned left margin: voice name above each staff, then clef and key signature on it. */
   private drawMargin(ctx: CanvasRenderingContext2D, layouts: PartLayout[], startBeat: number, height: number) {
     const G = this.gutterPx;
-    const ground = PAPER_DESIGN ? '27,22,33' : '19,18,30';
+    const ground = PARCHMENT ? '232,216,182' : PAPER_DESIGN ? '27,22,33' : '19,18,30';
     // The pinned margin is a strip of its own: its paper stays put.
     if (PAPER_DESIGN) paintPaper(ctx, 0, STAFF_RULER_HEIGHT_PX, G, height - STAFF_RULER_HEIGHT_PX, STILL, 'surface', NIGHT_PAPER);
     else {

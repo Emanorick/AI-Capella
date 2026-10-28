@@ -1,0 +1,374 @@
+/* =========================================================================================
+   Pergament & Tinte -- the paper design on parchment (design.ts; test: ?design=pergament).
+   Everything of the paper design holds (data-design='papier' stays set), turned to a light
+   ground: parchment everywhere, text in iron-gall ink, the voices in coloured inks, gold leaf
+   where the night paper has gold. Floating things are thinner, paler parchment; buttons are
+   still blind-embossed. The lamp behind the parchment makes it glow amber at the reading line.
+   ========================================================================================= */
+
+:root[data-ground='pergament'] {
+  color-scheme: light;
+  --ink-0: #e3d2ae;
+  --ink-1: #e8d8b6;
+  --ink-2: #eee2c6;
+  --ink-3: #f3e9d3;
+  --ink-4: #f7f0df;
+  --hair: rgb(70 46 20 / 0.14);
+  --hair-2: rgb(70 46 20 / 0.24);
+  --paper: #2e2219;
+  --paper-dim: #5b4a3a;
+  --muted: #7d6a55;
+  --danger: #a8303a;
+  --live: #2e8a55;
+  --gold: #9c6d1a;
+  --gold-leaf: linear-gradient(180deg, #d1a548, #a87920 55%, #8a5e14);
+  --sheet-bg: var(--fibre), linear-gradient(180deg, #efe3c7, #eadbbb);
+  --glass-bg: var(--fibre), linear-gradient(180deg, rgb(255 252 242 / 0.35), rgb(255 252 242 / 0)), rgb(241 232 210 / 0.97);
+  --glass-bg-strong: var(--fibre), rgb(239 229 205 / 0.93);
+  --glass-filter: blur(10px) saturate(0.9);
+  --glass-filter-strong: blur(12px) saturate(0.85);
+  --glass-edge: rgb(70 46 20 / 0.14);
+  --glass-hi: inset 0 1px 0 rgb(255 255 250 / 0.6);
+  --velvet-card: var(--sheet-bg);
+  --emboss-raised: -1px -1px 0 rgb(255 255 250 / 0.7), 1px 2px 3px rgb(80 50 20 / 0.26), inset 1px 1px 0 rgb(255 255 250 / 0.75), inset -2px -3px 6px rgb(110 75 35 / 0.14);
+  --emboss-pressed: inset 1px 2px 4px rgb(90 60 25 / 0.28), inset -1px -1px 0 rgb(255 255 250 / 0.6);
+}
+
+:root[data-ground='pergament'],
+:root[data-ground='pergament'] body {
+  background: #e8d8b6;
+}
+
+:root[data-ground='pergament'] .stage {
+  background: var(--fibre), #e8d8b6;
+}
+
+/* ---- Gold leaf: the name, the dedication, the code line ---------------------------------- */
+
+:root[data-ground='pergament'] .wordmark[aria-label='LightScore'] {
+  background: linear-gradient(180deg, #6b4912 5%, #a67824 50%, #6b4912 95%);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+/* "Light" in iron-gall ink, the lamp's warmth behind it. */
+:root[data-ground='pergament'] .ls-l {
+  color: #2e2016;
+  text-shadow: 0 0 0.3em rgb(226 150 52 / 0.3);
+}
+
+:root[data-ground='pergament'] .ded-name {
+  background: linear-gradient(180deg, #6b4912 8%, #a67824 52%, #6b4912 96%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  filter: drop-shadow(0 1px 0 rgb(255 255 250 / 0.6));
+}
+
+:root[data-ground='pergament'] .code-line {
+  border-bottom-color: rgb(140 100 40 / 0.45);
+  color: var(--paper);
+}
+
+:root[data-ground='pergament'] .code-line:focus {
+  border-bottom-color: #9c6d1a;
+  box-shadow: 0 6px 12px -8px rgb(180 120 40 / 0.4);
+}
+
+/* ---- The title screen --------------------------------------------------------------------- */
+
+:root[data-ground='pergament'] .landing-name .ink {
+  filter: drop-shadow(0 10px 10px rgb(90 60 25 / 0.22)) drop-shadow(0 1px 1px rgb(90 60 25 / 0.2));
+}
+
+:root[data-ground='pergament'] .mode-btn {
+  background: var(--fibre), linear-gradient(180deg, #f2e8d0, #e9dbbb);
+  color: var(--paper);
+  text-shadow: 0 1px 0 rgb(255 255 250 / 0.6);
+  box-shadow: var(--emboss-raised), 0 12px 24px -14px rgb(90 60 25 / 0.45);
+}
+
+:root[data-ground='pergament'] .mode-btn .ic {
+  filter: drop-shadow(0 1px 0 rgb(255 255 250 / 0.6));
+}
+
+:root[data-ground='pergament'] .mode-btn:hover {
+  background: var(--fibre), linear-gradient(180deg, #f5ecd6, #ecdfc1);
+  box-shadow: var(--emboss-raised), 0 16px 28px -14px rgb(90 60 25 / 0.5);
+}
+
+:root[data-ground='pergament'] .mode-btn.last-used {
+  box-shadow: var(--emboss-raised), 0 12px 24px -14px rgb(90 60 25 / 0.45), inset 0 -2px 0 rgb(180 120 40 / 0.45), 0 6px 16px -8px rgb(220 150 60 / 0.35);
+}
+
+/* ---- Buttons, switches, fields ------------------------------------------------------------- */
+
+:root[data-ground='pergament'] .btn.primary:hover {
+  background: #3d2e22;
+}
+
+:root[data-ground='pergament'] .play-btn,
+:root[data-ground='pergament'] .play-btn:hover {
+  color: var(--paper);
+  background: var(--fibre), #efe3c7;
+  box-shadow: var(--emboss-raised);
+}
+
+:root[data-ground='pergament'] .play-btn:active {
+  box-shadow: var(--emboss-pressed);
+}
+
+:root[data-ground='pergament'] .play-btn .ic {
+  filter: drop-shadow(1px 1px 0 rgb(255 255 250 / 0.6));
+}
+
+:root[data-ground='pergament'] .t-btn.toggle[aria-pressed='true'],
+:root[data-ground='pergament'] .zoom .follow-btn[aria-pressed='true'],
+:root[data-ground='pergament'] .seg button[aria-pressed='true'] {
+  background: rgb(110 75 35 / 0.1);
+  border-color: transparent;
+  box-shadow: var(--emboss-pressed);
+}
+
+:root[data-ground='pergament'] .stepper {
+  background: rgb(110 75 35 / 0.07);
+  box-shadow: inset 0 1px 2px rgb(90 60 25 / 0.2);
+}
+
+:root[data-ground='pergament'] .voice-row:hover {
+  background: rgb(110 75 35 / 0.06);
+}
+
+:root[data-ground='pergament'] .zoom {
+  background: rgb(241 232 210 / 0.92);
+}
+
+:root[data-ground='pergament'] input[type='range']::-webkit-slider-thumb {
+  box-shadow: 0 2px 6px rgb(90 60 25 / 0.35);
+}
+
+:root[data-ground='pergament'] .menu-item::before {
+  background: radial-gradient(closest-side, rgb(220 150 60 / 0.18), rgb(220 150 60 / 0.07) 60%, rgb(220 150 60 / 0));
+}
+
+:root[data-ground='pergament'] .menu-item:hover,
+:root[data-ground='pergament'] .menu-item:focus-visible {
+  color: #1f160f;
+  text-shadow: 0 0 14px rgb(230 160 70 / 0.35);
+}
+
+:root[data-ground='pergament'] .menu-item[aria-checked='true'] .menu-check {
+  color: #9c6d1a;
+}
+
+/* ---- A voice: a tab with a window of coloured glass, covered when switched off ------------ */
+
+:root[data-ground='pergament'] .chip {
+  border-color: rgb(70 46 20 / 0.12);
+  box-shadow: inset 0 1px 0 rgb(255 255 250 / 0.6), 0 1px 2px rgb(90 60 25 / 0.25);
+}
+
+:root[data-ground='pergament'] .chip i {
+  background: radial-gradient(60% 90% at 50% 50%, color-mix(in oklab, var(--c) 55%, #fff6dc) 0%, var(--c) 72%);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--c) 45%, transparent), inset 0 0 0 1px rgb(70 45 20 / 0.35);
+}
+
+:root[data-ground='pergament'] .chip.is-solo {
+  border-color: color-mix(in oklab, var(--c) 55%, transparent);
+  background: var(--fibre), color-mix(in oklab, var(--c) 14%, #eee2c6);
+}
+
+:root[data-ground='pergament'] .chip.is-dimmed i,
+:root[data-ground='pergament'] .chip.is-muted i {
+  background: #d6c29a;
+  box-shadow: inset 0 1px 2px rgb(90 60 25 / 0.35), inset 0 0 0 1px rgb(70 45 20 / 0.2);
+}
+
+:root[data-ground='pergament'] .chip.is-dimmed i {
+  background: radial-gradient(60% 90% at 50% 50%, color-mix(in oklab, var(--c) 40%, #d6c29a) 0%, #d6c29a 80%);
+}
+
+:root[data-ground='pergament'] .chips-mixer {
+  background: linear-gradient(90deg, rgb(232 216 182 / 0), rgb(232 216 182 / 0.9) 45%);
+}
+
+:root[data-ground='pergament'] .mixer-chip {
+  background: var(--sheet-bg);
+}
+
+/* ---- Repertoire: sheets lying in a stack -------------------------------------------------- */
+
+:root[data-ground='pergament'] .song-card {
+  border-color: rgb(70 46 20 / 0.12);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 250 / 0.6),
+    0 1px 0 rgb(90 60 25 / 0.16),
+    5px 6px 0 -2px #e2d0aa,
+    5px 6px 0 -1px rgb(90 60 25 / 0.16),
+    0 24px 40px -28px rgb(90 60 25 / 0.45);
+}
+
+:root[data-ground='pergament'] .song-card:hover {
+  border-color: rgb(70 46 20 / 0.22);
+}
+
+:root[data-ground='pergament'] .song-card::after {
+  background: radial-gradient(circle at var(--mx, 50%) var(--my, 0%), rgb(255 252 240 / 0.35), transparent 45%);
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  :root[data-ground='pergament'] .song-card.is-tilted {
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 250 / 0.6),
+      5px 6px 0 -2px #e2d0aa,
+      5px 6px 0 -1px rgb(90 60 25 / 0.16),
+      0 34px 50px -30px rgb(90 60 25 / 0.5);
+  }
+}
+
+:root[data-ground='pergament'] .song-card.skeleton {
+  background: linear-gradient(100deg, rgb(226 210 176 / 0.8) 30%, rgb(238 226 200 / 0.8) 50%, rgb(226 210 176 / 0.8) 70%) 0 0 / 300% 100%;
+}
+
+:root[data-ground='pergament'] .song-card.lifted {
+  box-shadow: 0 22px 48px rgb(90 60 25 / 0.35);
+}
+
+:root[data-ground='pergament'] .song-more,
+:root[data-ground='pergament'] .song-card > .tag {
+  background: rgb(241 232 210 / 0.85);
+}
+
+:root[data-ground='pergament'] .cover {
+  background: #e8d8b6;
+}
+
+:root[data-ground='pergament'] .drop-veil {
+  background: rgb(232 216 182 / 0.9);
+}
+
+:root[data-ground='pergament'] .drop-slot {
+  background: rgb(110 75 35 / 0.05);
+}
+
+/* ---- Bars, overlays, notes ---------------------------------------------------------------- */
+
+:root[data-ground='pergament'] .lib-top,
+:root[data-ground='pergament'] .p-top {
+  box-shadow: inset 0 -1px 0 rgb(90 60 25 / 0.14);
+}
+
+:root[data-ground='pergament'] .sheet-root.open,
+:root[data-ground='pergament'] .dialog-root.open {
+  background: rgb(60 40 20 / 0.28);
+}
+
+:root[data-ground='pergament'] .popover,
+:root[data-ground='pergament'] .sheet,
+:root[data-ground='pergament'] .dialog {
+  box-shadow: var(--glass-hi), 0 30px 70px -20px rgb(90 60 25 / 0.45);
+}
+
+:root[data-ground='pergament'] #toast,
+:root[data-ground='pergament'] .power-hint,
+:root[data-ground='pergament'] .fb-ask,
+:root[data-ground='pergament'] .intro-card {
+  box-shadow: 0 16px 40px rgb(90 60 25 / 0.3);
+}
+
+:root[data-ground='pergament'] #sound-prompt {
+  box-shadow: 0 0 0 6px rgb(180 120 40 / 0.25), 0 16px 40px rgb(90 60 25 / 0.3);
+}
+
+:root[data-ground='pergament'] .intro-spot {
+  background: radial-gradient(120% 90% at 50% 0%, rgb(255 236 196 / 0.25), rgb(255 236 196 / 0) 70%);
+  box-shadow:
+    0 0 0 1.5px rgb(156 109 26 / 0.65),
+    0 0 26px 4px rgb(214 150 60 / 0.3),
+    0 0 0 200vmax rgb(60 40 20 / 0.42);
+}
+
+:root[data-ground='pergament'] .badge.is-leading,
+:root[data-ground='pergament'] #app.sing-along .badge {
+  border-color: rgb(156 109 26 / 0.45);
+  color: #7a5414;
+  background: linear-gradient(180deg, rgb(214 160 70 / 0.16), rgb(214 160 70 / 0.06));
+  box-shadow: none;
+}
+
+:root[data-ground='pergament'] .fb-count {
+  background: #b8862b;
+  color: #fff8ea;
+}
+
+:root[data-ground='pergament'] .fb-ask-icon {
+  color: #9c6d1a;
+}
+
+:root[data-ground='pergament'] .fb-item.kind-wish {
+  --fb-kind: #2d69ae;
+}
+:root[data-ground='pergament'] .fb-item.kind-idea {
+  --fb-kind: #9c7414;
+}
+:root[data-ground='pergament'] .fb-item.kind-note {
+  --fb-kind: #5a8a2a;
+}
+:root[data-ground='pergament'] .fb-item.kind-survey {
+  --fb-kind: #8445a6;
+}
+
+/* ---- Scanning ------------------------------------------------------------------------------ */
+
+:root[data-ground='pergament'] .scan-num,
+:root[data-ground='pergament'] .scan-crop-toggle {
+  background: rgb(241 232 210 / 0.9);
+}
+
+:root[data-ground='pergament'] .scan-page-tools {
+  background: linear-gradient(transparent, rgb(232 216 182 / 0.92));
+}
+
+:root[data-ground='pergament'] .scan-error {
+  background: rgb(168 48 58 / 0.1);
+}
+
+:root[data-ground='pergament'] .scan-steps .is-active .scan-dot {
+  box-shadow: 0 0 0 4px rgb(110 75 35 / 0.14);
+}
+
+:root[data-ground='pergament'] .scan-bar span {
+  background: linear-gradient(90deg, #b8384f, #9c7414, #5a8a2a, #2d69ae, #8445a6);
+}
+
+:root[data-ground='pergament'] .conf-medium .scan-conf {
+  background: #b8862b;
+}
+
+:root[data-ground='pergament'] .scan-remark {
+  color: #8a5e14;
+}
+
+:root[data-ground='pergament'] .scan-option:has(input:checked) {
+  background: rgb(46 138 85 / 0.1);
+}
+
+/* ---- Notes that stand out (the tour, the power hint): on parchment they are ink-dark, as on the
+   night paper they are paper-light -- their small print turned round with them. ---------------- */
+
+:root[data-ground='pergament'] .intro-count,
+:root[data-ground='pergament'] .intro-card .link-btn,
+:root[data-ground='pergament'] .power-hint .link-btn {
+  color: rgb(243 233 211 / 0.62);
+}
+
+:root[data-ground='pergament'] .intro-dots i {
+  background: rgb(243 233 211 / 0.22);
+}
+
+:root[data-ground='pergament'] .intro-dots i.on {
+  background: #d1a548;
+}
+
+:root[data-ground='pergament'] .intro-card .btn {
+  border-color: rgb(243 233 211 / 0.3);
+}

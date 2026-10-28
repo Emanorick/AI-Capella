@@ -6,6 +6,7 @@
 // at a writing hand's pace, slower through the curves, easing in and out of every stroke, with a
 // short lift between them. A bright point marks the nib; what it has written glows.
 
+import { PARCHMENT } from './design';
 import { FONT_SCRIPT, loadScriptFont } from './goldInk';
 import { renderInk } from './inkWordmark';
 import { LIGHT_STROKES } from './lightStrokes';
@@ -64,7 +65,8 @@ function renderLight(size: number, dpr: number): LightArt {
     return [c, g] as const;
   };
   const [core, c] = canvas();
-  c.fillStyle = 'rgb(255,252,244)';
+  // (On parchment written in iron-gall ink, the lamp's warmth still around it.)
+  c.fillStyle = PARCHMENT ? 'rgb(46,32,22)' : 'rgb(255,252,244)';
   c.fillText('Light', pad, baseline);
   const [full, f] = canvas();
   glow(f, core, dpr, size);
@@ -75,12 +77,17 @@ function renderLight(size: number, dpr: number): LightArt {
 function glow(ctx: CanvasRenderingContext2D, letters: HTMLCanvasElement, dpr: number, size: number) {
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  for (const [blur, a] of [
-    [size * 0.45, 0.22],
-    [size * 0.18, 0.3],
-    [size * 0.06, 0.45],
-  ]) {
-    ctx.shadowColor = `rgba(255,190,112,${a})`;
+  for (const [blur, a] of PARCHMENT
+    ? [
+        [size * 0.45, 0.16],
+        [size * 0.16, 0.2],
+      ]
+    : [
+        [size * 0.45, 0.22],
+        [size * 0.18, 0.3],
+        [size * 0.06, 0.45],
+      ]) {
+    ctx.shadowColor = PARCHMENT ? `rgba(226,150,52,${a})` : `rgba(255,190,112,${a})`;
     ctx.shadowBlur = blur * dpr;
     ctx.drawImage(letters, 0, 0);
   }

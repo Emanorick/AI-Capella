@@ -2,9 +2,9 @@ import { backingSize } from './pixels';
 import type { NoteEvent, Score, SlurArc } from './score';
 import { getBeatMarkers } from './score';
 import { FONT_MARK, FONT_MONO, FONT_TEXT, MARK_WEIGHT, INK0, INK1, PAPER, paper, towardPaper, withAlpha, stageFill, gelPill, playheadBeam, drawQueryMark } from './theme';
-import { backlight, BACKLIGHT_REACH, paintPaper, type PaperFrame } from './paper';
+import { backlight, BACKLIGHT_REACH, NIGHT_PAPER, paintPaper, type PaperFrame } from './paper';
 import { Lantern, type Flare } from './lantern';
-import { deviceChoice, PAPER_DESIGN } from './design';
+import { deviceChoice, PAPER_DESIGN, PARCHMENT } from './design';
 import { drawRulerSignature, signatureChanges, transposeFifths, type SignatureChange } from './signatures';
 
 export const BASE_PIXELS_PER_BEAT = 70;
@@ -40,10 +40,10 @@ const LYRIC_STYLE: 'score' | 'plain' = 'score';
 type NoteStyle = 'lantern' | 'gel';
 const NOTE_STYLE: NoteStyle = deviceChoice('roll', 'ai-capella-roll', ['lantern', 'gel'] as const, PAPER_DESIGN ? 'lantern' : 'gel');
 const LANTERN = NOTE_STYLE === 'lantern';
-const LANTERN_PAPER = '#1b1621';
+const LANTERN_PAPER = NIGHT_PAPER;
 // How strongly the lamp shows the paper's inside around the reading line (paper.ts backlight).
 const PAPER_BACKLIGHT = 0.3;
-const LANTERN_VOID = '#08060c'; // behind the paper, where no light reaches
+const LANTERN_VOID = PARCHMENT ? '#6b5236' : '#08060c'; // behind the paper, where no light reaches
 // The voices' colour filters behind the holes are soft anyway -- painted at reduced resolution.
 const GLASS_SCALE = 0.75;
 // The lamp sits at the playhead. After a jump the view itself travels there (main.ts), which
@@ -94,7 +94,9 @@ export function shareLyrics(notes: NoteEvent[]): NoteEvent[] {
 }
 
 type Sounding = Flare & { note: NoteEvent };
-const PAST_SHADE = 'rgba(13,12,22,0.38)'; // laid over everything left of the playhead: played notes step back
+// Laid over everything left of the playhead: played notes step back (on parchment they fade, as old ink does).
+const PAST_RGB = PARCHMENT ? '232,216,182' : '13,12,22';
+const PAST_SHADE = `rgba(${PAST_RGB},${PARCHMENT ? 0.5 : 0.38})`;
 const PAST_FADE_PX = 72; // lantern: the shade fades in over this width left of the playhead
 const MAX_DPR = 2; // native Retina density; only caps 3x phones, doesn't soften a normal laptop screen
 const BUFFER_SPAN_MULTIPLIER = 3; // scrolling-content buffer covers this many viewport-widths of beats
@@ -796,7 +798,7 @@ export class PianoRoll {
       if (LANTERN && end > fadeFrom) {
         const fade = ctx.createLinearGradient(playheadXPos - PAST_FADE_PX, 0, playheadXPos, 0);
         fade.addColorStop(0, PAST_SHADE);
-        fade.addColorStop(1, 'rgba(13,12,22,0)');
+        fade.addColorStop(1, `rgba(${PAST_RGB},0)`);
         ctx.fillStyle = fade;
         ctx.fillRect(fadeFrom, 0, end - fadeFrom, contentAreaHeight);
       }
@@ -1155,7 +1157,7 @@ export class PianoRoll {
       const pc = ((midi % 12) + 12) % 12;
       const y = this.rowY(midi) - rowHeight;
       if (BLACK_KEY_PITCH_CLASSES.has(pc)) {
-        ctx.fillStyle = LANTERN ? 'rgba(0,0,0,0.13)' : 'rgba(0,0,0,0.26)';
+        ctx.fillStyle = PARCHMENT ? 'rgba(90,60,25,0.07)' : LANTERN ? 'rgba(0,0,0,0.13)' : 'rgba(0,0,0,0.26)';
         ctx.fillRect(0, y, widthCss, rowHeight);
       }
       if (pc === 0) {
@@ -1542,7 +1544,7 @@ function cutHoles(ctx: CanvasRenderingContext2D, pills: [number, number, number]
   ctx.fillStyle = '#000'; // any opaque colour: it's the coverage that cuts
   ctx.fill(holes);
   ctx.globalCompositeOperation = 'source-over';
-  ctx.strokeStyle = 'rgba(6,4,10,0.35)';
+  ctx.strokeStyle = PARCHMENT ? 'rgba(70,45,20,0.4)' : 'rgba(6,4,10,0.35)';
   ctx.lineWidth = 1;
   ctx.stroke(holes);
   ctx.restore();

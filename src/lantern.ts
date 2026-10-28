@@ -16,6 +16,8 @@
 // the reading line, falling off quickly over the music already played and reaching far ahead over
 // the music to come.
 
+import { PARCHMENT } from './design';
+
 export type Flare = { x: number; y: number; w: number; h: number; color: string };
 
 type Cone = { x: number; y: number; d: number; r: number; sy: number };
@@ -28,17 +30,30 @@ const WIDEST_SCALE = 0.0625;
 
 // Through the holes, along the lamp's spot (0 = its hot end, 1 = its rim and beyond): full colour
 // in the spot, darkening with distance.
-const THROUGH_STOPS: [number, string][] = [
-  [0, 'rgba(6,4,12,0)'],
-  [0.2, 'rgba(6,4,12,0)'],
-  [0.5, 'rgba(6,4,12,0.22)'],
-  [0.8, 'rgba(6,4,12,0.38)'],
-  [1, 'rgba(6,4,12,0.46)'],
-];
+// (On parchment the inks are dark already: away from the lamp they only pale a little, as
+// coloured glass does out of the light.)
+const THROUGH_STOPS: [number, string][] = PARCHMENT
+  ? [
+      [0, 'rgba(232,216,182,0)'],
+      [0.3, 'rgba(232,216,182,0)'],
+      [0.7, 'rgba(232,216,182,0.1)'],
+      [1, 'rgba(232,216,182,0.18)'],
+    ]
+  : [
+      [0, 'rgba(6,4,12,0)'],
+      [0.2, 'rgba(6,4,12,0)'],
+      [0.5, 'rgba(6,4,12,0.22)'],
+      [0.8, 'rgba(6,4,12,0.38)'],
+      [1, 'rgba(6,4,12,0.46)'],
+    ];
 // The reading line itself: a narrow band where the holes go white-hot (px before and after it).
 const HOT_BEHIND_PX = 22;
 const HOT_AHEAD_PX = 34;
-const HOT_WHITE = 'rgba(255,249,240,';
+// (On parchment not white-hot -- that would vanish into the light ground -- but lit through, like
+// stained glass in the sun: brighter, the colour kept.)
+const HOT_WHITE = PARCHMENT ? 'rgba(255,226,166,' : 'rgba(255,249,240,';
+// Before the line, at it, and after it.
+const HOT_STOPS = PARCHMENT ? [0.08, 0.22, 0.11] : [0.3, 0.82, 0.4];
 // In front of the paper the light stays close to the reading line: a tall, narrow strip along it
 // (half-widths below, as a fraction of the roll's width, with limits in px), fading fast to the
 // sides and a little toward the top and bottom.
@@ -48,7 +63,7 @@ const HALO_REACH = [0.16, 110, 240] as const;
 const HALO_STOPS = bell('0,0,0', 1);
 // The lamp seen through the paper itself: faint, as light from behind is.
 const PAPER_GLOW_REACH = [0.08, 64, 130] as const;
-const PAPER_GLOW_STOPS = bell('255,208,156', 0.11);
+const PAPER_GLOW_STOPS = PARCHMENT ? bell('236,150,52', 0.24) : bell('255,208,156', 0.11);
 
 /** Gradient stops for a bell-shaped fall-off (no visible edge), from `peak` opacity down to none. */
 function bell(rgb: string, peak: number): [number, string][] {
@@ -62,7 +77,8 @@ const HALO_WEIGHTS = [0.3, 0.32, 0.3];
 // A sounding note's halo, in the voice's colour.
 const FLARE_HALO_ALPHA = 0.5;
 // How much of that light is added back into the holes it comes from.
-const HOLE_BOOST = 1.3;
+// (Not on parchment: light added to its light inks only pales them.)
+const HOLE_BOOST = PARCHMENT ? 0 : 1.3;
 
 function cone(width: number, height: number, x: number): Cone {
   const r = Math.max(width * 0.75, 300);
@@ -159,9 +175,9 @@ export class Lantern {
     const hot = t.createLinearGradient(lampX - HOT_BEHIND_PX, 0, lampX + HOT_AHEAD_PX, 0);
     const at = HOT_BEHIND_PX / (HOT_BEHIND_PX + HOT_AHEAD_PX);
     hot.addColorStop(0, HOT_WHITE + '0)');
-    hot.addColorStop(at * 0.6, HOT_WHITE + '0.3)');
-    hot.addColorStop(at, HOT_WHITE + '0.82)');
-    hot.addColorStop(at + (1 - at) * 0.35, HOT_WHITE + '0.4)');
+    hot.addColorStop(at * 0.6, HOT_WHITE + HOT_STOPS[0] + ')');
+    hot.addColorStop(at, HOT_WHITE + HOT_STOPS[1] + ')');
+    hot.addColorStop(at + (1 - at) * 0.35, HOT_WHITE + HOT_STOPS[2] + ')');
     hot.addColorStop(1, HOT_WHITE + '0)');
     t.fillStyle = hot;
     t.fillRect(lampX - HOT_BEHIND_PX, 0, HOT_BEHIND_PX + HOT_AHEAD_PX, height);
@@ -207,10 +223,12 @@ export class Lantern {
 
     // ...which also brightens the holes themselves (added here, on the small layer: adding it to
     // the full screen costs a lot more on some devices -- see over()).
-    t.setTransform(1, 0, 0, 1, 0, 0);
-    t.globalCompositeOperation = 'lighter';
-    t.globalAlpha = HOLE_BOOST;
-    resample(t, glow, HALO_SCALE, LIGHT_SCALE, width, height);
+    if (HOLE_BOOST > 0) {
+      t.setTransform(1, 0, 0, 1, 0, 0);
+      t.globalCompositeOperation = 'lighter';
+      t.globalAlpha = HOLE_BOOST;
+      resample(t, glow, HALO_SCALE, LIGHT_SCALE, width, height);
+    }
 
     const smoothing = ctx.imageSmoothingEnabled;
     ctx.imageSmoothingEnabled = true;
@@ -225,9 +243,13 @@ export class Lantern {
     this.ready = false;
     // Laid over rather than added ('lighter'): on the dark paper the two look alike, and adding a
     // full-screen layer costs a lot more on some devices.
+    // On parchment the light can't be laid over the light ground: it deepens it, as parchment held
+    // against a lamp glows a deeper amber, the inks around a sounding note taking on its colour.
     const smoothing = ctx.imageSmoothingEnabled;
     ctx.imageSmoothingEnabled = true;
+    if (PARCHMENT) ctx.globalCompositeOperation = 'multiply';
     ctx.drawImage(this.glow, 0, 0, this.width * HALO_SCALE, this.height * HALO_SCALE, 0, 0, this.width, this.height);
+    if (PARCHMENT) ctx.globalCompositeOperation = 'source-over';
     ctx.imageSmoothingEnabled = smoothing;
   }
 }

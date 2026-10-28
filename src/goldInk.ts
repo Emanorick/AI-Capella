@@ -6,7 +6,7 @@
 // the top staff; dynamics and hairpins stand over each staff as in a printed choral score; words
 // repeated bar after bar are written the first time only.
 
-import { deviceChoice } from './design';
+import { deviceChoice, PARCHMENT } from './design';
 import type { Score, ScoreMark } from './score';
 import { FONT_MUSIC } from './theme';
 
@@ -73,9 +73,11 @@ const METRONOME_NOTE: Record<string, string> = { half: '', quarter: '', ei
 /** Gold ink: a little deeper where it pooled, a little brighter where it lies thin. */
 function goldInk(ctx: CanvasRenderingContext2D, x0: number, x1: number, top: number, bottom: number): CanvasGradient {
   const g = ctx.createLinearGradient(x0, top, x1 + (bottom - top), bottom);
-  g.addColorStop(0, 'rgb(150,114,50)');
-  g.addColorStop(0.45, 'rgb(196,158,84)');
-  g.addColorStop(1, 'rgb(140,106,46)');
+  // (On parchment a darker gold, to stand on the light ground as gold leaf does.)
+  const [a, b, c] = PARCHMENT ? ['rgb(112,78,22)', 'rgb(160,116,40)', 'rgb(104,72,20)'] : ['rgb(150,114,50)', 'rgb(196,158,84)', 'rgb(140,106,46)'];
+  g.addColorStop(0, a);
+  g.addColorStop(0.45, b);
+  g.addColorStop(1, c);
   return g;
 }
 

@@ -1,14 +1,17 @@
 // Canvas-side mirror of the CSS tokens in style.css -- the piano roll, sheet view, covers and
 // ribbons draw with these so canvas and DOM share one palette and one set of typefaces.
-import { TYPE_TEST } from './design';
+import { PARCHMENT, TYPE_TEST } from './design';
 
-export const INK0 = '#0D0C16';
-export const INK1 = '#13121E';
-export const INK2 = '#1B1929';
-export const INK3 = '#252235';
-export const PAPER = '#EFE7DA';
+// The grounds, deepest first, and the colour things are printed in on them: night paper and paper
+// white, or on parchment (design.ts) the parchment's shades and iron-gall ink.
+export const INK0 = PARCHMENT ? '#E6D6B4' : '#0D0C16';
+export const INK1 = PARCHMENT ? '#DFCDA7' : '#13121E';
+export const INK2 = PARCHMENT ? '#EADCBD' : '#1B1929';
+export const INK3 = PARCHMENT ? '#F0E5CC' : '#252235';
+export const PAPER = PARCHMENT ? '#2E2219' : '#EFE7DA';
+const PRINT_RGB = PARCHMENT ? [46, 34, 25] : [239, 231, 218];
 // Bars the scan wasn't sure of (scan marks): a small gold "?" by their number in the rulers.
-export const QUERY = '#EDC96B';
+export const QUERY = PARCHMENT ? '#A46F18' : '#EDC96B';
 
 /**
  * The stage the score sits on: velvet, a touch lighter at the top like fabric catching light,
@@ -18,16 +21,14 @@ let stageCache: { ctx: CanvasRenderingContext2D; h: number; fill: CanvasGradient
 export function stageFill(ctx: CanvasRenderingContext2D, height: number): CanvasGradient {
   if (stageCache && stageCache.ctx === ctx && stageCache.h === height) return stageCache.fill;
   const fill = ctx.createLinearGradient(0, 0, 0, height);
-  fill.addColorStop(0, '#17121f');
-  fill.addColorStop(0.55, '#110e19');
-  fill.addColorStop(1, '#0e0c16');
+  for (const [t, c] of PARCHMENT ? ([[0, '#EDE0C3'], [0.55, '#E8D8B7'], [1, '#E3D1AD']] as const) : ([[0, '#17121f'], [0.55, '#110e19'], [1, '#0e0c16']] as const)) fill.addColorStop(t, c);
   stageCache = { ctx, h: height, fill };
   return fill;
 }
 
-/** Paper at the given opacity -- hairlines, grid, secondary text on the dark ground. */
+/** The print colour at the given opacity -- hairlines, grid, secondary text (paper on the night ground, ink on parchment). */
 export function paper(alpha: number): string {
-  return `rgba(239,231,218,${alpha})`;
+  return `rgba(${PRINT_RGB[0]},${PRINT_RGB[1]},${PRINT_RGB[2]},${alpha})`;
 }
 
 export function withAlpha(hex: string, alpha: number): string {
@@ -36,12 +37,12 @@ export function withAlpha(hex: string, alpha: number): string {
   return `rgba(${(v >> 16) & 255},${(v >> 8) & 255},${v & 255},${alpha})`;
 }
 
-/** Mixes a hex colour toward paper by `k` (0..1) -- used for the "lit" state of sounding notes. */
+/** Mixes a hex colour toward the print colour by `k` (0..1) -- a voice's syllables and slurs as printed, the "lit" state of a gel note. */
 export function towardPaper(hex: string, k: number): string {
   if (!hex.startsWith('#')) return hex;
   const v = parseInt(hex.slice(1), 16);
   const mix = (c: number, p: number) => Math.round(c + (p - c) * k);
-  return `rgb(${mix((v >> 16) & 255, 239)},${mix((v >> 8) & 255, 231)},${mix(v & 255, 218)})`;
+  return `rgb(${mix((v >> 16) & 255, PRINT_RGB[0])},${mix((v >> 8) & 255, PRINT_RGB[1])},${mix(v & 255, PRINT_RGB[2])})`;
 }
 
 /** Mixes a hex colour toward deep ink by `k` (0..1) -- the shaded underside of a gel note. */
@@ -116,7 +117,7 @@ export function readingStrip(ctx: CanvasRenderingContext2D, x: number, top: numb
   const g = ctx.createLinearGradient(x - reach, 0, x + reach, 0);
   for (let i = 0; i <= 10; i++) {
     const t = i / 10;
-    g.addColorStop(t, `rgba(255,208,156,${(0.1 * Math.exp(-(((t - 0.5) / 0.2) ** 2))).toFixed(4)})`);
+    g.addColorStop(t, PARCHMENT ? `rgba(236,160,64,${(0.16 * Math.exp(-(((t - 0.5) / 0.2) ** 2))).toFixed(4)})` : `rgba(255,208,156,${(0.1 * Math.exp(-(((t - 0.5) / 0.2) ** 2))).toFixed(4)})`);
   }
   ctx.fillStyle = g;
   ctx.fillRect(x - reach, top, reach * 2, height);

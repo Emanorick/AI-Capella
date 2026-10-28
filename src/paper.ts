@@ -15,22 +15,25 @@
 //
 // Four kinds: Vergé (laid paper, its lines showing in the light -- everyone's), and on a device
 // (?papier=… or the menu) Nachtpapier (fine fibres along the roll), Bütten (handmade: cloudy,
-// rough, flecks) or Washi (Japanese paper, long silky fibres).
+// rough, flecks) or Washi (Japanese paper, long silky fibres). The parchment design (design.ts)
+// has its own: Pergament -- skin, not pulp: cloudy, with the pores where hair was and faint veins,
+// glowing amber against the lamp.
 
-import { deviceChoice } from './design';
+import { deviceChoice, PARCHMENT } from './design';
 
-export type PaperKind = 'nacht' | 'buetten' | 'verge' | 'washi';
+export type PaperKind = 'nacht' | 'buetten' | 'verge' | 'washi' | 'pergament';
+/** The kinds of night paper a device can choose (the parchment design has only parchment). */
 export const PAPER_KINDS: readonly PaperKind[] = ['verge', 'nacht', 'buetten', 'washi'];
 /** Everyone's paper, unless a device chose another: Vergé, chosen in October 2026. */
 export const DEFAULT_PAPER: PaperKind = 'verge';
 
-/** The colour of night paper (the roll, the sheet view, the covers). */
-export const NIGHT_PAPER = '#1b1621';
+/** The paper's own colour (the roll, the sheet view, the covers): night paper, or parchment. */
+export const NIGHT_PAPER = PARCHMENT ? '#E8D8B6' : '#1b1621';
 
 const N = 512; // the tile, in texture pixels
 const TS = 0.5; // CSS px per texture pixel: a tile is 256 px wide, and crisp on a 2x screen
 
-let kind: PaperKind = deviceChoice('papier', 'ai-capella-papier', PAPER_KINDS, DEFAULT_PAPER);
+let kind: PaperKind = PARCHMENT ? 'pergament' : deviceChoice('papier', 'ai-capella-papier', PAPER_KINDS, DEFAULT_PAPER);
 type Tiles = { surface: HTMLCanvasElement; light: HTMLCanvasElement };
 const made = new Map<PaperKind, Tiles>();
 
@@ -122,6 +125,8 @@ interface Recipe {
   laid?: { period: number; chains: number };
   fibres: (rnd: () => number) => Fibre[];
   flecks: number;
+  /** Made for a light ground (parchment): its shades in umber rather than black. */
+  onLight?: boolean;
 }
 
 /** A short fibre: a few points along a gently bending line. */
@@ -205,6 +210,21 @@ const RECIPES: Record<PaperKind, Recipe> = {
     ],
     flecks: 25,
   },
+  // Parchment: skin, not pulp. Clouds of thicker and thinner hide, the pores where the hair was in
+  // little scattered groups, a few faint veins; against the lamp the clouds and veins show dark in
+  // the amber light.
+  pergament: {
+    seed: 71,
+    formation: [[2, 2, 1], [4, 4, 0.75], [8, 8, 0.45], [16, 16, 0.25]],
+    flocs: [[3, 3, 1], [6, 6, 0.7], [12, 12, 0.4], [24, 24, 0.2]],
+    tooth: [[160, 160, 1], [320, 320, 0.5]],
+    surface: { formation: 0.7, tooth: 0.12, laid: 0, chain: 0 },
+    light: { formation: 0.9, tooth: 0.08, laid: 0, chain: 0 },
+    fibres: (rnd) =>
+      Array.from({ length: 70 }, () => ({ pts: strand(rnd, pick(rnd, 60, 220), rnd() * Math.PI * 2, 0.5, 10), width: pick(rnd, 0.8, 2.2), shade: -pick(rnd, 0.25, 0.6), block: pick(rnd, 0.25, 0.5) })),
+    flecks: 420,
+    onLight: true,
+  },
 };
 
 // How far a texture pixel may lighten or darken what is under it (alpha at full strength).
@@ -216,7 +236,7 @@ const LIGHT_BRIGHT = 0.3;
 const LIGHT_BASE = 0.35; // what passes even where it is thickest (relative)
 
 /** One field (-1..1 or so) into a tile: lighter as warm white, darker as shade, both as alpha. */
-function fieldTile(field: Float32Array, bright: [number, number, number], brightMax: number, darkMax: number): HTMLCanvasElement {
+function fieldTile(field: Float32Array, bright: [number, number, number], brightMax: number, darkMax: number, dark: [number, number, number] = [6, 4, 10]): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = c.height = N;
   const ctx = c.getContext('2d')!;
@@ -231,9 +251,9 @@ function fieldTile(field: Float32Array, bright: [number, number, number], bright
       d[o + 2] = bright[2];
       d[o + 3] = Math.min(255, v * brightMax * 255);
     } else {
-      d[o] = 6;
-      d[o + 1] = 4;
-      d[o + 2] = 10;
+      d[o] = dark[0];
+      d[o + 1] = dark[1];
+      d[o + 2] = dark[2];
       d[o + 3] = Math.min(255, -v * darkMax * 255);
     }
   }
@@ -303,8 +323,11 @@ function make(k: PaperKind) {
   // In the light, more fibre is darker: the formation turns round, the mould's lines shine.
   const lightField = new Float32Array(N * N);
   for (let i = 0; i < lightField.length; i++) lightField[i] = Math.max(0, LIGHT_BASE - (flocs[i] + formation[i] * 0.4) * r.light.formation - tooth[i] * r.light.tooth + laid[i] * r.light.laid + chain[i] * r.light.chain);
-  const surface = fieldTile(sum(r.surface), [255, 244, 228], SURFACE_LIGHT, SURFACE_DARK);
-  const light = fieldTile(lightField, [255, 204, 150], LIGHT_BRIGHT, 0); // the lamp's warm light
+  // (On parchment the shades are umber, the light through it amber.)
+  const shadow: [number, number, number] = r.onLight ? [96, 62, 28] : [6, 4, 10];
+  const surface = r.onLight ? fieldTile(sum(r.surface), [255, 250, 236], SURFACE_LIGHT * 1.2, SURFACE_DARK, shadow) : fieldTile(sum(r.surface), [255, 244, 228], SURFACE_LIGHT, SURFACE_DARK);
+  const light = fieldTile(lightField, r.onLight ? [238, 162, 66] : [255, 204, 150], LIGHT_BRIGHT, 0); // the lamp's warm light
+  const darkFibre = r.onLight ? '96,62,28' : '4,2,8';
 
   const sctx = surface.getContext('2d')!;
   const lctx = light.getContext('2d')!;
@@ -313,7 +336,7 @@ function make(k: PaperKind) {
     wrapped(sctx, f.pts, () => {
       path(sctx, f.pts);
       sctx.lineWidth = f.width;
-      sctx.strokeStyle = f.shade > 0 ? `rgba(255,244,228,${(0.032 * f.shade).toFixed(3)})` : `rgba(4,2,8,${(0.06 * -f.shade).toFixed(3)})`;
+      sctx.strokeStyle = f.shade > 0 ? `rgba(255,244,228,${(0.032 * f.shade).toFixed(3)})` : `rgba(${darkFibre},${(0.06 * -f.shade).toFixed(3)})`;
       sctx.stroke();
     });
     wrapped(lctx, f.pts, () => {
@@ -335,7 +358,7 @@ function make(k: PaperKind) {
     const draw = (ctx: CanvasRenderingContext2D, alpha: number) => () => {
       ctx.beginPath();
       ctx.ellipse(pts[0][0], pts[0][1], size, size * pick(rnd, 0.5, 1), rnd() * Math.PI, 0, Math.PI * 2);
-      ctx.fillStyle = dark ? (warm ? `rgba(70,40,20,${alpha})` : `rgba(4,2,8,${alpha})`) : `rgba(255,244,228,${alpha * 0.6})`;
+      ctx.fillStyle = dark ? (warm ? `rgba(70,40,20,${alpha})` : `rgba(${darkFibre},${alpha})`) : `rgba(255,244,228,${alpha * 0.6})`;
       ctx.fill();
     };
     wrapped(sctx, pts, draw(sctx, 0.2));

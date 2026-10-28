@@ -6,6 +6,7 @@ import '@fontsource-variable/atkinson-hyperlegible-next/wght.css';
 import '@fontsource-variable/atkinson-hyperlegible-mono/wght.css';
 import '@fontsource/italianno/latin-400.css';
 import './style.css';
+import './parchment.css';
 import './typeTest.css';
 import { parseMusicXML, splitStaves } from './musicxml';
 import { parseMIDI } from './midi';
@@ -23,7 +24,7 @@ import { countLabel, keyName, lang, setLang, t, type MessageKey } from './i18n';
 import { canvasFontsReady } from './theme';
 import { initScan, openScanSheet, scanAvailable, scanStatusLine } from './scan';
 import { WaveBackdrop } from './backdrop';
-import { PAPER_DESIGN, START_DRAFT, START_STAFF, START_STAGE } from './design';
+import { PAPER_DESIGN, PARCHMENT, START_DRAFT, START_STAFF, START_STAGE } from './design';
 import { initPaper, paintSwatch, PAPER_KINDS, paperKind, setPaperKind, type PaperKind } from './paper';
 import { applyPercussion } from './percussion';
 import { lightScoreName, type TitleName } from './lightName';
@@ -1070,7 +1071,8 @@ document.querySelector<HTMLButtonElement>('#lib-menu-btn')!.addEventListener('cl
 
 /** The paper design's paper, to choose on this device (paper.ts). */
 function paperItems(anchor: HTMLElement) {
-  return PAPER_DESIGN ? [{ label: t('paperMenu'), icon: 'sheet' as const, onSelect: () => openPaperSheet(anchor) }] : [];
+  // (Parchment has one paper, its own.)
+  return PAPER_DESIGN && !PARCHMENT ? [{ label: t('paperMenu'), icon: 'sheet' as const, onSelect: () => openPaperSheet(anchor) }] : [];
 }
 
 function openPaperSheet(opener: HTMLElement | null) {
