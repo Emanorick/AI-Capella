@@ -5,7 +5,7 @@
 // drying. Rendered once into a canvas (and again on resize); the page shows it with a soft shadow
 // beneath, so it hovers (style.css).
 
-import { FONT_DISPLAY } from './theme';
+import { FONT_BRAND } from './theme';
 
 const INK: [number, number, number] = [239, 230, 216];
 const GOLD_DEEP = [140, 106, 46]; // the markings' gold (goldInk.ts)
@@ -77,12 +77,12 @@ export interface InkMetrics {
 }
 
 /**
- * Traces `text` in simulated ink into `canvas` at `size` px (`weight` of the app's Bodoni) and
+ * Traces `text` in simulated ink into `canvas` at `size` px (`weight` of the name's face, FONT_BRAND) and
  * sizes the canvas to fit; the canvas extends `pad` px beyond the letters on every side.
  */
 export function renderInk(canvas: HTMLCanvasElement, text: string, size: number, weight = 500, tone: 'ink' | 'gold' = 'ink'): InkMetrics {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const font = `${weight} ${size}px ${FONT_DISPLAY}`;
+  const font = `${weight} ${size}px ${FONT_BRAND}`;
   const measure = document.createElement('canvas').getContext('2d')!;
   measure.font = font;
   const track = -0.015 * size;

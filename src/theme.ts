@@ -1,5 +1,7 @@
 // Canvas-side mirror of the CSS tokens in style.css -- the piano roll, sheet view, covers and
 // ribbons draw with these so canvas and DOM share one palette and one set of typefaces.
+import { TYPE_TEST } from './design';
+
 export const INK0 = '#0D0C16';
 export const INK1 = '#13121E';
 export const INK2 = '#1B1929';
@@ -123,6 +125,12 @@ export function readingStrip(ctx: CanvasRenderingContext2D, x: number, top: numb
 export const FONT_TEXT = '"Atkinson Hyperlegible Next Variable", "Atkinson Hyperlegible Next", system-ui, sans-serif';
 export const FONT_MONO = '"Atkinson Hyperlegible Mono Variable", "Atkinson Hyperlegible Mono", ui-monospace, monospace';
 export const FONT_DISPLAY = '"Bodoni Moda Variable", "Bodoni Moda", Didot, Georgia, serif';
+// The rehearsal letters in the rulers, and the "Score" of the name (inkWordmark.ts) -- the Bodoni,
+// or with the type test (design.ts) faces of their own, which have one weight.
+export const FONT_MARK = TYPE_TEST ? `"Baltimore Bold 1832", ${FONT_DISPLAY}` : FONT_DISPLAY;
+export const MARK_WEIGHT = TYPE_TEST ? 400 : 700;
+export const FONT_BRAND = TYPE_TEST ? `"Johnson 1892", ${FONT_DISPLAY}` : FONT_DISPLAY;
+export const BRAND_WEIGHT = TYPE_TEST ? 400 : 600;
 /** SMuFL music font (Bravura, subset to the glyphs the sheet view uses -- see assets/fonts). */
 export const FONT_MUSIC = 'Bravura';
 
@@ -139,6 +147,7 @@ export function canvasFontsReady(): Promise<void> {
     document.fonts.load(`600 12px ${FONT_TEXT}`),
     document.fonts.load(`600 11px ${FONT_MONO}`),
     document.fonts.load(`32px ${FONT_MUSIC}`, ''),
+    ...(TYPE_TEST ? [document.fonts.load(`${MARK_WEIGHT} 12px ${FONT_MARK}`, 'A')] : []),
   ]).then(() => undefined);
   const timeout = new Promise<void>((resolve) => setTimeout(resolve, 2500));
   return Promise.race([loads, timeout]).catch(() => undefined);

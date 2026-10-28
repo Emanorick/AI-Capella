@@ -9,7 +9,7 @@
 import { FONT_SCRIPT, loadScriptFont } from './goldInk';
 import { renderInk } from './inkWordmark';
 import { LIGHT_STROKES } from './lightStrokes';
-import { FONT_DISPLAY } from './theme';
+import { BRAND_WEIGHT, FONT_BRAND } from './theme';
 
 const LIGHT_SCALE = 1.62; // the pen script is small for its size: its "Light" stands as tall as "Score" at this
 const GAP = 0.1; // between the two words, in em of Score
@@ -298,12 +298,12 @@ export function lightScoreName(host: HTMLElement, mode: TitleMode = 'swarm'): Ti
     host.style.alignSelf = narrowStaff ? 'stretch' : '';
     const size = base * fit;
 
-    const ink = renderInk(score, 'Score', size, 600, 'gold');
+    const ink = renderInk(score, 'Score', size, BRAND_WEIGHT, 'gold');
     inkPad = ink.pad;
     leftCache = null;
     rects = null;
     scoreBaseline = ink.baseline;
-    probe.font = `600 ${size}px ${FONT_DISPLAY}`;
+    probe.font = `${BRAND_WEIGHT} ${size}px ${FONT_BRAND}`;
     capAscent = probe.measureText('S').actualBoundingBoxAscent;
     art = renderLight(size * LIGHT_SCALE, dpr);
     path = penPath(art);
@@ -333,7 +333,7 @@ export function lightScoreName(host: HTMLElement, mode: TitleMode = 'swarm'): Ti
     if (!glided) score.style.transform = `translateX(${scoreShift}px)`;
   };
 
-  const fonts = Promise.all([loadScriptFont(), document.fonts.load(`600 100px ${FONT_DISPLAY}`).catch(() => undefined)]);
+  const fonts = Promise.all([loadScriptFont(), document.fonts.load(`${BRAND_WEIGHT} 100px ${FONT_BRAND}`).catch(() => undefined)]);
   void fonts.then(() => {
     layout();
     if (reduce || mode === 'stage') {

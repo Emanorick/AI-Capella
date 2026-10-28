@@ -1,7 +1,7 @@
 import { backingSize } from './pixels';
 import type { MeasureInfo, NoteEvent, PartInfo, Score } from './score';
 import type { PartMixState } from './audioEngine';
-import { FONT_DISPLAY, FONT_MONO, FONT_MUSIC, FONT_TEXT, INK1, PAPER, paper, stageFill, playheadBeam, readingStrip, drawQueryMark } from './theme';
+import { FONT_MARK, FONT_MONO, FONT_MUSIC, FONT_TEXT, MARK_WEIGHT, INK1, PAPER, paper, stageFill, playheadBeam, readingStrip, drawQueryMark } from './theme';
 import { backlight, NIGHT_PAPER, paintPaper, STILL } from './paper';
 import { PAPER_DESIGN } from './design';
 import { drawRulerSignature, signatureChanges, type SignatureChange } from './signatures';
@@ -983,7 +983,7 @@ export class StaffView {
       let textX = x + 6;
       const section = this.sections.find((s) => Math.abs(s.beat - measure.startBeat) < 1e-6);
       if (section) {
-        ctx.font = `700 12px ${FONT_DISPLAY}`;
+        ctx.font = `${MARK_WEIGHT} 12px ${FONT_MARK}`;
         const boxW = Math.max(17, ctx.measureText(section.label).width + 8);
         ctx.strokeStyle = PAPER;
         ctx.lineWidth = 1.3;

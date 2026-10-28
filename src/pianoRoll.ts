@@ -1,7 +1,7 @@
 import { backingSize } from './pixels';
 import type { NoteEvent, Score, SlurArc } from './score';
 import { getBeatMarkers } from './score';
-import { FONT_DISPLAY, FONT_MONO, FONT_TEXT, INK0, INK1, PAPER, paper, towardPaper, withAlpha, stageFill, gelPill, playheadBeam, drawQueryMark } from './theme';
+import { FONT_MARK, FONT_MONO, FONT_TEXT, MARK_WEIGHT, INK0, INK1, PAPER, paper, towardPaper, withAlpha, stageFill, gelPill, playheadBeam, drawQueryMark } from './theme';
 import { backlight, BACKLIGHT_REACH, paintPaper, type PaperFrame } from './paper';
 import { Lantern, type Flare } from './lantern';
 import { deviceChoice, PAPER_DESIGN } from './design';
@@ -1100,7 +1100,7 @@ export class PianoRoll {
           // A rehearsal letter as printed in the score: bold serif capital in a square box.
           rctx.strokeStyle = PAPER;
           rctx.lineWidth = 1.3;
-          rctx.font = `700 12px ${FONT_DISPLAY}`;
+          rctx.font = `${MARK_WEIGHT} 12px ${FONT_MARK}`;
           const boxW = Math.max(17, rctx.measureText(section.label).width + 8);
           rctx.strokeRect(x + 5.5, 5.5, boxW, 17);
           rctx.fillStyle = PAPER;
@@ -1128,7 +1128,7 @@ export class PianoRoll {
         rctx.strokeStyle = PAPER;
         rctx.lineWidth = 1.3;
         rctx.strokeRect(x + 0.5, 5.5, 17, 17);
-        rctx.font = `700 12px ${FONT_DISPLAY}`;
+        rctx.font = `${MARK_WEIGHT} 12px ${FONT_MARK}`;
         rctx.fillStyle = PAPER;
         rctx.textAlign = 'center';
         rctx.fillText(section.label, x + 9, 18.5);

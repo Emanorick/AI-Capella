@@ -6,6 +6,7 @@ import '@fontsource-variable/atkinson-hyperlegible-next/wght.css';
 import '@fontsource-variable/atkinson-hyperlegible-mono/wght.css';
 import '@fontsource/italianno/latin-400.css';
 import './style.css';
+import './typeTest.css';
 import { parseMusicXML, splitStaves } from './musicxml';
 import { parseMIDI } from './midi';
 import { AudioEngine, onAudioStateChange, startTonesLeadSec, unlockAudio, type PartMixState, type Sound } from './audioEngine';

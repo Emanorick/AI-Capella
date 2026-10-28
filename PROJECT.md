@@ -720,6 +720,15 @@ layer (strength between "subtle" and "balanced" of its design draft):
   loaded from Google (no visitor data to a third party — German courts have fined sites for
   remotely loaded Google Fonts — and works on weak Wi-Fi). Canvas text waits for them
   (`canvasFontsReady`) so cached lyric bitmaps never bake in a fallback font.
+- **Type test (`?schrift=test`, `?schrift=heute` goes back; `typeTest.css`, design.ts `TYPE_TEST`)**:
+  faces from Font Revival (19th-century American type specimens, MIT; `src/assets/fonts/revival`
+  with its README) — headings in Baltimore Title 1832 as spaced capitals, song titles in Modern
+  Antique 1889, rehearsal letters in Baltimore Bold 1832 (also on the canvases: `FONT_MARK`),
+  text and controls in Remington 1888 (a typewriter), the "Score" of the name in Johnson 1892
+  (header and the title screen's ink: `FONT_BRAND`). Lyrics in the score stay Atkinson. None of
+  the faces had German letters: Ä Ö Ü ä ö ü are added (letter plus two dots from the face's own
+  period), ß is "ss" (`add-german.py`). Every rule is scoped to `:root[data-schrift='test']`, so
+  other devices never fetch the faces.
 - **Music font**: Bravura (Steinberg, SIL OFL 1.1; licence in `src/assets/fonts`), subset with
   `pyftsubset` to the ~30 glyphs the sheet view uses (8 KB).
 - **Icons**: one inline SVG set (`icons.ts`) instead of Unicode glyphs, which rendered
