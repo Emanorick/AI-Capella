@@ -42,14 +42,19 @@ files anywhere — the "recording" is just a MusicXML file, synthesized live eve
 ## 2. What it does (feature tour)
 
 ### Title screen: Solo vs. Ensemble
-Every time the app starts (when a shared backend is configured — otherwise this step is skipped),
-it opens on the title screen: the app's name over the moving voice ribbons (see Design below),
+When the app starts after half an hour or more away (when a shared backend is configured —
+otherwise this step is skipped), it opens on the title screen: the app's name over the moving voice
+ribbons (see Design below),
 and after a moment the two buttons fade in, **Practise alone** (Solo) and **Rehearse together**
 (Ensemble), with the last-used one outlined. Solo is fully local — nothing about playback is shared with anyone else. Ensemble is
 the synced-playback experience described below. The last choice is remembered (`localStorage`) and
 marked; the **Solo | Ensemble** switch in the repertoire header (or the mode badge in the player)
 changes it after a confirmation, reloading straight into the new mode (a one-shot
-`sessionStorage` flag skips the title screen for that one reload). Either way, the
+`sessionStorage` flag skips the title screen for that one reload). A reload, or coming back within
+30 minutes, also goes straight into the repertoire in the last mode: the app notes in
+`localStorage` (`ai-capella-seen`) when it was last on screen — every half minute while it is, and
+whenever it is left — and shows the title screen only when that was longer ago (or no ensemble has
+been opened yet on the device). Either way, the
 shared song library itself is always available — Solo only opts out of shared *playback*, not
 shared *songs*. See §4.7. The storage key is versioned (`ai-capella-mode-v2`) so it can be bumped
 again if every device should see the choice once more.

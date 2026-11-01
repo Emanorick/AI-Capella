@@ -535,7 +535,7 @@ async function requestModeSwitch(mode: 'solo' | 'ensemble') {
   stopPlayback();
   if (leaderId === myDeviceId) await sync.publishPlaybackState({ leaderId: null }).catch(() => {});
   localStorage.setItem(MODE_STORAGE_KEY, mode);
-  // The title screen shows on every start; after an explicit switch, go straight on in the new mode.
+  // After an explicit switch, go straight on in the new mode (not the title screen).
   sessionStorage.setItem(MODE_SWITCH_KEY, mode);
   location.reload();
 }
@@ -4106,9 +4106,34 @@ async function runBootstrap() {
   }
 }
 
-// Mode resolution: with a shared backend, every start opens on the title screen and the Solo /
-// Ensemble choice comes after it (the last choice is marked). The one exception is the reload right
-// after switching modes from inside the app, which goes straight on in the new mode.
+// The title screen greets a start after a while away: a reload, or coming back within half an
+// hour, goes straight on into the repertoire, in the mode last chosen. Away counts from the last
+// moment the app was on screen -- noted every half minute while it is, and whenever it is left.
+const SEEN_KEY = 'ai-capella-seen';
+const TITLE_AFTER_MS = 30 * 60 * 1000;
+const recentlyHere = (() => {
+  try {
+    return Date.now() - Number(localStorage.getItem(SEEN_KEY) || 0) < TITLE_AFTER_MS;
+  } catch {
+    return false;
+  }
+})();
+function noteSeen() {
+  try {
+    localStorage.setItem(SEEN_KEY, String(Date.now()));
+  } catch {
+    /* no storage: the title screen every time, as before */
+  }
+}
+noteSeen();
+setInterval(() => document.visibilityState === 'visible' && noteSeen(), 30_000);
+document.addEventListener('visibilitychange', noteSeen);
+window.addEventListener('pagehide', noteSeen);
+
+// Mode resolution: with a shared backend, a start opens on the title screen and the Solo /
+// Ensemble choice comes after it (the last choice is marked) -- unless the app was on screen less
+// than half an hour ago (above), or this is the reload right after switching modes, ensembles or
+// the look from inside the app: then it goes straight on in that mode.
 // The title screen's name, written before anything else moves there (the voice lines wait for it).
 if (START_DRAFT) titleName = lightScoreName(document.querySelector<HTMLElement>('.landing-name')!, START_STAGE ? 'stage' : START_STAFF ? 'staff' : 'swarm');
 const storedMode = localStorage.getItem(MODE_STORAGE_KEY);
@@ -4116,8 +4141,11 @@ const switchedMode = sessionStorage.getItem(MODE_SWITCH_KEY);
 sessionStorage.removeItem(MODE_SWITCH_KEY);
 if (storedMode === 'solo' || storedMode === 'ensemble') sessionMode = storedMode;
 if (inPublicFolder()) sessionMode = 'solo';
+const lastMode = storedMode === 'solo' || storedMode === 'ensemble' ? storedMode : inPublicFolder() ? 'solo' : null;
 if (isFirebaseConfigured && (switchedMode === 'solo' || switchedMode === 'ensemble') && activeEnsemble()) {
   chooseMode(switchedMode);
+} else if (isFirebaseConfigured && recentlyHere && lastMode && activeEnsemble()) {
+  chooseMode(lastMode);
 } else if (isFirebaseConfigured) {
   renderLanding();
   // Ensembles opened on this device before the codes were checked in Firestore are dropped.
