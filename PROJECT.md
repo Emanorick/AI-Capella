@@ -52,14 +52,21 @@ marked; the **Solo | Ensemble** switch in the repertoire header (or the mode bad
 changes it after a confirmation, reloading straight into the new mode (a one-shot
 `sessionStorage` flag skips the title screen for that one reload). A reload, or coming back within
 30 minutes, also goes on where the app was, in the last mode: the app notes in `localStorage`
-when it was last on screen and where (`ai-capella-seen`, `ai-capella-place`: the song open, the
-position, the view, tempo and key, the zoom of both views, which voices are muted or soloed and
-the others' volume while soloing -- practising alone; in a rehearsal the shared state decides) —
-every half minute while it is, and whenever it is left — opens that song again at that place once
-the repertoire has arrived (`comeBackToPlace`): until it stands there the app shows nothing
-(`#app.arriving`, at most 8 s, then the repertoire after all), and it arrives directly -- no
-glimpse of the repertoire, no travel from the start to the place (`arriveDirectly`) -- fading in
-briefly. It shows the title screen only when the app was
+when it was last on screen and where (`ai-capella-seen`, `ai-capella-place`: the mode, the song
+open or the repertoire, the position, the view, tempo and key, the zoom of both views, which
+voices are muted or soloed and the others' volume while soloing) — every half minute while it is,
+and whenever it is left. Practising alone it opens that song again at that place, in that view,
+tempo, key and zoom, once the repertoire has arrived (`comeBackToPlace`). Rehearsing together, the
+song, place, tempo and key are the rehearsal's (shared: a device coming back never writes them, so
+it can't move everyone to where it was), and the device arrives with the rehearsal's state
+(`arriveAt` in `applyPlaybackState`'s travel): in the song the rehearsal is at, with its own voices
+muted, soloed or "only this voice" as they were and the others at the same volume (zoom and view
+start as for everyone) -- or in the repertoire if that was where it was, the rehearsal's song
+loaded behind it as before. Has the rehearsal gone on to another song meanwhile, it arrives in
+that one, its voices fresh; is nothing selected, the repertoire. Either way, until it stands there
+the app shows nothing (`#app.arriving`, at most 8 s, then the repertoire after all), and it
+arrives directly -- no glimpse of the repertoire, no travel from the start to the place
+(`arriveDirectly`) -- fading in briefly. It shows the title screen only when the app was
 away longer (or no ensemble has been opened yet on the device). Either way, the
 shared song library itself is always available — Solo only opts out of shared *playback*, not
 shared *songs*. See §4.7. The storage key is versioned (`ai-capella-mode-v2`) so it can be bumped

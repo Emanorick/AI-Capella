@@ -1980,7 +1980,11 @@ function applyPlaybackState(state: PlaybackState): Promise<void> {
 
 async function applyPlaybackStateNow(state: PlaybackState) {
   if (state.songId !== loadedSongId) {
-    if (!state.songId) return; // nothing selected yet (fresh/empty session)
+    if (!state.songId) {
+      // Nothing selected yet (fresh/empty session) -- coming back into it, the repertoire then.
+      if (arrivingAt?.mode === 'ensemble') endArrival();
+      return;
+    }
     const song = allSongs().find((s) => s.id === state.songId);
     if (!song) {
       pendingSongId = state.songId;
@@ -2051,8 +2055,7 @@ async function applyPlaybackStateNow(state: PlaybackState) {
     // (Coming back after a reload: straight to the place, no travel there.)
     if (arriveDirectly) {
       viewOffsetBeats = 0;
-      if (arrivingAt) restoreSongSettings(arrivingAt);
-      arrivingAt = null;
+      if (arrivingAt) arriveAt(arrivingAt);
       endArrival();
       return;
     }
@@ -4117,7 +4120,10 @@ async function runBootstrap() {
       sync.startPeriodicCalibration();
       sync.subscribePlaybackState(
         (state) => {
-          if (!state) return;
+          if (!state) {
+            if (arrivingAt?.mode === 'ensemble') endArrival();
+            return;
+          }
           lastReceivedPlaybackState = state;
           void applyPlaybackState(state);
         },
@@ -4132,16 +4138,21 @@ async function runBootstrap() {
 }
 
 // The title screen greets a start after a while away: a reload, or coming back within half an
-// hour, goes on where the app was -- in the mode last chosen, and (practising alone) in the song it
-// had open, at the same place, tempo, key and view, zoomed as it was, with the same voices muted or
-// soloed and the others at the same volume. Away counts from the last moment the app was on screen
-// -- noted, with where it was, every half minute while it is, and whenever it is left.
+// hour, goes on where the app was -- in the mode last chosen, and in the song it had open (or in
+// the repertoire), straight there. Practising alone: at the same place, tempo, key and view, zoomed
+// as it was, with the same voices muted or soloed and the others at the same volume. Rehearsing
+// together, the rehearsal's own song, place, tempo and key (shared: a device coming back must never
+// move everyone to where it was) -- with this device's voices muted or soloed as they were, and the
+// others at the same volume. Away counts from the last moment the app was on screen -- noted, with
+// where it was, every half minute while it is, and whenever it is left.
 const SEEN_KEY = 'ai-capella-seen';
 const PLACE_KEY = 'ai-capella-place';
 const TITLE_AFTER_MS = 30 * 60 * 1000;
 type Place = {
   ensemble: string;
-  songId: string | null;
+  mode?: 'solo' | 'ensemble'; // (noted before rehearsals had places too: alone)
+  songId: string | null; // the song open in the player
+  behind?: string | null; // rehearsing together: the song still loaded behind the repertoire
   beat: number;
   view: 'roll' | 'staff';
   bpm: number;
@@ -4172,24 +4183,44 @@ function noteSeen() {
     /* no storage: the title screen every time, as before */
   }
 }
-/** Where the app is: in the repertoire, or in a song (alone -- in a rehearsal the shared state decides). */
+/** Where the app is: in the repertoire, or in a song. */
 function notePlace() {
   const inPlayer = app.classList.contains('mode-player');
   if (!inPlayer && !app.classList.contains('mode-library')) return;
-  const song = inPlayer && sessionMode === 'solo' ? currentSong : null;
+  const song = inPlayer ? currentSong : null;
   const mix = Object.fromEntries([...partMix].filter(([, state]) => state !== 'normal'));
-  const place: Place = { ensemble: currentEnsemble, songId: song?.id ?? null, beat: song ? engineBeat() : 0, view: activeView, bpm, transpose, zoom: { ...zoomOf }, mix, duck: duckVolume };
+  const place: Place = {
+    ensemble: currentEnsemble,
+    mode: sessionMode,
+    songId: song?.id ?? null,
+    // (Alone, the repertoire is a fresh start; together, the rehearsal's song stays loaded.)
+    behind: !inPlayer && sessionMode === 'ensemble' ? loadedSongId : null,
+    beat: song ? engineBeat() : 0,
+    view: activeView,
+    bpm,
+    transpose,
+    zoom: { ...zoomOf },
+    mix,
+    duck: duckVolume,
+  };
   localStorage.setItem(PLACE_KEY, JSON.stringify(place));
 }
-// The song to open again once the repertoire has arrived (comeBackToPlace). Until it stands at its
-// place the app shows nothing ('arriving'), then the song appears as it was -- with no glimpse of
-// the repertoire, no opening and no travel to the place in between (arriveDirectly, see travel()).
+// Alone: the song to open again once the repertoire has arrived (comeBackToPlace). Together: the
+// song the rehearsal is at, when it arrives (applyPlaybackState). Until it stands at its place the
+// app shows nothing ('arriving'), then the song appears as it was -- with no glimpse of the
+// repertoire, no opening and no travel to the place in between (arriveDirectly, see travel()).
 let placeToRestore: Place | null = null;
 let arriveDirectly = false;
 let arrivingAt: Place | null = null;
-/** The song as it was left: its zoom, its voices muted or soloed, the others' volume (the song just loaded). */
+/** The song just loaded, arrived at: as it was left -- unless the rehearsal has gone on to another one. */
+function arriveAt(place: Place) {
+  if ((place.songId ?? place.behind) !== loadedSongId) return;
+  restoreSongSettings(place);
+  if (!place.songId) setViewMode('library');
+}
+/** The song as it was left: its zoom (alone), its voices muted or soloed, the others' volume. */
 function restoreSongSettings(place: Place) {
-  if (place.zoom) {
+  if (place.zoom && place.mode !== 'ensemble') {
     zoomOf.roll = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, place.zoom.roll));
     zoomOf.staff = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, place.zoom.staff));
     pianoRoll?.setZoom(zoomOf.roll);
@@ -4209,6 +4240,7 @@ function restoreSongSettings(place: Place) {
 }
 function endArrival() {
   arriveDirectly = false;
+  arrivingAt = null;
   if (!app.classList.contains('arriving')) return;
   renderNow();
   requestAnimationFrame(() => app.classList.remove('arriving'));
@@ -4246,9 +4278,16 @@ sessionStorage.removeItem(MODE_SWITCH_KEY);
 if (storedMode === 'solo' || storedMode === 'ensemble') sessionMode = storedMode;
 if (inPublicFolder()) sessionMode = 'solo';
 const lastMode = storedMode === 'solo' || storedMode === 'ensemble' ? storedMode : inPublicFolder() ? 'solo' : null;
-const comeBack = (mode: 'solo' | 'ensemble') => {
-  if (mode === 'solo' && recentlyHere && lastPlace?.songId && lastPlace.ensemble === currentEnsemble) {
-    placeToRestore = lastPlace;
+const comeBack = (chosen: 'solo' | 'ensemble') => {
+  const mode = inPublicFolder() ? 'solo' : chosen; // (as chooseMode will have it)
+  const place = recentlyHere && lastPlace?.ensemble === currentEnsemble && (lastPlace.mode ?? 'solo') === mode ? lastPlace : null;
+  if (place && (mode === 'solo' ? place.songId : isFirebaseConfigured && (place.songId || place.behind))) {
+    // Alone, the song is opened again (comeBackToPlace); together, it comes with the rehearsal's state.
+    if (mode === 'solo') placeToRestore = place;
+    else {
+      arriveDirectly = true;
+      arrivingAt = place;
+    }
     app.classList.add('arriving');
     // Should the song not come (offline, gone), the repertoire after all.
     setTimeout(() => {
