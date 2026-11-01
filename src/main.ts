@@ -1738,7 +1738,8 @@ libraryEl.addEventListener('drop', (e) => {
  * actually loads it once that choice comes back through applyPlaybackState(), same as every other
  * control below -- see pushState()'s doc comment for why nothing here applies state directly.
  */
-async function selectSong(song: SongEntry) {
+/** Opens a song at its start -- or, `at`, where it was left (back after a reload: see notePlace). */
+async function selectSong(song: SongEntry, at?: { beat: number; bpm: number; transpose: number }) {
   // The piece already open (the repertoire was only looked at): back to it as it was. The shared
   // state wouldn't change, so going through it wouldn't bring the player back.
   if (song.id === loadedSongId && currentScore) {
@@ -1749,14 +1750,14 @@ async function selectSong(song: SongEntry) {
   // Every song starts at its own tempo -- never the previous song's: the saved default, else the
   // tempo written in the file, else 100.
   const fileTempo = (await songMeta(song))?.tempo;
-  const startBpm = Math.min(Math.max(Math.round(song.savedConfig?.bpm ?? fileTempo ?? DEFAULT_BPM), MIN_BPM), MAX_BPM);
+  const startBpm = Math.min(Math.max(Math.round(at?.bpm ?? song.savedConfig?.bpm ?? fileTempo ?? DEFAULT_BPM), MIN_BPM), MAX_BPM);
   pushState({
     songId: song.id,
     playing: false,
-    originBeat: 0,
+    originBeat: at?.beat ?? 0,
     originServerTimeMs: 0,
     // A saved default (the "Save" action, see saveSongConfig) takes over from the plain reset.
-    transpose: song.savedConfig?.transpose ?? 0,
+    transpose: at?.transpose ?? song.savedConfig?.transpose ?? 0,
     bpm: startBpm,
     metronomeOn: false,
     loopEnabled: false,
@@ -1765,7 +1766,7 @@ async function selectSong(song: SongEntry) {
     // always be a fresh start regardless of whatever count-in/freshStart state was left over.
     countInBeats: 0,
     countInPulseBeats: 1,
-    freshStart: true,
+    freshStart: !at || at.beat === 0,
   });
 }
 
@@ -2629,22 +2630,37 @@ function keyBlock(): HTMLElement {
   return block;
 }
 
+// The bar last typed into "Go to bar" per song, for this visit (kept over a reload): the field
+// offers it again -- the bar being played is on show beside it already.
+const typedBarKey = (songId: string) => `ai-capella-typed-bar:${songId}`;
+
 function gotoBlock(): HTMLElement {
   const block = document.createElement('form');
   block.className = 'ctl-block goto';
   const maxBar = currentScore?.measures.at(-1)?.number ?? 1;
-  const current = currentScore ? (measureAtBeat(currentScore, engineBeat())?.number ?? 1) : 1;
+  let typed = '';
+  try {
+    typed = (currentSong && sessionStorage.getItem(typedBarKey(currentSong.id))) || '';
+  } catch {
+    /* none remembered */
+  }
   block.innerHTML = `
     <label class="label" for="goto-input">${t('goToBar')}</label>
     <div class="goto-row">
-      <input id="goto-input" class="field measure-input" type="number" min="1" max="${maxBar}" step="1" inputmode="numeric" value="${current}" />
+      <input id="goto-input" class="field measure-input" type="number" min="1" max="${maxBar}" step="1" inputmode="numeric" placeholder="1–${maxBar}" value="${typed}" />
       <button type="submit" class="btn primary">${t('go')}</button>
     </div>`;
   block.addEventListener('submit', (e) => {
     e.preventDefault();
     const input = block.querySelector<HTMLInputElement>('input')!;
+    if (!input.value.trim()) return;
     const n = Math.min(Math.max(parseInt(input.value, 10) || 1, 1), maxBar);
     input.value = String(n);
+    try {
+      if (currentSong) sessionStorage.setItem(typedBarKey(currentSong.id), String(n));
+    } catch {
+      /* not remembered */
+    }
     jumpToMeasure(n);
     closeOverlay();
   });
@@ -4061,6 +4077,7 @@ async function runBootstrap() {
           order: songOrder(s),
         }));
         renderSongList();
+        comeBackToPlace(fromCache);
         // Clef changes and removed voices from another device apply to the open song too (once
         // it's paused -- reloading mid-playback would cut the music off).
         const fresh = currentSong && importedSongs.find((s) => s.id === currentSong!.id);
@@ -4107,10 +4124,13 @@ async function runBootstrap() {
 }
 
 // The title screen greets a start after a while away: a reload, or coming back within half an
-// hour, goes straight on into the repertoire, in the mode last chosen. Away counts from the last
-// moment the app was on screen -- noted every half minute while it is, and whenever it is left.
+// hour, goes on where the app was -- in the mode last chosen, and (practising alone) in the song it
+// had open, at the same place, tempo, key and view. Away counts from the last moment the app was on
+// screen -- noted, with where it was, every half minute while it is, and whenever it is left.
 const SEEN_KEY = 'ai-capella-seen';
+const PLACE_KEY = 'ai-capella-place';
 const TITLE_AFTER_MS = 30 * 60 * 1000;
+type Place = { ensemble: string; songId: string | null; beat: number; view: 'roll' | 'staff'; bpm: number; transpose: number };
 const recentlyHere = (() => {
   try {
     return Date.now() - Number(localStorage.getItem(SEEN_KEY) || 0) < TITLE_AFTER_MS;
@@ -4118,12 +4138,41 @@ const recentlyHere = (() => {
     return false;
   }
 })();
+const lastPlace = ((): Place | null => {
+  try {
+    return JSON.parse(localStorage.getItem(PLACE_KEY) || 'null') as Place | null;
+  } catch {
+    return null;
+  }
+})();
 function noteSeen() {
   try {
     localStorage.setItem(SEEN_KEY, String(Date.now()));
+    notePlace();
   } catch {
     /* no storage: the title screen every time, as before */
   }
+}
+/** Where the app is: in the repertoire, or in a song (alone -- in a rehearsal the shared state decides). */
+function notePlace() {
+  const inPlayer = app.classList.contains('mode-player');
+  if (!inPlayer && !app.classList.contains('mode-library')) return;
+  const song = inPlayer && sessionMode === 'solo' ? currentSong : null;
+  const place: Place = { ensemble: currentEnsemble, songId: song?.id ?? null, beat: song ? engineBeat() : 0, view: activeView, bpm, transpose };
+  localStorage.setItem(PLACE_KEY, JSON.stringify(place));
+}
+// The song to open again once the repertoire has arrived (comeBackToPlace).
+let placeToRestore: Place | null = null;
+function comeBackToPlace(fromCache: boolean) {
+  const place = placeToRestore;
+  if (!place?.songId) return;
+  const song = allSongs().find((s) => s.id === place.songId);
+  // (The cached list may not have it yet; the server's has the final say.)
+  if (!song && fromCache) return;
+  placeToRestore = null;
+  if (!song || app.classList.contains('mode-player')) return;
+  setActiveView(place.view);
+  void selectSong(song, { beat: place.beat, bpm: place.bpm, transpose: place.transpose });
 }
 noteSeen();
 setInterval(() => document.visibilityState === 'visible' && noteSeen(), 30_000);
@@ -4142,10 +4191,14 @@ sessionStorage.removeItem(MODE_SWITCH_KEY);
 if (storedMode === 'solo' || storedMode === 'ensemble') sessionMode = storedMode;
 if (inPublicFolder()) sessionMode = 'solo';
 const lastMode = storedMode === 'solo' || storedMode === 'ensemble' ? storedMode : inPublicFolder() ? 'solo' : null;
+const comeBack = (mode: 'solo' | 'ensemble') => {
+  if (mode === 'solo' && recentlyHere && lastPlace?.songId && lastPlace.ensemble === currentEnsemble) placeToRestore = lastPlace;
+  chooseMode(mode);
+};
 if (isFirebaseConfigured && (switchedMode === 'solo' || switchedMode === 'ensemble') && activeEnsemble()) {
-  chooseMode(switchedMode);
+  comeBack(switchedMode);
 } else if (isFirebaseConfigured && recentlyHere && lastMode && activeEnsemble()) {
-  chooseMode(lastMode);
+  comeBack(lastMode);
 } else if (isFirebaseConfigured) {
   renderLanding();
   // Ensembles opened on this device before the codes were checked in Firestore are dropped.

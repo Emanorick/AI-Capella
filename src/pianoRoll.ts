@@ -98,8 +98,9 @@ type Sounding = Flare & { note: NoteEvent };
 type Word = { bmp?: { canvas: HTMLCanvasElement }; x: number; y: number; w: number; h: number; color: string };
 type LaidPart = { partId: string; dimmed: boolean; color: string; pills: [number, number, number][]; words: Word[] } | null;
 // Slurs fade out toward the words they pass (clearOfWords): fully clear right at a word, at their
-// full strength beyond the last of these distances from it (px).
-const WORD_CLEARANCE_PX = [1.5, 3, 4.5, 6];
+// full strength beyond the last of these distances from it (px) -- in rounded steps fine enough
+// to read as one soft fade.
+const WORD_CLEARANCE_PX = [1, 2.2, 3.4, 4.6, 5.8, 7];
 // Laid over everything left of the playhead: played notes step back (on parchment they fade, as old ink does).
 const PAST_RGB = PARCHMENT ? '232,216,182' : '13,12,22';
 const PAST_SHADE = `rgba(${PAST_RGB},${PARCHMENT ? 0.5 : 0.38})`;
@@ -1571,10 +1572,11 @@ function cutHoles(ctx: CanvasRenderingContext2D, pills: [number, number, number]
 }
 
 /**
- * Where slurs may be painted so the words stay clear: the whole area less the words' boxes, grown by
- * each of WORD_CLEARANCE_PX -- one clip per distance. Painted once through each (throughClips), a
- * slur builds up to its strength away from the words and fades out toward them, to nothing at a word.
- * Null when there are no words.
+ * Where slurs may be painted so the words stay clear: the whole area less a rounded shape around
+ * each word (its box grown by each of WORD_CLEARANCE_PX, the ends round -- nearly an ellipse round
+ * a short word), one clip per distance. Painted once through each (throughClips), a slur builds up
+ * to its strength away from the words and fades out toward them, to nothing at a word. Null when
+ * there are no words.
  */
 function clearOfWords(width: number, height: number, words: Word[]): Path2D[] | null {
   if (!words.length) return null;
@@ -1595,7 +1597,7 @@ function clearOfWords(width: number, height: number, words: Word[]): Path2D[] | 
     }
     const clip = new Path2D();
     clip.rect(-20, -20, width + 40, height + 40);
-    for (const r of joined) clip.rect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
+    for (const r of joined) clip.roundRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0, Math.min(r.x1 - r.x0, r.y1 - r.y0) / 2);
     return clip;
   });
 }

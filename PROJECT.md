@@ -51,10 +51,12 @@ the synced-playback experience described below. The last choice is remembered (`
 marked; the **Solo | Ensemble** switch in the repertoire header (or the mode badge in the player)
 changes it after a confirmation, reloading straight into the new mode (a one-shot
 `sessionStorage` flag skips the title screen for that one reload). A reload, or coming back within
-30 minutes, also goes straight into the repertoire in the last mode: the app notes in
-`localStorage` (`ai-capella-seen`) when it was last on screen — every half minute while it is, and
-whenever it is left — and shows the title screen only when that was longer ago (or no ensemble has
-been opened yet on the device). Either way, the
+30 minutes, also goes on where the app was, in the last mode: the app notes in `localStorage`
+when it was last on screen and where (`ai-capella-seen`, `ai-capella-place`: the song open, the
+position, the view, tempo and key -- practising alone; in a rehearsal the shared state decides) —
+every half minute while it is, and whenever it is left — opens that song again at that place once
+the repertoire has arrived (`comeBackToPlace`), and shows the title screen only when the app was
+away longer (or no ensemble has been opened yet on the device). Either way, the
 shared song library itself is always available — Solo only opts out of shared *playback*, not
 shared *songs*. See §4.7. The storage key is versioned (`ai-capella-mode-v2`) so it can be bumped
 again if every device should see the choice once more.
@@ -184,7 +186,9 @@ connected device — so nobody is left with music playing to an empty player.
   shows section letters as boxed rehearsal marks and the loop region with its two handles.
 - **Going to a bar**: previous/next bar buttons (tap for one bar, press-and-hold to repeat and
   accelerate, 400ms → 60ms between steps), ←/→ on the keyboard, the **Go to bar** field (click the
-  position readout on a laptop, or in the Tempo & key sheet on a phone), section letters, and a
+  position readout on a laptop, or in the Tempo & key sheet on a phone -- empty at first, then the
+  bar last typed for that song in this visit, since the bar being played shows beside it anyway),
+  section letters, and a
   click on the whole-piece strip. All of these move the actual playback position (synced in
   Ensemble mode) and recenter the view on it.
 - **Click-to-preview**: clicking a note anywhere in the main area plays that note's pitch
@@ -735,11 +739,11 @@ layer (strength between "subtle" and "balanced" of its design draft):
   paper like engraved ones (thin ends, swelling in the middle), from the edge of one hole to the
   facing edge of the next (`paintSlurSpindles`). Where a slur passes words -- any voice's
   syllables, hyphens and extenders -- it fades out toward them, to nothing at the word and to its
-  full strength about 6 px away, so the words are never covered: `paintContent` lays out every
+  full strength about 7 px away, so the words are never covered: `paintContent` lays out every
   part's words first, and the slurs (threads in the gel style too) are painted once through each of
-  four clips that leave the words' boxes clear, grown by 1.5 / 3 / 4.5 / 6 px (`clearOfWords`,
-  `throughClips`) -- they can't simply be erased there, since the paper with its holes is in the
-  same buffer. The lamp sits at the playhead; after a jump the view travels there
+  six clips that leave a rounded shape round each word clear -- its box grown by 1 to 7 px, the
+  ends round, nearly an ellipse round a short word (`clearOfWords`, `throughClips`). They can't
+  simply be erased there, since the paper with its holes is in the same buffer. The lamp sits at the playhead; after a jump the view travels there
   (§4.5) and carries it along. The light is composed at ¼–½ resolution each frame;
   the glow is laid over the paper (source-over) rather than added, because a full-screen
   'lighter' pass cost many frames on a software-rendered canvas (measured in headless Chromium,
