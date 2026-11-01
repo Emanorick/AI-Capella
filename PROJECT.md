@@ -733,7 +733,13 @@ layer (strength between "subtle" and "balanced" of its design draft):
   Behind the paper the spot is egg-shaped, as from a lamp aimed obliquely: it falls off quickly
   over the music already played and reaches far over the music to come. Slurs are printed on the
   paper like engraved ones (thin ends, swelling in the middle), from the edge of one hole to the
-  facing edge of the next (`paintSlurSpindles`). The lamp sits at the playhead; after a jump the view travels there
+  facing edge of the next (`paintSlurSpindles`). Where a slur passes words -- any voice's
+  syllables, hyphens and extenders -- it fades out toward them, to nothing at the word and to its
+  full strength about 6 px away, so the words are never covered: `paintContent` lays out every
+  part's words first, and the slurs (threads in the gel style too) are painted once through each of
+  four clips that leave the words' boxes clear, grown by 1.5 / 3 / 4.5 / 6 px (`clearOfWords`,
+  `throughClips`) -- they can't simply be erased there, since the paper with its holes is in the
+  same buffer. The lamp sits at the playhead; after a jump the view travels there
   (§4.5) and carries it along. The light is composed at ¼–½ resolution each frame;
   the glow is laid over the paper (source-over) rather than added, because a full-screen
   'lighter' pass cost many frames on a software-rendered canvas (measured in headless Chromium,

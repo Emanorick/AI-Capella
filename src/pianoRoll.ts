@@ -94,6 +94,12 @@ export function shareLyrics(notes: NoteEvent[]): NoteEvent[] {
 }
 
 type Sounding = Flare & { note: NoteEvent };
+// A word under the notes as painted: a syllable's bitmap, or a hyphen or extender line (no bitmap).
+type Word = { bmp?: { canvas: HTMLCanvasElement }; x: number; y: number; w: number; h: number; color: string };
+type LaidPart = { partId: string; dimmed: boolean; color: string; pills: [number, number, number][]; words: Word[] } | null;
+// Slurs fade out toward the words they pass (clearOfWords): fully clear right at a word, at their
+// full strength beyond the last of these distances from it (px).
+const WORD_CLEARANCE_PX = [1.5, 3, 4.5, 6];
 // Laid over everything left of the playhead: played notes step back (on parchment they fade, as old ink does).
 const PAST_RGB = PARCHMENT ? '232,216,182' : '13,12,22';
 const PAST_SHADE = `rgba(${PAST_RGB},${PARCHMENT ? 0.5 : 0.38})`;
@@ -1186,9 +1192,13 @@ export class PianoRoll {
     // never partly covered by a dimmed pill at the same pitch/time. One fill() per part.
     const pillH = this.pillHeight(rowHeight);
     const lyricLane = new Map<number, [number, number][]>(); // per row: x-ranges already holding an under-note syllable
-    const drawPart = (partId: string) => {
+    const fontPx = lyricFontPx(rowHeight);
+    const score = LYRIC_STYLE === 'score';
+    // First where everything of each part goes -- its holes and its words (syllables, hyphens,
+    // extenders) -- so that the slurs, painted before them, can leave every voice's words clear.
+    const layOut = (partId: string): LaidPart | null => {
       const notes = this.notesByPart.get(partId);
-      if (!notes || !notes.length) return;
+      if (!notes || !notes.length) return null;
       const dimmed = this.dimmedParts.has(partId);
       const color = this.partColor(partId);
       const pills: [number, number, number][] = [];
@@ -1203,24 +1213,12 @@ export class PianoRoll {
         pills.push([x + 1, y, Math.max(w - 3, 7)]);
         if (!dimmed && note.lyric) lyricNotes.push({ note, x, y, index });
       }
-      // Lantern: slurs are print on the paper, under the holes, which are then cut out of it (a
-      // turned-down voice's are only marked); gel: beads with threads over them.
-      if (LANTERN) {
-        this.paintSlurThreads(ctx, partId, localBeatToX, widthCss, rowHeight, color, dimmed);
-        if (dimmed) markHoles(ctx, pills, pillH, color);
-        else cutHoles(ctx, pills, pillH);
-      }
-      ctx.globalAlpha = dimmed ? DIMMED_ALPHA : 1;
-      if (!LANTERN) for (const [px, py, pw] of pills) gelPill(ctx, px, py, pw, pillH, color);
-      if (NOTE_STYLE === 'gel') this.paintSlurThreads(ctx, partId, localBeatToX, widthCss, rowHeight, color, dimmed);
-      ctx.globalAlpha = 1;
 
       // Syllables from cached bitmaps (re-shaping text per note per rebuild adds up fast), always in
       // the lane under their note -- skipped there if another voice already printed a syllable at
       // that spot (unison voices would print over each other).
-      const fontPx = lyricFontPx(rowHeight);
-      const score = LYRIC_STYLE === 'score';
       const textColor = score ? towardPaper(color, 0.62) : paper(0.8);
+      const words: Word[] = [];
       for (let i = 0; i < lyricNotes.length; i++) {
         const { note, x, y, index } = lyricNotes[i];
         // Painting one slice (prepareNextBuffer): syllables well away from it are left out -- not
@@ -1236,10 +1234,9 @@ export class PianoRoll {
         used.push([x1, x2]);
         lyricLane.set(row, used);
         const top = y + pillH + 1;
-        ctx.drawImage(bmp.canvas, x1, top, bmp.cssWidth, bmp.cssHeight);
+        words.push({ bmp, x: x1, y: top, w: bmp.cssWidth, h: bmp.cssHeight, color: textColor });
         if (!score) continue;
         const mid = top + bmp.cssHeight * 0.58;
-        ctx.fillStyle = textColor;
         // The word's next syllable, and the notes its syllable is held over, are its own voice's
         // (another voice on the staff may be singing beside it).
         const nextSyllable = note.lyricJoin ? lyricNotes.find((l, k) => k > i && voiceOf(l.note) === voiceOf(note) && l.note.startBeat > note.startBeat + SAME) : undefined;
@@ -1248,7 +1245,7 @@ export class PianoRoll {
           const gapStart = x2 + 3;
           const gapEnd = nextSyllable.x - 1;
           const dash = Math.min(fontPx * 0.55, gapEnd - gapStart - 2);
-          if (dash >= 3) ctx.fillRect(Math.round((gapStart + gapEnd - dash) / 2), Math.round(mid), dash, Math.max(1, fontPx * 0.09));
+          if (dash >= 3) words.push({ x: Math.round((gapStart + gapEnd - dash) / 2), y: Math.round(mid), w: dash, h: Math.max(1, fontPx * 0.09), color: textColor });
         } else if (note.lyricExtend) {
           // Extender: a line under the held syllable to the end of its last note.
           let last = note;
@@ -1260,12 +1257,38 @@ export class PianoRoll {
           }
           const end = localBeatToX(last.startBeat + last.durationBeats) - 4;
           const base = top + bmp.cssHeight - 2;
-          if (end > x2 + 6) ctx.fillRect(x2 + 3, Math.round(base), end - x2 - 3, 1);
+          if (end > x2 + 6) words.push({ x: x2 + 3, y: Math.round(base), w: end - x2 - 3, h: 1, color: textColor });
         }
       }
+      return { partId, dimmed, color, pills, words };
     };
-    for (const part of this.score.parts) if (!this.hiddenParts.has(part.id) && this.dimmedParts.has(part.id)) drawPart(part.id);
-    for (const part of this.score.parts) if (!this.hiddenParts.has(part.id) && !this.dimmedParts.has(part.id)) drawPart(part.id);
+    const laid: LaidPart[] = [];
+    for (const part of this.score.parts) if (!this.hiddenParts.has(part.id) && this.dimmedParts.has(part.id)) laid.push(layOut(part.id)!);
+    for (const part of this.score.parts) if (!this.hiddenParts.has(part.id) && !this.dimmedParts.has(part.id)) laid.push(layOut(part.id)!);
+    const clear = clearOfWords(widthCss, heightCss, laid.flatMap((l) => l?.words ?? []));
+
+    for (const part of laid) {
+      if (!part) continue;
+      const { partId, dimmed, color, pills, words } = part;
+      // Lantern: slurs are print on the paper, under the holes, which are then cut out of it (a
+      // turned-down voice's are only marked); gel: beads with threads over them.
+      if (LANTERN) {
+        this.paintSlurThreads(ctx, partId, localBeatToX, widthCss, rowHeight, color, dimmed, clear);
+        if (dimmed) markHoles(ctx, pills, pillH, color);
+        else cutHoles(ctx, pills, pillH);
+      }
+      ctx.globalAlpha = dimmed ? DIMMED_ALPHA : 1;
+      if (!LANTERN) for (const [px, py, pw] of pills) gelPill(ctx, px, py, pw, pillH, color);
+      if (NOTE_STYLE === 'gel') this.paintSlurThreads(ctx, partId, localBeatToX, widthCss, rowHeight, color, dimmed, clear);
+      ctx.globalAlpha = 1;
+      for (const w of words) {
+        if (w.bmp) ctx.drawImage(w.bmp.canvas, w.x, w.y, w.w, w.h);
+        else {
+          ctx.fillStyle = w.color;
+          ctx.fillRect(w.x, w.y, w.w, w.h);
+        }
+      }
+    }
 
   }
 
@@ -1297,12 +1320,12 @@ export class PianoRoll {
    * it lands on each note. On top of the notes (lyrics are drawn over it), since back-to-back notes
    * leave no room between them for a bow of any real shape.
    */
-  private paintSlurThreads(ctx: CanvasRenderingContext2D, partId: string, localBeatToX: (beat: number) => number, widthCss: number, rowHeight: number, color: string, dimmed: boolean) {
+  private paintSlurThreads(ctx: CanvasRenderingContext2D, partId: string, localBeatToX: (beat: number) => number, widthCss: number, rowHeight: number, color: string, dimmed: boolean, clear: Path2D[] | null) {
     const slurs = this.slursByPart.get(partId);
     const notes = this.notesByPart.get(partId);
     if (!slurs?.length || !notes?.length) return;
     if (LANTERN) {
-      this.paintSlurSpindles(ctx, slurs, notes, localBeatToX, widthCss, rowHeight, color, dimmed);
+      this.paintSlurSpindles(ctx, slurs, notes, localBeatToX, widthCss, rowHeight, color, dimmed, clear);
       return;
     }
     const capR = this.pillHeight(rowHeight) / 2;
@@ -1332,15 +1355,13 @@ export class PianoRoll {
     const light = towardPaper(color, 0.6);
     ctx.lineCap = 'round';
     ctx.strokeStyle = color;
-    ctx.globalAlpha = 0.3 * dim;
     ctx.lineWidth = Math.max(5, capR);
-    ctx.stroke(path);
+    throughClips(ctx, clear, 0.3 * dim, () => ctx.stroke(path));
     ctx.strokeStyle = light;
-    ctx.globalAlpha = 0.95 * dim;
     ctx.lineWidth = 1.6;
-    ctx.stroke(path);
+    throughClips(ctx, clear, 0.95 * dim, () => ctx.stroke(path));
     ctx.fillStyle = light;
-    ctx.fill(dots);
+    throughClips(ctx, clear, 0.95 * dim, () => ctx.fill(dots));
   }
 
   /**
@@ -1350,7 +1371,7 @@ export class PianoRoll {
    * slur: thin at the ends, swelling in the middle. Where the line leaves from a bottom edge it
    * starts after that note's syllable, so the two don't cross.
    */
-  private paintSlurSpindles(ctx: CanvasRenderingContext2D, slurs: SlurArc[], notes: NoteEvent[], localBeatToX: (beat: number) => number, widthCss: number, rowHeight: number, color: string, dimmed: boolean) {
+  private paintSlurSpindles(ctx: CanvasRenderingContext2D, slurs: SlurArc[], notes: NoteEvent[], localBeatToX: (beat: number) => number, widthCss: number, rowHeight: number, color: string, dimmed: boolean, clear: Path2D[] | null) {
     const pillH = this.pillHeight(rowHeight);
     const capR = pillH / 2;
     const gap = 1.5;
@@ -1390,9 +1411,8 @@ export class PianoRoll {
       }
     }
     ctx.save();
-    ctx.globalAlpha = 0.85 * (dimmed ? DIMMED_ALPHA : 1);
     ctx.fillStyle = towardPaper(color, 0.18);
-    ctx.fill(shape);
+    throughClips(ctx, clear, 0.85 * (dimmed ? DIMMED_ALPHA : 1), () => ctx.fill(shape));
     ctx.restore();
   }
 
@@ -1548,6 +1568,53 @@ function cutHoles(ctx: CanvasRenderingContext2D, pills: [number, number, number]
   ctx.lineWidth = 1;
   ctx.stroke(holes);
   ctx.restore();
+}
+
+/**
+ * Where slurs may be painted so the words stay clear: the whole area less the words' boxes, grown by
+ * each of WORD_CLEARANCE_PX -- one clip per distance. Painted once through each (throughClips), a
+ * slur builds up to its strength away from the words and fades out toward them, to nothing at a word.
+ * Null when there are no words.
+ */
+function clearOfWords(width: number, height: number, words: Word[]): Path2D[] | null {
+  if (!words.length) return null;
+  const boxes = words.map((w) => ({ x0: w.x, y0: w.y, x1: w.x + w.w, y1: w.y + w.h })).sort((a, b) => a.x0 - b.x0);
+  return WORD_CLEARANCE_PX.map((d) => {
+    // Boxes that touch once grown are joined: the clip is even-odd, where an overlap of two would let the slur through again.
+    const joined: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    for (const b of boxes) {
+      let r = { x0: b.x0 - d, y0: b.y0 - d, x1: b.x1 + d, y1: b.y1 + d };
+      for (let i = joined.length - 1; i >= 0; i--) {
+        const o = joined[i];
+        if (o.x1 < r.x0 || o.x0 > r.x1 || o.y1 < r.y0 || o.y0 > r.y1) continue;
+        r = { x0: Math.min(o.x0, r.x0), y0: Math.min(o.y0, r.y0), x1: Math.max(o.x1, r.x1), y1: Math.max(o.y1, r.y1) };
+        joined.splice(i, 1);
+        i = joined.length; // the bigger box may now touch others already passed
+      }
+      joined.push(r);
+    }
+    const clip = new Path2D();
+    clip.rect(-20, -20, width + 40, height + 40);
+    for (const r of joined) clip.rect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
+    return clip;
+  });
+}
+
+/** Paints `draw` at `alpha` -- through each clip of clearOfWords once, the passes adding up to `alpha` away from the words. */
+function throughClips(ctx: CanvasRenderingContext2D, clips: Path2D[] | null, alpha: number, draw: () => void) {
+  if (!clips) {
+    ctx.globalAlpha = alpha;
+    draw();
+    return;
+  }
+  const each = 1 - Math.pow(1 - Math.min(alpha, 0.999), 1 / clips.length);
+  for (const clip of clips) {
+    ctx.save();
+    ctx.clip(clip, 'evenodd');
+    ctx.globalAlpha = each;
+    draw();
+    ctx.restore();
+  }
 }
 
 /** Lantern style, a turned-down voice: its holes only marked on the paper, not cut -- no light. */
