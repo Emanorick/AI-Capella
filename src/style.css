@@ -303,6 +303,15 @@ button:disabled {
   height: 100dvh;
   width: 100%;
   overflow: hidden;
+  transition: opacity 0.2s ease-out;
+}
+
+/* Coming back after a reload to the song that was open (main.ts comeBackToPlace): nothing shows
+   until it stands at its place again -- no repertoire, no opening, no travel in between. */
+#app.arriving {
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
 }
 
 .view {

@@ -2048,6 +2048,12 @@ async function applyPlaybackStateNow(state: PlaybackState) {
   const shownBefore = displayBeat();
   const travel = () => {
     viewGlide = null;
+    // (Coming back after a reload: straight to the place, no travel there.)
+    if (arriveDirectly) {
+      viewOffsetBeats = 0;
+      endArrival();
+      return;
+    }
     viewOffsetBeats = shownBefore - engineBeat();
     recenterSmoothly();
   };
@@ -4161,8 +4167,17 @@ function notePlace() {
   const place: Place = { ensemble: currentEnsemble, songId: song?.id ?? null, beat: song ? engineBeat() : 0, view: activeView, bpm, transpose };
   localStorage.setItem(PLACE_KEY, JSON.stringify(place));
 }
-// The song to open again once the repertoire has arrived (comeBackToPlace).
+// The song to open again once the repertoire has arrived (comeBackToPlace). Until it stands at its
+// place the app shows nothing ('arriving'), then the song appears as it was -- with no glimpse of
+// the repertoire, no opening and no travel to the place in between (arriveDirectly, see travel()).
 let placeToRestore: Place | null = null;
+let arriveDirectly = false;
+function endArrival() {
+  arriveDirectly = false;
+  if (!app.classList.contains('arriving')) return;
+  renderNow();
+  requestAnimationFrame(() => app.classList.remove('arriving'));
+}
 function comeBackToPlace(fromCache: boolean) {
   const place = placeToRestore;
   if (!place?.songId) return;
@@ -4170,9 +4185,13 @@ function comeBackToPlace(fromCache: boolean) {
   // (The cached list may not have it yet; the server's has the final say.)
   if (!song && fromCache) return;
   placeToRestore = null;
-  if (!song || app.classList.contains('mode-player')) return;
+  if (!song || app.classList.contains('mode-player')) {
+    endArrival();
+    return;
+  }
+  arriveDirectly = true;
   setActiveView(place.view);
-  void selectSong(song, { beat: place.beat, bpm: place.bpm, transpose: place.transpose });
+  void selectSong(song, { beat: place.beat, bpm: place.bpm, transpose: place.transpose }).catch(endArrival);
 }
 noteSeen();
 setInterval(() => document.visibilityState === 'visible' && noteSeen(), 30_000);
@@ -4192,7 +4211,15 @@ if (storedMode === 'solo' || storedMode === 'ensemble') sessionMode = storedMode
 if (inPublicFolder()) sessionMode = 'solo';
 const lastMode = storedMode === 'solo' || storedMode === 'ensemble' ? storedMode : inPublicFolder() ? 'solo' : null;
 const comeBack = (mode: 'solo' | 'ensemble') => {
-  if (mode === 'solo' && recentlyHere && lastPlace?.songId && lastPlace.ensemble === currentEnsemble) placeToRestore = lastPlace;
+  if (mode === 'solo' && recentlyHere && lastPlace?.songId && lastPlace.ensemble === currentEnsemble) {
+    placeToRestore = lastPlace;
+    app.classList.add('arriving');
+    // Should the song not come (offline, gone), the repertoire after all.
+    setTimeout(() => {
+      placeToRestore = null;
+      endArrival();
+    }, 8000);
+  }
   chooseMode(mode);
 };
 if (isFirebaseConfigured && (switchedMode === 'solo' || switchedMode === 'ensemble') && activeEnsemble()) {

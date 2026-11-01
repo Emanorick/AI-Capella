@@ -55,7 +55,10 @@ changes it after a confirmation, reloading straight into the new mode (a one-sho
 when it was last on screen and where (`ai-capella-seen`, `ai-capella-place`: the song open, the
 position, the view, tempo and key -- practising alone; in a rehearsal the shared state decides) —
 every half minute while it is, and whenever it is left — opens that song again at that place once
-the repertoire has arrived (`comeBackToPlace`), and shows the title screen only when the app was
+the repertoire has arrived (`comeBackToPlace`): until it stands there the app shows nothing
+(`#app.arriving`, at most 8 s, then the repertoire after all), and it arrives directly -- no
+glimpse of the repertoire, no travel from the start to the place (`arriveDirectly`) -- fading in
+briefly. It shows the title screen only when the app was
 away longer (or no ensemble has been opened yet on the device). Either way, the
 shared song library itself is always available — Solo only opts out of shared *playback*, not
 shared *songs*. See §4.7. The storage key is versioned (`ai-capella-mode-v2`) so it can be bumped
