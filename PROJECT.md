@@ -53,7 +53,8 @@ changes it after a confirmation, reloading straight into the new mode (a one-sho
 `sessionStorage` flag skips the title screen for that one reload). A reload, or coming back within
 30 minutes, also goes on where the app was, in the last mode: the app notes in `localStorage`
 when it was last on screen and where (`ai-capella-seen`, `ai-capella-place`: the song open, the
-position, the view, tempo and key -- practising alone; in a rehearsal the shared state decides) —
+position, the view, tempo and key, the zoom of both views, which voices are muted or soloed and
+the others' volume while soloing -- practising alone; in a rehearsal the shared state decides) —
 every half minute while it is, and whenever it is left — opens that song again at that place once
 the repertoire has arrived (`comeBackToPlace`): until it stands there the app shows nothing
 (`#app.arriving`, at most 8 s, then the repertoire after all), and it arrives directly -- no

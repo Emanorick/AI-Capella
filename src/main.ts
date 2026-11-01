@@ -2051,6 +2051,8 @@ async function applyPlaybackStateNow(state: PlaybackState) {
     // (Coming back after a reload: straight to the place, no travel there.)
     if (arriveDirectly) {
       viewOffsetBeats = 0;
+      if (arrivingAt) restoreSongSettings(arrivingAt);
+      arrivingAt = null;
       endArrival();
       return;
     }
@@ -4131,12 +4133,23 @@ async function runBootstrap() {
 
 // The title screen greets a start after a while away: a reload, or coming back within half an
 // hour, goes on where the app was -- in the mode last chosen, and (practising alone) in the song it
-// had open, at the same place, tempo, key and view. Away counts from the last moment the app was on
-// screen -- noted, with where it was, every half minute while it is, and whenever it is left.
+// had open, at the same place, tempo, key and view, zoomed as it was, with the same voices muted or
+// soloed and the others at the same volume. Away counts from the last moment the app was on screen
+// -- noted, with where it was, every half minute while it is, and whenever it is left.
 const SEEN_KEY = 'ai-capella-seen';
 const PLACE_KEY = 'ai-capella-place';
 const TITLE_AFTER_MS = 30 * 60 * 1000;
-type Place = { ensemble: string; songId: string | null; beat: number; view: 'roll' | 'staff'; bpm: number; transpose: number };
+type Place = {
+  ensemble: string;
+  songId: string | null;
+  beat: number;
+  view: 'roll' | 'staff';
+  bpm: number;
+  transpose: number;
+  zoom?: { roll: number; staff: number };
+  mix?: Record<string, PartMixState>; // the voices not at 'normal'
+  duck?: number; // the others' volume while a voice is soloed
+};
 const recentlyHere = (() => {
   try {
     return Date.now() - Number(localStorage.getItem(SEEN_KEY) || 0) < TITLE_AFTER_MS;
@@ -4164,7 +4177,8 @@ function notePlace() {
   const inPlayer = app.classList.contains('mode-player');
   if (!inPlayer && !app.classList.contains('mode-library')) return;
   const song = inPlayer && sessionMode === 'solo' ? currentSong : null;
-  const place: Place = { ensemble: currentEnsemble, songId: song?.id ?? null, beat: song ? engineBeat() : 0, view: activeView, bpm, transpose };
+  const mix = Object.fromEntries([...partMix].filter(([, state]) => state !== 'normal'));
+  const place: Place = { ensemble: currentEnsemble, songId: song?.id ?? null, beat: song ? engineBeat() : 0, view: activeView, bpm, transpose, zoom: { ...zoomOf }, mix, duck: duckVolume };
   localStorage.setItem(PLACE_KEY, JSON.stringify(place));
 }
 // The song to open again once the repertoire has arrived (comeBackToPlace). Until it stands at its
@@ -4172,6 +4186,27 @@ function notePlace() {
 // the repertoire, no opening and no travel to the place in between (arriveDirectly, see travel()).
 let placeToRestore: Place | null = null;
 let arriveDirectly = false;
+let arrivingAt: Place | null = null;
+/** The song as it was left: its zoom, its voices muted or soloed, the others' volume (the song just loaded). */
+function restoreSongSettings(place: Place) {
+  if (place.zoom) {
+    zoomOf.roll = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, place.zoom.roll));
+    zoomOf.staff = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, place.zoom.staff));
+    pianoRoll?.setZoom(zoomOf.roll);
+    staffView?.setZoom(zoomOf.staff);
+    zoomValueEl.textContent = `${Math.round(zoomOf[activeView] * 100)}%`;
+  }
+  if (typeof place.duck === 'number') {
+    duckVolume = place.duck;
+    audioEngine?.setDuckedVolume(duckVolume);
+  }
+  for (const part of currentScore?.parts ?? []) {
+    const state = place.mix?.[part.id];
+    if (state === 'muted' || state === 'solo') setPartMixState(part.id, state);
+  }
+  applyMixToViews();
+  clampViewOffset();
+}
 function endArrival() {
   arriveDirectly = false;
   if (!app.classList.contains('arriving')) return;
@@ -4190,6 +4225,7 @@ function comeBackToPlace(fromCache: boolean) {
     return;
   }
   arriveDirectly = true;
+  arrivingAt = place;
   setActiveView(place.view);
   void selectSong(song, { beat: place.beat, bpm: place.bpm, transpose: place.transpose }).catch(endArrival);
 }
