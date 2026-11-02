@@ -358,14 +358,24 @@ has a checkbox and its name to change, for this PDF only. Voices removed in the 
 and a clef chosen in the app is used. `exportPdf.ts`, loaded only when asked for:
 - **Engraving:** Verovio (verovio.org, LGPL-3.0, the unmodified npm build, ~8 MB, its own chunk)
   sets the song's own MusicXML -- trimmed to the chosen voices, renamed, titled as in the
-  repertoire (`prepareXml`) -- on A4 pages (scale 42, Bravura), transposed by the interval that
+  repertoire (`prepareXml`) -- on A4 pages (scale 42), transposed by the interval that
   gives the key signature the app shows (`transposeInterval`, the same choice as
   `signatures.ts transposeFifths`: +1 is a minor second up, to D♭, -6 a diminished fifth down).
+- **Engraving font (since November 2026):** Eugene by Mikko Patama (OFL), the French engraving of
+  around 1900 (the Fromont editions of Debussy) -- converted for Verovio as "LightScore Engraving"
+  (`assets/fonts/pdf/LightScoreEngraving.zip`, 314 KB, passed with Verovio's `fontAddCustom`
+  option; `make-engraving-font.py` makes it from a checkout of Eugene, with the anchors from its
+  metadata under the glyphs' SMuFL names from its source). Where Eugene has no sign of its own yet,
+  Verovio takes Bravura's (`fontFallback`), as Eugene itself intends. Eugene's own line weights
+  (its `engravingDefaults`: staff lines, stems, ledger lines, slurs, ties -- `MUSIC_LINES`) are
+  passed too; Verovio ignores four of them (beam thickness and spacing, arrow shafts, dashed
+  barlines). "Eugene" is a Reserved Font Name, so the converted font is named otherwise.
 - **PDF:** jsPDF + svg2pdf.js (MIT) draw each page's SVG as vectors. Verovio draws the music as
   paths and only text as text; that is set in Liberation Serif (Times' metric twin, OFL, embedded,
   so every language's letters come out -- Latvian included) and, for the odd music symbol in text
-  (a metronome mark's note, a dynamic), "LightScore Music Text", a 48 KB TrueType subset of Bravura
-  (renamed, as its OFL asks of a modified version). That font has one style, so its symbols are set
+  (a metronome mark's note, a dynamic), "LightScore Music Text", a 44 KB TrueType font of those
+  signs from Eugene (converted from its cubic outlines), Bravura's for the 40 Eugene lacks
+  (renamed, as the OFL asks of a modified version; both copyrights in its name table). That font has one style, so its symbols are set
   upright and regular even inside bold or italic text (a tempo mark is bold: the note otherwise
   fell back to a standard font and came out as two stray letters), and a tempo mark's note a
   quarter smaller than Verovio sets it (`musicInText`). Verovio's page is an inner `<svg>` without a

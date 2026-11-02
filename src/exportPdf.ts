@@ -6,13 +6,49 @@
 // Verovio draws the music itself as paths; only text is text: the lyrics and words in Times (set
 // here in Liberation Serif, Times' metric twin, embedded so any language's letters come out) and
 // the odd music symbol inside text -- the note of a metronome mark -- in a music font (a small
-// subset of Bravura, embedded as "LightScore Music Text").
+// subset, embedded as "LightScore Music Text").
+//
+// The music is engraved in Eugene (Mikko Patama, OFL): the French engraving of around 1900, of the
+// Fromont editions of Debussy -- converted for Verovio as "LightScore Engraving" (see
+// assets/fonts/pdf/make-engraving-font.py), Bravura where Eugene has no sign of its own yet.
 
 import liberationRegular from './assets/fonts/pdf/LiberationSerif-Regular.ttf?url';
 import liberationItalic from './assets/fonts/pdf/LiberationSerif-Italic.ttf?url';
 import liberationBold from './assets/fonts/pdf/LiberationSerif-Bold.ttf?url';
 import liberationBoldItalic from './assets/fonts/pdf/LiberationSerif-BoldItalic.ttf?url';
 import musicText from './assets/fonts/pdf/MusicText.ttf?url';
+import engravingFont from './assets/fonts/pdf/LightScoreEngraving.zip?url';
+
+const MUSIC_FONT = 'LightScoreEngraving';
+/**
+ * Eugene's own line weights and spacings (its engravingDefaults, in staff spaces) -- those Verovio
+ * takes: the thickness of staff lines, stems, ledger lines, slurs and ties, as the font was drawn for.
+ */
+const MUSIC_LINES = {
+  barlineSeparation: 0.3,
+  bracketThickness: 0.5,
+  dashedBarlineDashLength: 0.67,
+  dashedBarlineGapLength: 0.67,
+  hairpinThickness: 0.16,
+  legerLineExtension: 0.3,
+  legerLineThickness: 0.15,
+  lyricLineThickness: 0.1,
+  octaveLineThickness: 0.14,
+  pedalLineThickness: 0.16,
+  repeatBarlineDotSeparation: 0.16,
+  repeatEndingLineThickness: 0.16,
+  slurEndpointThickness: 0.09,
+  slurMidpointThickness: 0.24,
+  staffLineThickness: 0.11,
+  stemThickness: 0.12,
+  subBracketThickness: 0.16,
+  textEnclosureThickness: 0.16,
+  thickBarlineThickness: 0.5,
+  thinBarlineThickness: 0.14,
+  tieEndpointThickness: 0.09,
+  tieMidpointThickness: 0.2,
+  tupletBracketThickness: 0.11,
+};
 
 export interface PdfVoice {
   id: string; // the MusicXML part id
@@ -163,7 +199,7 @@ function fitToWidth(root: SVGSVGElement, drawing: SVGGElement) {
 function musicInText(tspan: string, glyphs: string): string {
   const note = /^[\uE1D0-\uE1EF\uECA0-\uECBF]+$/.test(glyphs);
   return tspan
-    .replace(/font-family="(?:Bravura|Leipzig)"/, 'font-family="LightScoreMusicText" font-weight="normal" font-style="normal"')
+    .replace(/font-family="(?:LightScoreEngraving|Bravura|Leipzig)"/, 'font-family="LightScoreMusicText" font-weight="normal" font-style="normal"')
     .replace(/font-size="([\d.]+)px"/, (size, px: string) => (note ? `font-size="${Math.round(Number(px) * 0.75)}px"` : size));
 }
 
@@ -183,7 +219,7 @@ export async function makePdf(req: PdfRequest, progress: (step: 'engraver' | 'en
     import('jspdf'),
   ]);
   await import('svg2pdf.js');
-  const toolkit = new VerovioToolkit(await createVerovioModule());
+  const [toolkit, music] = await Promise.all([createVerovioModule().then((module) => new VerovioToolkit(module)), fontBase64(engravingFont)]);
 
   progress('engraving');
   toolkit.setOptions({
@@ -200,7 +236,10 @@ export async function makePdf(req: PdfRequest, progress: (step: 'engraver' | 'en
     breaks: 'auto',
     header: 'auto',
     footer: 'none',
-    font: 'Bravura',
+    fontAddCustom: [music],
+    font: MUSIC_FONT,
+    fontFallback: 'Bravura',
+    engravingDefaults: JSON.stringify(MUSIC_LINES),
     transpose: transposeInterval(req.semitones),
     lyricSize: 4.2,
     svgViewBox: true,
@@ -235,7 +274,7 @@ export async function makePdf(req: PdfRequest, progress: (step: 'engraver' | 'en
       const svgText = toolkit
         .renderToSVG(page)
         .replace(/font-family="Times, serif"/g, 'font-family="LiberationSerif"')
-        .replace(/(<tspan\b[^>]*font-family="(?:Bravura|Leipzig)"[^>]*>)([^<]*)/g, (_, tspan: string, glyphs: string) => musicInText(tspan, glyphs) + glyphs);
+        .replace(/(<tspan\b[^>]*font-family="(?:LightScoreEngraving|Bravura|Leipzig)"[^>]*>)([^<]*)/g, (_, tspan: string, glyphs: string) => musicInText(tspan, glyphs) + glyphs);
       host.innerHTML = svgText;
       const svg = host.querySelector('svg')!;
       const drawing = flattenInnerSvg(svg);
