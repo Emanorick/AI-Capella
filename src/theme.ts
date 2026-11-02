@@ -132,8 +132,11 @@ export const FONT_MARK = REVIVAL_TYPE ? `"Baltimore Bold 1832", ${FONT_DISPLAY}`
 export const MARK_WEIGHT = REVIVAL_TYPE ? 400 : 700;
 export const FONT_BRAND = REVIVAL_TYPE ? `"Baltimore Black Slope 1832", ${FONT_DISPLAY}` : FONT_DISPLAY;
 export const BRAND_WEIGHT = REVIVAL_TYPE ? 400 : 600;
-/** SMuFL music font (Bravura, subset to the glyphs the sheet view uses -- see assets/fonts). */
-export const FONT_MUSIC = 'Bravura';
+/**
+ * SMuFL music font: Eugene (as "LightScore Engraving"), subset to the glyphs the views use, Bravura
+ * behind it for the few it lacks -- see assets/fonts and style.css.
+ */
+export const FONT_MUSIC = '"LightScore Engraving", Bravura';
 
 /**
  * Resolves once the bundled faces the canvases draw with are loaded. Canvas text silently falls

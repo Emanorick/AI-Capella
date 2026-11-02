@@ -44,7 +44,7 @@ async function storeBuild(html) {
     // typical lyrics use; other subsets are fetched and stored on demand if ever needed.
     for (const m of css.matchAll(/url\(([^)]+\.woff2)\)/g)) {
       const fontUrl = new URL(m[1].replace(/["']/g, ''), cssUrl).href;
-      if (/latin|bravura/.test(fontUrl)) assets.add(fontUrl);
+      if (/latin|bravura|engraving/.test(fontUrl)) assets.add(fontUrl);
     }
   }
   // The grand piano's samples (see src/audioEngine.ts), so it plays offline even if nobody played

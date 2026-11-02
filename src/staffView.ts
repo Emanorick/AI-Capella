@@ -50,7 +50,7 @@ const MAX_FILL_SCALE_NARROW = 1.4;
 const MAX_FILL_SCALE = 1.3;
 const FILL_BOTTOM_PX = 12;
 
-// Engraving glyphs from the SMuFL font (Bravura, bundled as a subset -- see assets/fonts). SMuFL
+// Engraving glyphs from the SMuFL font (Eugene, bundled as a subset -- see theme.ts FONT_MUSIC). SMuFL
 // fonts are drawn at 4 staff spaces per em, with each glyph's origin at its musical reference point
 // (a notehead's centre line, a G clef's G line, a rest's staff line), so fillText at a staff
 // position places the glyph exactly where an engraver would.
@@ -77,11 +77,13 @@ const GLYPH = {
 };
 const FLAG_UP = ['', '\uE240', '\uE242', '\uE244'];
 const FLAG_DOWN = ['', '\uE241', '\uE243', '\uE245'];
-// Bravura metrics, in staff spaces (from its SMuFL metadata): notehead widths, the stem anchors
-// (stemUpSE / stemDownNW sit 0.168 spaces off the notehead's centre line), line thicknesses.
-const HEAD_W = 1.18 * SP;
-const WHOLE_HEAD_W = 1.688 * SP;
-const STEM_ANCHOR_Y = 0.168 * SP;
+// Eugene's metrics, in staff spaces (from its SMuFL metadata): notehead widths, the stem anchors
+// (stemUpSE / stemDownNW: how far off the notehead's centre line a stem starts -- above it going up,
+// below it going down; a half note's further out than a black one's), line thicknesses.
+const HEAD_W = 1.14 * SP;
+const WHOLE_HEAD_W = 1.516 * SP;
+const STEM_UP_Y = { black: 0.1 * SP, half: 0.152 * SP };
+const STEM_DOWN_Y = { black: 0.148 * SP, half: 0.212 * SP };
 const STEM_THICKNESS = Math.max(1.1, 0.12 * SP);
 const STEM_LENGTH = 3.5 * SP;
 // Beams (drawBeams): a beam's thickness, the step from one beam level to the next, the shortest a
@@ -90,9 +92,9 @@ const BEAM_THICKNESS = 0.5 * SP;
 const BEAM_STEP = 0.75 * SP;
 const MIN_BEAMED_STEM = 2.5 * SP;
 const BEAM_HOOK = 1.1 * SP;
-const LEDGER_EXTENSION = 0.4 * SP;
-const CLEF_W = 2.75 * SP;
-const KEY_ACCIDENTAL_ADVANCE = 0.95 * SP;
+const LEDGER_EXTENSION = 0.3 * SP;
+const CLEF_W = 2.55 * SP;
+const KEY_ACCIDENTAL_ADVANCE = 1.0 * SP;
 
 const LETTER_INDEX: Record<string, number> = { C: 0, D: 1, E: 2, F: 3, G: 4, A: 5, B: 6 };
 
@@ -940,7 +942,7 @@ export class StaffView {
       }
       if (layout.staff > 1) continue;
       const name = this.score.parts.find((p) => p.id === layout.partId)?.name ?? '';
-      // Above the treble clef's top curl (Bravura's G clef reaches ~12.5px above the top line).
+      // Above the treble clef's top curl (the G clef reaches ~10px above the top line).
       const labelY = layout.topY - 21;
       ctx.fillStyle = this.partColor(layout.partId);
       ctx.beginPath();
@@ -1321,8 +1323,8 @@ export class StaffView {
         const far = yOf(up ? st.heads[0].pos : st.heads[st.heads.length - 1].pos);
         const y1 = beamY(xs[i]);
         glowing(lit(st), () => {
-          if (up) ctx.fillRect(xs[i], y1, STEM_THICKNESS, far - STEM_ANCHOR_Y - y1);
-          else ctx.fillRect(xs[i], far + STEM_ANCHOR_Y, STEM_THICKNESS, y1 - far - STEM_ANCHOR_Y);
+          if (up) ctx.fillRect(xs[i], y1, STEM_THICKNESS, far - STEM_UP_Y.black - y1);
+          else ctx.fillRect(xs[i], far + STEM_DOWN_Y.black, STEM_THICKNESS, y1 - far - STEM_DOWN_Y.black);
         });
       });
 
@@ -1483,12 +1485,13 @@ export class StaffView {
             if (stemUp) {
               const sx = hx - shift + HEAD_W - STEM_THICKNESS;
               const top = y - stemLength;
-              ctx.fillRect(sx, top, STEM_THICKNESS, y - STEM_ANCHOR_Y - top);
+              ctx.fillRect(sx, top, STEM_THICKNESS, y - STEM_UP_Y[shape.filled ? 'black' : 'half'] - top);
               if (shape.flags) ctx.fillText(FLAG_UP[Math.min(3, shape.flags)], sx, top);
             } else {
               const sx = hx - shift;
               const bottom = y + stemLength;
-              ctx.fillRect(sx, y + STEM_ANCHOR_Y, STEM_THICKNESS, bottom - y - STEM_ANCHOR_Y);
+              const from = STEM_DOWN_Y[shape.filled ? 'black' : 'half'];
+              ctx.fillRect(sx, y + from, STEM_THICKNESS, bottom - y - from);
               if (shape.flags) ctx.fillText(FLAG_DOWN[Math.min(3, shape.flags)], sx, bottom);
             }
           }

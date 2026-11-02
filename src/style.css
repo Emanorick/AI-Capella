@@ -5,10 +5,20 @@
    ========================================================================================= */
 
 @font-face {
-  font-family: 'Bravura';
-  /* SMuFL engraving font by Steinberg (SIL OFL 1.1, see assets/fonts/Bravura-OFL.txt), subset to
+  font-family: 'LightScore Engraving';
+  /* The music: Eugene by Mikko Patama, the French engraving of around 1900 (SIL OFL 1.1, see
+     assets/fonts/pdf/Eugene-OFL.txt; renamed, as the OFL asks of a modified version), subset to
      the clefs, noteheads, flags, accidentals, rests, dots, time signature digits and dynamics the
-     views draw. */
+     views draw (assets/fonts/pdf/make-engraving-font.py). */
+  src: url('./assets/fonts/engraving-subset.woff2') format('woff2');
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'Bravura';
+  /* SMuFL engraving font by Steinberg (SIL OFL 1.1, see assets/fonts/Bravura-OFL.txt), the same
+     subset: behind Eugene for the few signs it has none of yet (cross noteheads of whole and half
+     notes, some combined dynamics). */
   src: url('./assets/fonts/bravura-subset.woff2') format('woff2');
   font-display: block;
 }
@@ -1804,7 +1814,7 @@ button.stepper-value:hover {
   display: block;
   position: relative;
   overflow: visible;
-  font-family: 'Bravura';
+  font-family: 'LightScore Engraving', 'Bravura';
   font-size: 15px;
   line-height: 0;
   font-weight: 400;

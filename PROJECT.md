@@ -242,7 +242,8 @@ phones and 1.3× on laptops, and spread out — the time axis grows only by the 
 phone still shows a few beats), with barlines joining the staves into one system and a
 classical thin+thick double bar at the end. All musical symbols — clefs (including the tenor's
 treble clef with a small 8), noteheads, flags, accidentals, rests and augmentation dots — are
-real engraving glyphs from the bundled **Bravura** SMuFL font, positioned with the font's own
+real engraving glyphs from the bundled SMuFL font (**Eugene**, the French engraving of around
+1900; Bravura before November 2026), positioned with the font's own
 anchor metrics (stem attachment points, flag origins), not hand-drawn shapes. Staff lines are a
 neutral paper tone; notes, stems and flags carry the voice colour; lyrics sit at one fixed height
 under each staff. A **pinned left margin** holds each voice's name, clef and key signature, and
@@ -792,8 +793,16 @@ layer (strength between "subtle" and "balanced" of its design draft):
   of the faces had German letters: Ä Ö Ü ä ö ü are added (letter plus two dots from the face's own
   period), ß is "ss" (`add-german.py`). Every rule is scoped to `:root[data-type='revival']`, so a
   device with the earlier faces fetches none of them.
-- **Music font**: Bravura (Steinberg, SIL OFL 1.1; licence in `src/assets/fonts`), subset with
-  `pyftsubset` to the ~30 glyphs the sheet view uses (8 KB).
+- **Music font** (since November 2026): Eugene by Mikko Patama (SIL OFL 1.1, licence in
+  `src/assets/fonts/pdf/Eugene-OFL.txt`), modelled on the Fromont editions of Debussy around 1900
+  -- the same as the PDF export's. Renamed "LightScore Engraving" ("Eugene" is a Reserved Font
+  Name) and subset to the 73 signs the views draw (`engraving-subset.woff2`, 24 KB, made by
+  `assets/fonts/pdf/make-engraving-font.py`): the sheet view, the key and time signatures in the
+  rulers, the clefs in the voice menu, the metronome note of the gold-ink markings. Bravura
+  (Steinberg, SIL OFL 1.1), subset to the same signs (`bravura-subset.woff2`, 12 KB), stands
+  behind it in the font stack (`theme.ts FONT_MUSIC`) for the few Eugene has none of yet -- the
+  cross noteheads of whole and half notes, some combined dynamics -- and is only fetched if one
+  is drawn.
 - **Icons**: one inline SVG set (`icons.ts`) instead of Unicode glyphs, which rendered
   inconsistently and could turn into emoji on iPhones.
 - **Motion**: the title screen's voice ribbons (`artwork.ts drawRibbons`, ~30 fps, paused when
@@ -835,7 +844,7 @@ AI-Capella/
 │   ├── ui.ts                  # menus, popovers, sheets, dialogs, toasts
 │   ├── icons.ts               # inline SVG icon set
 │   ├── i18n.ts                # German/English strings, key names
-│   ├── assets/fonts/          # Bravura subset + its OFL licence; pdf/: the PDF export's fonts + licences
+│   ├── assets/fonts/          # the music font (Eugene subset, Bravura behind it) + licences; pdf/: the PDF export's fonts + licences
 │   ├── exportPdf.ts           # Export as PDF: Verovio engraving → jsPDF/svg2pdf (loaded on demand)
 │   ├── reorder.ts             # moving pieces in the repertoire by hand
 │   ├── intro.ts               # the introduction tours
@@ -1662,13 +1671,14 @@ so a tenor part's notes land on/near the staff the way they're actually engraved
 plotting them at their literal sounding octave against a plain treble clef (which would hang them
 on many ledger lines below it).
 
-All notation symbols are glyphs from **Bravura**, the SMuFL reference font (bundled as an 8 KB
-subset — see §2 Design). SMuFL fonts are drawn at 4 staff spaces per em with each glyph's origin
+All notation symbols are glyphs from **Eugene** (bundled as a 24 KB subset, Bravura behind it for
+the few it lacks — see §2 Design). SMuFL fonts are drawn at 4 staff spaces per em with each glyph's origin
 at its musical reference point, so `fillText` at a staff position places it exactly: a G clef
 on the G line, an F clef on the F line, a notehead on its line/space, rests on the middle line
 (the whole rest on the 4th). The tenor's `clef-octave-change -1` uses the `gClef8vb` glyph (the
-small 8 underneath). Stems attach at Bravura's own `stemUpSE`/`stemDownNW` anchors (0.168 staff
-spaces off the notehead's centre), are 3.5 spaces long (longer for 16ths/32nds), and flags are
+small 8 underneath). Stems attach at the font's own `stemUpSE`/`stemDownNW` anchors (Eugene's:
+0.1 staff spaces above a black notehead's centre going up, 0.148 below it going down; a half
+note's 0.152 and 0.212), are 3.5 spaces long (longer for 16ths/32nds), and flags are
 the font's flag glyphs placed at the stem end. Accidentals and augmentation dots are font glyphs
 too (a dot on a line moves up into the space). Ties are slim filled crescents. Each notehead is
 nudged a few pixels right of its exact beat position (`NOTE_X_OFFSET_PX`) so a note starting on a
@@ -1756,7 +1766,7 @@ the same `splitIntoNotatedSegments` ties use, so a rest spanning a barline corre
 (or more) rest glyphs rather than one that visually crosses the barline. Scoped to one
 monophonic voice per part — true for typical SATB choir writing, this app's primary use case; a
 genuinely multi-voice part (MusicXML `<backup>`/`<forward>` producing overlapping non-chord
-content within one part) may infer incorrect/overlapping gaps (§6). Rests are Bravura's rest
+content within one part) may infer incorrect/overlapping gaps (§6). Rests are the font's rest
 glyphs, drawn slightly transparent so they don't compete with the notes.
 
 **Transpose is fully modeled here**, not ignored — both the key signature and every note's

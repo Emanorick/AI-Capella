@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-The music of the PDF export in the engraving of Eugene (Mikko Patama, github.com/mikkopatama/eugenefont,
-SIL OFL 1.1): its French engraving style of around 1900 for the notes, clefs, rests and dynamics.
+The music of the app and its PDF export in the engraving of Eugene (Mikko Patama,
+github.com/mikkopatama/eugenefont, SIL OFL 1.1): its French engraving style of around 1900 for the
+notes, clefs, rests and dynamics.
 
 Makes, from Eugene.otf, Eugene.json and the glyphs' SMuFL names in its source (Source/Eugene.ufo):
   LightScoreEngraving.zip  the font in Verovio's format (one SVG path per SMuFL glyph and a file of
@@ -9,9 +10,13 @@ Makes, from Eugene.otf, Eugene.json and the glyphs' SMuFL names in its source (S
                            fontAddCustom option -- what the engraver draws the music with;
   MusicText.ttf            "LightScore Music Text": the few music signs set inside text (a tempo
                            mark's note, a dynamic) as TrueType for jsPDF, from Eugene, and from the
-                           Bravura subset (MusicText-Bravura.ttf) where Eugene has no sign of its own.
+                           Bravura subset (MusicText-Bravura.ttf) where Eugene has no sign of its own;
+  ../engraving-subset.woff2  "LightScore Engraving" for the app (the sheet view, the signatures in
+                           the rulers, the clefs in menus): Eugene subset to the signs of the app's
+                           Bravura subset (../bravura-subset.woff2), which stands behind it in the
+                           font stack for the few Eugene lacks.
 
-Neither is called Eugene: "Eugene" is a Reserved Font Name, which the OFL keeps from any modified
+None is called Eugene: "Eugene" is a Reserved Font Name, which the OFL keeps from any modified
 version (a change of format counts). Needs fontTools:  pip install fonttools
 
   python3 make-engraving-font.py path/to/eugenefont   (a checkout of the repository above)
@@ -29,6 +34,7 @@ from fontTools.pens.boundsPen import BoundsPen
 from fontTools.pens.cu2quPen import Cu2QuPen
 from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
+from fontTools.subset import Options, Subsetter
 from fontTools.ttLib import TTFont
 
 NAME = "LightScoreEngraving"
@@ -137,6 +143,33 @@ def music_text(otf: TTFont, bravura: TTFont) -> TTFont:
     return fb.font
 
 
+def app_font(source: Path, bravura_subset: TTFont) -> TTFont:
+    """Eugene with only the signs the app draws, renamed, as WOFF2."""
+    font = TTFont(source)
+    options = Options()
+    options.flavor = "woff2"
+    options.name_IDs = ["*"]
+    options.notdef_outline = True
+    options.layout_features = []
+    subsetter = Subsetter(options)
+    subsetter.populate(unicodes=[c for c in bravura_subset.getBestCmap() if c in font.getBestCmap()])
+    subsetter.subset(font)
+    name = font["name"]
+    for rec in list(name.names):
+        if rec.nameID in (1, 4, 16, 18, 21):
+            rec.string = "LightScore Engraving"
+        elif rec.nameID in (6, 20):
+            rec.string = "LightScoreEngraving"
+        elif rec.nameID == 3:
+            rec.string = f"LightScoreEngraving-subset-of-Eugene-{font['head'].fontRevision:.3f}"
+    cff = font["CFF "].cff
+    cff.fontNames = ["LightScoreEngraving"]
+    top = cff.topDictIndex[0]
+    top.FullName = top.FamilyName = "LightScore Engraving"
+    print(f"engraving-subset.woff2: {len(font.getBestCmap())} signs")
+    return font
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         sys.exit(__doc__)
@@ -145,6 +178,7 @@ def main() -> None:
     metadata = json.loads((source / "Eugene.json").read_text())
     (HERE / f"{NAME}.zip").write_bytes(engraving_font(otf, metadata, smufl_names(source / "Source" / "Eugene.ufo")))
     music_text(otf, TTFont(HERE / "MusicText-Bravura.ttf")).save(HERE / "MusicText.ttf")
+    app_font(source / "Eugene.otf", TTFont(HERE.parent / "bravura-subset.woff2")).save(HERE.parent / "engraving-subset.woff2")
     # For exportPdf.ts (EUGENE_DEFAULTS): line thicknesses and spacings, in staff spaces.
     defaults = {k: v for k, v in metadata["engravingDefaults"].items() if isinstance(v, (int, float))}
     print("engravingDefaults:", json.dumps(defaults))
